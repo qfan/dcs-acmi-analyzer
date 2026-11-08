@@ -50,6 +50,18 @@ export function MapView({
   const trackByUid = useMemo(() => new Map(data.tracks.map((tr) => [tr.uid, tr])), [data]);
 
   /**
+   * Make an object the primary. A free camera starts following it; following the secondary or the
+   * pair carries on as it was (and "follow primary" simply moves to the new primary). Promoting the
+   * secondary clears it, so a camera following it or the pair keeps following the same object as primary.
+   */
+  const selectPrimary = (uid: number) => {
+    setPrimary(uid);
+    const wasSecondary = uid === secondary;
+    if (wasSecondary) setSecondary(null);
+    setFollow((f) => (f === "off" || wasSecondary ? "primary" : f));
+  };
+
+  /**
    * Selection rules: Ctrl+left = primary, Ctrl+right = secondary; a plain click = primary (or the
    * secondary when "Pick secondary" is armed). Clicking the object already in that role clears it.
    * An object can't hold both roles. A click on empty map changes nothing.
@@ -60,10 +72,7 @@ export function MapView({
     setArmSecondary(false);
     if (r === "primary") {
       if (uid === primary) setPrimary(null);
-      else {
-        setPrimary(uid);
-        if (uid === secondary) setSecondary(null);
-      }
+      else selectPrimary(uid);
     } else if (uid === secondary) setSecondary(null);
     else {
       setSecondary(uid);
@@ -175,6 +184,8 @@ export function MapView({
           setT(Math.max(data.timeStart, k.time - 8));
           setPrimary(k.victimUid);
           setSecondary(null);
+          // The pair is gone, so following the secondary or the pair would end anyway.
+          setFollow("primary");
         }}
       />
     ));
@@ -282,7 +293,8 @@ export function MapView({
         )}
       </div>
       <p className="muted small map-hint">
-        Click or Ctrl+click: primary · Ctrl+right-click: secondary · click a selected object again to clear it
+        Click or Ctrl+click: primary (the camera follows it) · Ctrl+right-click: secondary · click a selected
+        object again to clear it
       </p>
       <div className="timeline">
         <button type="button" onClick={togglePlay} aria-label={playing || jog ? "Pause" : "Play"}>
