@@ -1,0 +1,1011 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSettings } from "../../settings/react.ts";
+import { distanceUnitM, distanceUnitName, fmtAlt, fmtDist } from "../../settings/units.ts";
+import { SettingsPanel } from "../../ui/SettingsPanel.tsx";
+import { formatDuration } from "../../ui/Summary.tsx";
+import {
+  ALT_RELATION_LABELS,
+  type AltitudeRelation,
+  ASPECT_SHORT_LABELS,
+  type AspectCategory,
+  DEFAULT_THRESHOLDS,
+  type EngagementDomain,
+  type FileAnalytics,
+  WEAPON_CLASS_LABELS,
+  WEAPON_CLASS_ORDER,
+  type WeaponClass,
+} from "../model.ts";
+import {
+  type AnalyticsQuery,
+  DEFAULT_QUERY,
+  runAnalyticsQuery,
+} from "../query.ts";
+import {
+  ANALYTICS_SAMPLES,
+  fetchAnalyticsSample,
+  shouldAutoLoadSamples,
+} from "../samples.ts";
+import { type BatchFileJob, extractFilesInPool } from "../worker/client.ts";
+import {
+  AltitudeScatterPlot,
+  ConditionMatrix,
+  PolarAspectRangePlot,
+  RangeDistributionChart,
+  WeaponBreakdownCard,
+} from "./Charts.tsx";
+import { EngagementTable } from "./EngagementTable.tsx";
+
+interface LoadingBatch {
+  totalFiles: number;
+  doneFiles: number;
+  progressByFile: Record<string, number>;
+}
+
+interface FileErrorRecord {
+  fileId: string;
+  fileName: string;
+  message: string;
+}
+
+export function AnalyticsApp() {
+  const { settings } = useSettings();
+  const units = settings.units;
+  const distUnitName = distanceUnitName(units.distance);
+  const distUnitM = distanceUnitM(units.distance);
+
+  const [files, setFiles] = useState<FileAnalytics[]>([]);
+  const [errors, setErrors] = useState<FileErrorRecord[]>([]);
+  const [batch, setBatch] = useState<LoadingBatch | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const [query, setQuery] = useState<AnalyticsQuery>(DEFAULT_QUERY);
+  const [matrixMetric, setMatrixMetric] = useState<"kills" | "shots" | "pk">("kills");
+  const [binStepUnits, setBinStepUnits] = useState<number>(5);
+  const [showShotsOverlay, setShowShotsOverlay] = useState(true);
+  const [showMissesOnScatter, setShowMissesOnScatter] = useState(false);
+  const [selectedEngagementId, setSelectedEngagementId] = useState<string | null>(null);
+
+  const cancelPoolRef = useRef<(() => void) | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const settingsDialogRef = useRef<HTMLDialogElement>(null);
+  const nextIdSeq = useRef(1);
+
+  const ingestJobs = useCallback((jobs: BatchFileJob[]) => {
+    if (jobs.length === 0) return;
+    setBatch({
+      totalFiles: jobs.length,
+      doneFiles: 0,
+      progressByFile: {},
+    });
+
+    const run = extractFilesInPool(jobs, {
+      onFileProgress: (fileId, fraction) => {
+        setBatch((b) =>
+          b
+            ? {
+                ...b,
+                progressByFile: { ...b.progressByFile, [fileId]: fraction },
+              }
+            : null,
+        );
+      },
+      onFileDone: (analytics) => {
+        setFiles((prev) => {
+          // Avoid duplicate fileId if re-added
+          const filtered = prev.filter((f) => f.fileId !== analytics.fileId);
+          return [...filtered, analytics];
+        });
+        setBatch((b) =>
+          b
+            ? {
+                ...b,
+                doneFiles: b.doneFiles + 1,
+                progressByFile: { ...b.progressByFile, [analytics.fileId]: 1 },
+              }
+            : null,
+        );
+      },
+      onFileError: (fileId, fileName, message) => {
+        setErrors((prev) => [...prev, { fileId, fileName, message }]);
+        setBatch((b) => (b ? { ...b, doneFiles: b.doneFiles + 1 } : null));
+      },
+    });
+
+    cancelPoolRef.current = run.cancel;
+    void run.promise.finally(() => {
+      setBatch(null);
+      if (cancelPoolRef.current === run.cancel) cancelPoolRef.current = null;
+    });
+  }, []);
+
+  const addFileList = useCallback(
+    (fileList: FileList | File[]) => {
+      const arr = Array.from(fileList);
+      const jobs: BatchFileJob[] = arr.map((f) => ({
+        fileId: `file-${nextIdSeq.current++}-${f.name}`,
+        fileName: f.name,
+        file: f,
+      }));
+      ingestJobs(jobs);
+    },
+    [ingestJobs],
+  );
+
+  const loadBuiltInSamples = useCallback(async () => {
+    cancelPoolRef.current?.();
+    setBatch({
+      totalFiles: ANALYTICS_SAMPLES.length,
+      doneFiles: 0,
+      progressByFile: {},
+    });
+    try {
+      const fetched: BatchFileJob[] = await Promise.all(
+        ANALYTICS_SAMPLES.map(async (s) => ({
+          fileId: `sample:${s.id}`,
+          fileName: s.originalName,
+          file: await fetchAnalyticsSample(s),
+        })),
+      );
+      ingestJobs(fetched);
+    } catch (err) {
+      setBatch(null);
+      setErrors((prev) => [
+        ...prev,
+        {
+          fileId: "samples",
+          fileName: "Built-in samples",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      ]);
+    }
+  }, [ingestJobs]);
+
+  // Auto-load the built-in multi-file sample pack in dev mode (or ?sample=default)
+  useEffect(() => {
+    if (shouldAutoLoadSamples(window.location.search)) {
+      void loadBuiltInSamples();
+    }
+    return () => cancelPoolRef.current?.();
+  }, [loadBuiltInSamples]);
+
+  // Accept multi-file drops anywhere in the window
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      setDragging(true);
+    };
+    const onOver = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDragging(false);
+      const dropped = e.dataTransfer?.files;
+      if (dropped && dropped.length > 0) addFileList(dropped);
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [addFileList]);
+
+  const binStepM = binStepUnits * distUnitM;
+  const result = useMemo(
+    () => runAnalyticsQuery(files, query, binStepM, 18),
+    [files, query, binStepM],
+  );
+
+  const toggleFileEnabled = (fileId: string) => {
+    const allIds = files.map((f) => f.fileId);
+    const current = query.enabledFileIds ?? allIds;
+    const next = current.includes(fileId)
+      ? current.filter((id) => id !== fileId)
+      : [...current, fileId];
+    setQuery({
+      ...query,
+      enabledFileIds: next.length === allIds.length ? null : next,
+    });
+  };
+
+  const removeFile = (fileId: string) => {
+    setFiles((prev) => prev.filter((f) => f.fileId !== fileId));
+    if (query.enabledFileIds) {
+      setQuery({
+        ...query,
+        enabledFileIds: query.enabledFileIds.filter((id) => id !== fileId),
+      });
+    }
+  };
+
+  const clearAllFiles = () => {
+    cancelPoolRef.current?.();
+    setFiles([]);
+    setErrors([]);
+    setBatch(null);
+    setSelectedEngagementId(null);
+  };
+
+  const toggleCell = (aspect: AspectCategory, altRel: AltitudeRelation) => {
+    const exactMatch =
+      query.aspects.length === 1 &&
+      query.aspects[0] === aspect &&
+      query.altitudeRelations.length === 1 &&
+      query.altitudeRelations[0] === altRel;
+    if (exactMatch) {
+      setQuery({ ...query, aspects: [], altitudeRelations: [] });
+    } else {
+      setQuery({ ...query, aspects: [aspect], altitudeRelations: [altRel] });
+    }
+  };
+
+  const toggleAspect = (aspect: AspectCategory) => {
+    const exists = query.aspects.includes(aspect);
+    const next = exists ? query.aspects.filter((a) => a !== aspect) : [...query.aspects, aspect];
+    setQuery({ ...query, aspects: next });
+  };
+
+  const toggleAltRelation = (altRel: AltitudeRelation) => {
+    const exists = query.altitudeRelations.includes(altRel);
+    const next = exists
+      ? query.altitudeRelations.filter((r) => r !== altRel)
+      : [...query.altitudeRelations, altRel];
+    setQuery({ ...query, altitudeRelations: next });
+  };
+
+  const toggleWeapon = (weaponName: string) => {
+    const exists = query.weaponNames.includes(weaponName);
+    const next = exists
+      ? query.weaponNames.filter((w) => w !== weaponName)
+      : [...query.weaponNames, weaponName];
+    setQuery({ ...query, weaponNames: next });
+  };
+
+  const toggleBinRange = (minM: number, maxM: number) => {
+    const same =
+      query.minRangeM !== null &&
+      query.maxRangeM !== null &&
+      Math.abs(query.minRangeM - minM) < 1 &&
+      Math.abs(query.maxRangeM - maxM) < 1;
+    if (same) {
+      setQuery({ ...query, minRangeM: null, maxRangeM: null });
+    } else {
+      setQuery({ ...query, minRangeM: minM, maxRangeM: maxM });
+    }
+  };
+
+  const hasActiveFilters =
+    query.aspects.length > 0 ||
+    query.altitudeRelations.length > 0 ||
+    query.weaponClasses.length > 0 ||
+    query.weaponNames.length > 0 ||
+    query.shooterSide !== "" ||
+    query.shooterAircraft !== "" ||
+    query.targetAircraft !== "" ||
+    query.searchText.trim() !== "" ||
+    query.minRangeM !== null ||
+    query.maxRangeM !== null ||
+    query.includeGuns ||
+    !query.excludeFriendlyFire ||
+    query.confirmedTargetsOnly ||
+    query.minConfidence !== "low";
+
+  const batchFraction = batch
+    ? Object.values(batch.progressByFile).reduce((a, b) => a + b, 0) / Math.max(1, batch.totalFiles)
+    : 0;
+
+  return (
+    <div className="app analytics-app">
+      <header className="topbar">
+        <div className="brand-group">
+          <h1>ACMI Missile & Engagement Analytics</h1>
+          <span className="badge info">Multi-File Query Tool</span>
+        </div>
+        <div className="actions">
+          <button type="button" onClick={() => fileInputRef.current?.click()}>
+            + Add ACMI files…
+          </button>
+          <button type="button" className="secondary" onClick={() => void loadBuiltInSamples()}>
+            Load sample pack ({ANALYTICS_SAMPLES.length})
+          </button>
+          {files.length > 0 && (
+            <button type="button" className="secondary" onClick={clearAllFiles}>
+              Clear all
+            </button>
+          )}
+          <button
+            type="button"
+            className="secondary"
+            aria-haspopup="dialog"
+            onClick={() => settingsDialogRef.current?.showModal()}
+          >
+            Units & Settings
+          </button>
+          <a href="./" className="nav-link-btn" title="Open the single-recording ACMI Viewer">
+            Single-File Viewer →
+          </a>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".acmi,.zip,.txt"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                addFileList(e.target.files);
+              }
+              e.target.value = "";
+            }}
+          />
+        </div>
+      </header>
+
+      <main className="analytics-main">
+        {batch && (
+          <section className="card batch-progress-card">
+            <div className="card-head">
+              <span>
+                Parsing & extracting initial conditions: <strong>{batch.doneFiles}</strong> of{" "}
+                <strong>{batch.totalFiles}</strong> recordings…
+              </span>
+              <span className="muted small">{Math.round(batchFraction * 100)}%</span>
+            </div>
+            <progress max={1} value={batchFraction} style={{ width: "100%" }} />
+          </section>
+        )}
+
+        {errors.length > 0 && (
+          <section className="card">
+            <div className="card-head">
+              <h3>Could not read {errors.length} file(s)</h3>
+              <button type="button" className="secondary small-btn" onClick={() => setErrors([])}>
+                Dismiss
+              </button>
+            </div>
+            <ul className="warnings">
+              {errors.map((er, i) => (
+                <li key={`${er.fileId}:${i}`}>
+                  <strong>{er.fileName}</strong>: {er.message}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {files.length === 0 && !batch ? (
+          <div className="empty">
+            <p className="big">Drop one or multiple Tacview .acmi files anywhere on this page</p>
+            <p className="muted">
+              Analyze missile kills, launch ranges, target aspects (Head-on, Beam, Tail-on), and altitude
+              relations (Co-Alt High, Co-Alt Low, High→Low, Low→High) across a set of recordings.
+            </p>
+            <div style={{ marginTop: 18 }}>
+              <button type="button" onClick={() => void loadBuiltInSamples()}>
+                Load built-in sample pack ({ANALYTICS_SAMPLES.length} recordings)
+              </button>
+            </div>
+          </div>
+        ) : (
+          files.length > 0 && (
+            <>
+              {/* 1. Loaded Recordings Dataset Bar */}
+              <DatasetCard
+                files={files}
+                enabledFileIds={query.enabledFileIds}
+                onToggleFile={toggleFileEnabled}
+                onRemoveFile={removeFile}
+                onEnableAll={() => setQuery({ ...query, enabledFileIds: null })}
+              />
+
+              {/* 2. Interactive Query & Filter Controls */}
+              <QueryFilterCard
+                query={query}
+                setQuery={setQuery}
+                facets={result.facets}
+                distUnitName={distUnitName}
+                distUnitM={distUnitM}
+                altitudeUnit={units.altitude}
+                hasActiveFilters={hasActiveFilters}
+              />
+
+              {/* 3. KPI Summary Strip */}
+              <KpiStrip kpis={result.kpis} distanceUnit={units.distance} />
+
+              {/* 4. 2D Initial Condition Matrix (Aspect x Altitude Relation) */}
+              <ConditionMatrix
+                matrix={result.matrix}
+                maxCellKills={result.maxCellKills}
+                maxCellShots={result.maxCellShots}
+                aspectBreakdown={result.aspectBreakdown}
+                altitudeBreakdown={result.altitudeBreakdown}
+                totalKills={result.kpis.totalKills}
+                totalShots={result.kpis.shotsWithTarget}
+                selectedAspects={query.aspects}
+                selectedAltRelations={query.altitudeRelations}
+                distanceUnit={units.distance}
+                metric={matrixMetric}
+                onSetMetric={setMatrixMetric}
+                onToggleCell={toggleCell}
+                onToggleAspect={toggleAspect}
+                onToggleAltRelation={toggleAltRelation}
+              />
+
+              {/* 5. Initial Distance Distribution Histogram */}
+              <RangeDistributionChart
+                bins={result.rangeHistogram}
+                distanceUnit={units.distance}
+                binStepUnits={binStepUnits}
+                onChangeBinStepUnits={setBinStepUnits}
+                showShotsOverlay={showShotsOverlay}
+                onToggleShotsOverlay={setShowShotsOverlay}
+                activeRangeFilter={{ minM: query.minRangeM, maxM: query.maxRangeM }}
+                onSelectBinRange={toggleBinRange}
+              />
+
+              {/* 6. Polar Aspect-Range Plot & Launcher-vs-Target Altitude Scatter Plot */}
+              <div className="charts-two-col">
+                <PolarAspectRangePlot
+                  engagements={result.engagements}
+                  distanceUnit={units.distance}
+                  showMisses={showMissesOnScatter}
+                  onToggleShowMisses={setShowMissesOnScatter}
+                  selectedId={selectedEngagementId}
+                  onSelectEngagement={(id) =>
+                    setSelectedEngagementId(selectedEngagementId === id ? null : id)
+                  }
+                />
+                <AltitudeScatterPlot
+                  engagements={result.engagements}
+                  altitudeUnit={units.altitude}
+                  distanceUnit={units.distance}
+                  thresholds={query.thresholds}
+                  showMisses={showMissesOnScatter}
+                  selectedId={selectedEngagementId}
+                  onSelectEngagement={(id) =>
+                    setSelectedEngagementId(selectedEngagementId === id ? null : id)
+                  }
+                />
+              </div>
+
+              {/* 7. Weapon Breakdown Table */}
+              <WeaponBreakdownCard
+                weapons={result.weaponBreakdown}
+                selectedWeapons={query.weaponNames}
+                distanceUnit={units.distance}
+                onToggleWeapon={toggleWeapon}
+              />
+
+              {/* 8. Drill-down Matching Engagements Table */}
+              <EngagementTable
+                engagements={result.engagements}
+                kills={result.kills}
+                units={units}
+                selectedId={selectedEngagementId}
+                onSelectId={setSelectedEngagementId}
+              />
+            </>
+          )
+        )}
+      </main>
+
+      <dialog ref={settingsDialogRef} className="settings-dialog" aria-label="View settings">
+        <SettingsPanel onClose={() => settingsDialogRef.current?.close()} />
+      </dialog>
+
+      {dragging && (
+        <div className="drop-overlay">
+          <p>Drop .acmi file(s) to add to analytics</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DatasetCard({
+  files,
+  enabledFileIds,
+  onToggleFile,
+  onRemoveFile,
+  onEnableAll,
+}: {
+  files: FileAnalytics[];
+  enabledFileIds: string[] | null;
+  onToggleFile: (id: string) => void;
+  onRemoveFile: (id: string) => void;
+  onEnableAll: () => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const enabledCount = enabledFileIds ? enabledFileIds.length : files.length;
+  const totalEng = files.reduce((s, f) => s + f.engagements.length, 0);
+  const totalKills = files.reduce((s, f) => s + f.engagements.filter((e) => e.isKill).length, 0);
+
+  return (
+    <section className="card analytics-card">
+      <div className="card-head">
+        <div>
+          <h3>
+            Loaded Recordings ({enabledCount} of {files.length} active · {totalKills} total kills,{" "}
+            {totalEng} weapon events)
+          </h3>
+        </div>
+        <div className="head-actions">
+          {enabledFileIds !== null && (
+            <button type="button" className="secondary small-btn" onClick={onEnableAll}>
+              Enable all ({files.length})
+            </button>
+          )}
+          <button
+            type="button"
+            className="link small"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? "▴ Hide file list" : "▾ Show file list"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="file-chips">
+          {files.map((f) => {
+            const checked = enabledFileIds === null || enabledFileIds.includes(f.fileId);
+            const a2aKills = f.engagements.filter((e) => e.isKill && !e.isGun).length;
+            return (
+              <div key={f.fileId} className={`file-chip${checked ? " active" : " muted-chip"}`}>
+                <label className="file-chip-label" title={f.fileName}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggleFile(f.fileId)}
+                  />
+                  <span className="file-chip-title">{f.missionTitle}</span>
+                  <span className="muted small">
+                    ({a2aKills} missile kill{a2aKills === 1 ? "" : "s"} · {formatDuration(f.durationS)})
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className="file-chip-remove"
+                  title="Remove recording from dataset"
+                  aria-label={`Remove ${f.missionTitle}`}
+                  onClick={() => onRemoveFile(f.fileId)}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QueryFilterCard({
+  query,
+  setQuery,
+  facets,
+  distUnitName,
+  distUnitM,
+  altitudeUnit,
+  hasActiveFilters,
+}: {
+  query: AnalyticsQuery;
+  setQuery: (q: AnalyticsQuery) => void;
+  facets: ReturnType<typeof runAnalyticsQuery>["facets"];
+  distUnitName: "nm" | "km";
+  distUnitM: number;
+  altitudeUnit: "ft" | "m" | "ft+m" | "m+ft";
+  hasActiveFilters: boolean;
+}) {
+  const domainKey = query.domains.length === 1 ? query.domains[0]! : "ALL";
+  const setDomainKey = (v: string) => {
+    if (v === "ALL") setQuery({ ...query, domains: [] });
+    else setQuery({ ...query, domains: [v as EngagementDomain] });
+  };
+
+  const minRangeDisp =
+    query.minRangeM !== null ? String(Math.round((query.minRangeM / distUnitM) * 10) / 10) : "";
+  const maxRangeDisp =
+    query.maxRangeM !== null ? String(Math.round((query.maxRangeM / distUnitM) * 10) / 10) : "";
+
+  const applyRangePreset = (minKm: number | null, maxKm: number | null) => {
+    setQuery({
+      ...query,
+      minRangeM: minKm !== null ? minKm * 1000 : null,
+      maxRangeM: maxKm !== null ? maxKm * 1000 : null,
+    });
+  };
+
+  return (
+    <section className="card analytics-card query-panel" aria-label="Query filters">
+      <div className="query-grid">
+        <label>
+          <span>Domain</span>
+          <select value={domainKey} onChange={(e) => setDomainKey(e.target.value)}>
+            <option value="A2A">Air-to-Air (A2A)</option>
+            <option value="SAM">Surface-to-Air (SAM)</option>
+            <option value="A2G">Air-to-Ground (A2G)</option>
+            <option value="ALL">All Domains</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Weapon Family</span>
+          <select
+            value={query.weaponClasses[0] ?? ""}
+            onChange={(e) => {
+              const v = e.target.value as WeaponClass | "";
+              setQuery({ ...query, weaponClasses: v ? [v] : [] });
+            }}
+          >
+            <option value="">All Weapon Families</option>
+            {WEAPON_CLASS_ORDER.map((wc) => (
+              <option key={wc} value={wc}>
+                {WEAPON_CLASS_LABELS[wc]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Specific Weapon</span>
+          <select
+            value={query.weaponNames[0] ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              setQuery({ ...query, weaponNames: v ? [v] : [] });
+            }}
+          >
+            <option value="">All Weapons ({facets.weapons.length})</option>
+            {facets.weapons.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Launcher Aircraft</span>
+          <select
+            value={query.shooterAircraft}
+            onChange={(e) => setQuery({ ...query, shooterAircraft: e.target.value })}
+          >
+            <option value="">All Launchers ({facets.shooterAircraft.length})</option>
+            {facets.shooterAircraft.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Target Aircraft</span>
+          <select
+            value={query.targetAircraft}
+            onChange={(e) => setQuery({ ...query, targetAircraft: e.target.value })}
+          >
+            <option value="">All Targets ({facets.targetAircraft.length})</option>
+            {facets.targetAircraft.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Launcher Side</span>
+          <select
+            value={query.shooterSide}
+            onChange={(e) => setQuery({ ...query, shooterSide: e.target.value })}
+          >
+            <option value="">All Sides</option>
+            {facets.sides.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Min Range ({distUnitName})</span>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="0"
+            value={minRangeDisp}
+            onChange={(e) => {
+              const val = e.target.value.trim();
+              setQuery({
+                ...query,
+                minRangeM: val === "" ? null : Math.max(0, Number(val) * distUnitM),
+              });
+            }}
+          />
+        </label>
+
+        <label>
+          <span>Max Range ({distUnitName})</span>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="Any"
+            value={maxRangeDisp}
+            onChange={(e) => {
+              const val = e.target.value.trim();
+              setQuery({
+                ...query,
+                maxRangeM: val === "" ? null : Math.max(0, Number(val) * distUnitM),
+              });
+            }}
+          />
+        </label>
+
+        <label className="grow">
+          <span>Search</span>
+          <input
+            type="search"
+            placeholder="Pilot, aircraft, weapon, mission…"
+            value={query.searchText}
+            onChange={(e) => setQuery({ ...query, searchText: e.target.value })}
+          />
+        </label>
+      </div>
+
+      {/* Range presets, Threshold controls, and toggles */}
+      <div className="query-subbar">
+        <div className="preset-group">
+          <span className="muted small">Range presets:</span>
+          <button
+            type="button"
+            className="secondary small-btn"
+            onClick={() => applyRangePreset(null, null)}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className="secondary small-btn"
+            onClick={() => applyRangePreset(0, 10)}
+          >
+            WVR (&le;{fmtDist(10000, altitudeUnit.startsWith("ft") ? "nm" : "km")})
+          </button>
+          <button
+            type="button"
+            className="secondary small-btn"
+            onClick={() => applyRangePreset(10, 35)}
+          >
+            Med BVR (10–35 km)
+          </button>
+          <button
+            type="button"
+            className="secondary small-btn"
+            onClick={() => applyRangePreset(35, null)}
+          >
+            Long BVR (&ge;35 km)
+          </button>
+        </div>
+
+        <div className="threshold-group">
+          <label className="small muted">
+            Co-Alt band (±Δh):{" "}
+            <select
+              value={query.thresholds.coAltBandM}
+              onChange={(e) =>
+                setQuery({
+                  ...query,
+                  thresholds: { ...query.thresholds, coAltBandM: Number(e.target.value) },
+                })
+              }
+            >
+              <option value={500}>±{fmtAlt(500, altitudeUnit)}</option>
+              <option value={1000}>±{fmtAlt(1000, altitudeUnit)} (default)</option>
+              <option value={1500}>±{fmtAlt(1500, altitudeUnit)}</option>
+              <option value={2000}>±{fmtAlt(2000, altitudeUnit)}</option>
+            </select>
+          </label>
+
+          <label className="small muted">
+            High-Alt floor:{" "}
+            <select
+              value={query.thresholds.highAltFloorM}
+              onChange={(e) =>
+                setQuery({
+                  ...query,
+                  thresholds: { ...query.thresholds, highAltFloorM: Number(e.target.value) },
+                })
+              }
+            >
+              <option value={3048}>{fmtAlt(3048, altitudeUnit)}</option>
+              <option value={4572}>{fmtAlt(4572, altitudeUnit)} (default)</option>
+              <option value={6096}>{fmtAlt(6096, altitudeUnit)}</option>
+              <option value={7620}>{fmtAlt(7620, altitudeUnit)}</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="checks-inline">
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={query.includeGuns}
+              onChange={(e) => setQuery({ ...query, includeGuns: e.target.checked })}
+            />{" "}
+            Include guns
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={query.excludeFriendlyFire}
+              onChange={(e) => setQuery({ ...query, excludeFriendlyFire: e.target.checked })}
+            />{" "}
+            Exclude friendly fire
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={query.confirmedTargetsOnly}
+              onChange={(e) => setQuery({ ...query, confirmedTargetsOnly: e.target.checked })}
+            />{" "}
+            Confirmed targets only
+          </label>
+        </div>
+      </div>
+
+      {/* Active filter chips */}
+      {hasActiveFilters && (
+        <div className="active-filters-bar">
+          <span className="muted small">Active filters:</span>
+          {query.aspects.map((a) => (
+            <button
+              key={a}
+              type="button"
+              className="filter-chip"
+              onClick={() =>
+                setQuery({ ...query, aspects: query.aspects.filter((x) => x !== a) })
+              }
+            >
+              Aspect: {ASPECT_SHORT_LABELS[a]} ×
+            </button>
+          ))}
+          {query.altitudeRelations.map((r) => (
+            <button
+              key={r}
+              type="button"
+              className="filter-chip"
+              onClick={() =>
+                setQuery({
+                  ...query,
+                  altitudeRelations: query.altitudeRelations.filter((x) => x !== r),
+                })
+              }
+            >
+              Altitude: {ALT_RELATION_LABELS[r]} ×
+            </button>
+          ))}
+          {query.weaponNames.map((w) => (
+            <button
+              key={w}
+              type="button"
+              className="filter-chip"
+              onClick={() =>
+                setQuery({
+                  ...query,
+                  weaponNames: query.weaponNames.filter((x) => x !== w),
+                })
+              }
+            >
+              Weapon: {w} ×
+            </button>
+          ))}
+          {(query.minRangeM !== null || query.maxRangeM !== null) && (
+            <button
+              type="button"
+              className="filter-chip"
+              onClick={() => setQuery({ ...query, minRangeM: null, maxRangeM: null })}
+            >
+              Range: {query.minRangeM !== null ? fmtDist(query.minRangeM, "km") : "0"} –{" "}
+              {query.maxRangeM !== null ? fmtDist(query.maxRangeM, "km") : "∞"} ×
+            </button>
+          )}
+          <button
+            type="button"
+            className="secondary small-btn"
+            onClick={() =>
+              setQuery({
+                ...DEFAULT_QUERY,
+                enabledFileIds: query.enabledFileIds,
+                thresholds: { ...DEFAULT_THRESHOLDS },
+              })
+            }
+          >
+            Reset all filters
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function KpiStrip({
+  kpis,
+  distanceUnit,
+}: {
+  kpis: ReturnType<typeof runAnalyticsQuery>["kpis"];
+  distanceUnit: "nm" | "km" | "nm+km" | "km+nm";
+}) {
+  return (
+    <section className="kpi-grid">
+      <div className="card kpi-card">
+        <div className="stat-label">Matching Kills</div>
+        <div className="stat-value">{kpis.totalKills.toLocaleString()}</div>
+        <div className="muted small">
+          {kpis.pk !== null ? `${Math.round(kpis.pk * 100)}% overall Pk` : "No shots"}
+        </div>
+      </div>
+
+      <div className="card kpi-card">
+        <div className="stat-label">Matching Shots</div>
+        <div className="stat-value">{kpis.totalShots.toLocaleString()}</div>
+        <div className="muted small">
+          {kpis.totalHits.toLocaleString()} hits · {kpis.shotsWithTarget.toLocaleString()} with geometry
+        </div>
+      </div>
+
+      <div className="card kpi-card">
+        <div className="stat-label">Median Initial Kill Range</div>
+        <div className="stat-value">{fmtDist(kpis.medianKillRangeM, distanceUnit)}</div>
+        <div className="muted small">
+          {kpis.p25KillRangeM !== null && kpis.p75KillRangeM !== null
+            ? `IQR: ${fmtDist(kpis.p25KillRangeM, distanceUnit)} – ${fmtDist(kpis.p75KillRangeM, distanceUnit)}`
+            : "–"}
+        </div>
+      </div>
+
+      <div className="card kpi-card">
+        <div className="stat-label">Mean Kill Range & TOF</div>
+        <div className="stat-value">{fmtDist(kpis.meanKillRangeM, distanceUnit)}</div>
+        <div className="muted small">
+          {kpis.medianFlightTimeS !== null
+            ? `Median flight time: ${kpis.medianFlightTimeS.toFixed(1)} s`
+            : "–"}
+        </div>
+      </div>
+
+      <div className="card kpi-card">
+        <div className="stat-label">Dominant Kill Condition</div>
+        <div className="stat-value kpi-cond">
+          {kpis.dominantCondition
+            ? `${ASPECT_SHORT_LABELS[kpis.dominantCondition.aspect]} · ${ALT_RELATION_LABELS[kpis.dominantCondition.altitudeRelation]}`
+            : "–"}
+        </div>
+        <div className="muted small">
+          {kpis.dominantCondition
+            ? `${kpis.dominantCondition.kills} kills (${Math.round(kpis.dominantCondition.share * 100)}% of kills)`
+            : "No kills in selection"}
+        </div>
+      </div>
+    </section>
+  );
+}
