@@ -10,7 +10,6 @@ import {
   DoubleSide,
   Float32BufferAttribute,
   Fog,
-  GridHelper,
   HemisphereLight,
   InstancedMesh,
   LineBasicMaterial,
@@ -46,10 +45,12 @@ import {
   type ColorFn,
   fogRange,
   framingCamera,
-  gridLevels,
+  GRID_STEPS,
   snapGridCentre,
   toWorld,
+  visibleGridCells,
 } from "../scene/frame.ts";
+import { createGroundGrid, type GroundGrid } from "../scene/groundGrid.ts";
 import { distanceUnitM, distanceUnitName, fmtDist, labelText } from "../settings/units.ts";
 import { followTarget } from "./follow.ts";
 import { readTheme } from "./Map2D.tsx";
@@ -85,9 +86,9 @@ interface Gl {
   killsOld: InstancedMesh;
   trail: LineSegments;
   drops: LineSegments;
-  /** Ground grids by cell size (m); which ones show depends on the camera distance. */
-  grids: Map<number, GridHelper>;
-  gridColor: Color;
+  /** Ground plane, drawn with its distance grid. */
+  ground: Mesh;
+  groundGrid: GroundGrid;
   theme: Theme;
   dispose: () => void;
 }
@@ -382,21 +383,20 @@ function createScene(canvas: HTMLCanvasElement, initial: FitTarget): Gl {
   sun.position.set(0.4, 1, 0.3);
   scene.add(sun);
 
-  // Ground: a plane at sea level, with grids whose spacing follows the camera distance (see draw()).
-  // Fog fades the ground and grids towards the horizon, where lines would otherwise bunch up.
+  // Ground: a plane at sea level drawn with its anti-aliased distance grid (see groundGrid.ts), kept
+  // centred under what the camera looks at (see updateGround()). Fog fades it towards the horizon.
   scene.fog = new Fog(theme.bg, 100_000, 700_000);
-  const groundColor = new Color(theme.bg).lerp(new Color(theme.gridText), 0.08);
-  const groundMat = new MeshBasicMaterial({
-    color: groundColor,
-    polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: 2,
-  });
-  const ground = new Mesh(new PlaneGeometry(6_000_000, 6_000_000).rotateX(-Math.PI / 2), groundMat);
+  const groundGrid = createGroundGrid(
+    new Color(theme.bg).lerp(new Color(theme.gridText), 0.08),
+    new Color(theme.gridText),
+  );
+  // Pushed back a little in depth, so trails and drop lines touching the ground draw over it.
+  groundGrid.material.polygonOffset = true;
+  groundGrid.material.polygonOffsetFactor = 2;
+  groundGrid.material.polygonOffsetUnits = 2;
+  const ground = new Mesh(new PlaneGeometry(6_000_000, 6_000_000).rotateX(-Math.PI / 2), groundGrid.material);
+  ground.frustumCulled = false;
   scene.add(ground);
-  const gridColor = new Color(theme.gridText);
-  // Grids are created on first use for each cell size (km or nm), see updateGrids().
-  const grids = new Map<number, GridHelper>();
 
   // Aircraft, weapons and trails ignore the fog: they must stay crisp at any distance.
   const lit = new MeshLambertMaterial({ side: DoubleSide, fog: false });
@@ -449,8 +449,8 @@ function createScene(canvas: HTMLCanvasElement, initial: FitTarget): Gl {
     killsOld,
     trail,
     drops,
-    grids,
-    gridColor,
+    ground,
+    groundGrid,
     theme,
     dispose: () => {
       controls.dispose();
@@ -575,7 +575,7 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
   setLines(gl.trail, f.trail);
   setLines(gl.drops, f.drops);
   const unitM = distanceUnitM(p.settings.units.distance);
-  const grid = updateGrids(gl, unitM);
+  const gridCells = updateGround(gl, unitM, perPx);
   renderer.render(gl.scene, camera);
 
   // Labels and click targets, projected to the screen.
@@ -621,13 +621,9 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
       // Grid spacing note, bottom left (like the 2D map's scale text).
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillStyle = gl.theme.gridText;
-      const [coarse, fine] = grid.cells;
+      // The grid sizes visible where the camera looks, e.g. "grid 1 · 10 · 50 nm".
       const name = distanceUnitName(p.settings.units.distance);
-      ctx.fillText(
-        `grid ${(coarse ?? 0) / unitM} ${name}${fine !== undefined ? ` · fine ${fine / unitM} ${name}` : ""}`,
-        12,
-        h - 12,
-      );
+      ctx.fillText(`grid ${gridCells.map((c) => c / unitM).join(" · ")} ${name}`, 12, h - 12);
     }
   }
 }
@@ -641,40 +637,26 @@ function toScreenPt(pos: Vector3, camera: PerspectiveCamera, w: number, h: numbe
 const tmpV2 = new Vector3();
 
 /**
- * Show the grids that suit the camera distance (in the user's km or nm), centred under what the
- * camera looks at, and set the fog to match. Returns the visible cell sizes, coarsest first.
+ * Keep the ground under what the camera looks at, with the grid in the user's km or nm, and set the
+ * fog to match the camera distance. The plane's centre snaps to the coarsest grid so the lines stay
+ * put in the world as it moves. Returns the grid cell sizes clearly visible there (finest first).
+ * `perPx` is world size per CSS pixel at distance 1.
  */
-function updateGrids(gl: Gl, unitM: number): { cells: number[] } {
+function updateGround(gl: Gl, unitM: number, perPx: number): number[] {
   const d = gl.camera.position.distanceTo(gl.controls.target);
-  const levels = gridLevels(d, unitM);
   const target = gl.controls.target;
-  for (const level of levels) {
-    if (gl.grids.has(level.cell)) continue;
-    // About 100–200 cells across, so each grid reaches past the fog at the distances it is shown.
-    const divisions = level.cell >= 50 * unitM ? 100 : 200;
-    const g = new GridHelper(level.cell * divisions, divisions, gl.gridColor, gl.gridColor);
-    const mats = Array.isArray(g.material) ? g.material : [g.material];
-    for (const m of mats) {
-      m.transparent = true;
-      m.depthWrite = false;
-    }
-    gl.scene.add(g);
-    gl.grids.set(level.cell, g);
-  }
-  for (const [cell, g] of gl.grids) {
-    const level = levels.find((l) => l.cell === cell);
-    g.visible = level !== undefined;
-    if (!level) continue;
-    g.position.set(snapGridCentre(target.x, cell), 0, snapGridCentre(target.z, cell));
-    const mats = Array.isArray(g.material) ? g.material : [g.material];
-    for (const m of mats) m.opacity = level.opacity;
-  }
+  const coarse = GRID_STEPS[2] * unitM;
+  gl.ground.position.set(snapGridCentre(target.x, coarse), 0, snapGridCentre(target.z, coarse));
+  gl.groundGrid.configure(unitM, gl.renderer.getPixelRatio());
   if (gl.scene.fog instanceof Fog) {
     const f = fogRange(d);
     gl.scene.fog.near = f.near;
     gl.scene.fog.far = f.far;
   }
-  return { cells: levels.map((l) => l.cell).reverse() };
+  // Ground size of a pixel at the focus point, measured along the ground (the view is tilted).
+  const height = Math.max(gl.camera.position.y - target.y, 1);
+  const slant = Math.max(height / Math.max(d, 1), 0.2);
+  return visibleGridCells((d * perPx) / slant, unitM);
 }
 
 function ensureCapacity(gl: Gl, kind: MapKind, n: number): InstancedMesh {

@@ -9,9 +9,10 @@ import {
   buildFrame,
   fogRange,
   framingCamera,
-  gridLevels,
+  GRID_FADE_TO_PX,
   snapGridCentre,
   toWorld,
+  visibleGridCells,
 } from "../src/scene/frame.ts";
 import { fileChunks, sample } from "./helpers.ts";
 
@@ -51,14 +52,19 @@ describe("3D orientation (X east, Y up, Z south)", () => {
     expect(toWorld(1, 2, Number.NaN).y).toBe(0); // ships have no altitude in DCS files
   });
 
-  it("thins the grid as the camera moves away", () => {
-    const cells = (d: number) => gridLevels(d).map((l) => l.cell);
-    expect(cells(5_000)).toEqual([1_000, 10_000]); // inside a dogfight
-    expect(cells(100_000)).toEqual([10_000]); // a whole engagement area
-    expect(cells(800_000)).toEqual([50_000]); // the theatre
+  it("lists the grids clearly visible at the focus point, finer ones dropping out with distance", () => {
+    // Metres per CSS pixel at the focus point: ~10 m in a dogfight, ~200 m over an engagement area,
+    // ~2 km for the whole theatre.
+    expect(visibleGridCells(10)).toEqual([1_000, 10_000, 50_000]);
+    expect(visibleGridCells(200)).toEqual([10_000, 50_000]);
+    expect(visibleGridCells(2_000)).toEqual([50_000]);
+    expect(visibleGridCells(50_000)).toEqual([50_000]); // the coarsest is always listed
     // Nautical miles: 1, 10 and 50 nm cells.
-    expect(gridLevels(5_000, 1852).map((l) => l.cell)).toEqual([1852, 18520]);
-    expect(gridLevels(800_000, 1852).map((l) => l.cell)).toEqual([92600]);
+    expect(visibleGridCells(10, 1852)).toEqual([1852, 18520, 92600]);
+    expect(visibleGridCells(2_000, 1852)).toEqual([92600]);
+    // Each grid is fully visible once its cells reach GRID_FADE_TO_PX on screen.
+    expect(visibleGridCells(1_000 / GRID_FADE_TO_PX)[0]).toBe(1_000);
+    expect(visibleGridCells(1_000 / GRID_FADE_TO_PX + 1)[0]).toBe(10_000);
     expect(snapGridCentre(12_345, 10_000)).toBe(10_000);
     expect(snapGridCentre(-26_000, 50_000)).toBe(-50_000);
     const near = fogRange(10_000);

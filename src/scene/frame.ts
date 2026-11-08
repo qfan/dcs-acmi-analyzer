@@ -152,21 +152,24 @@ function appendTrail(
 
 /** Grid spacings in distance units (km or nm), finest first. */
 export const GRID_STEPS = [1, 10, 50] as const;
+/**
+ * On-screen cell size (CSS px) over which a grid fades in: invisible below FADE_FROM, full from
+ * FADE_TO. The ground shader applies this per pixel, so finer grids give way to coarser ones with
+ * distance and towards the horizon, instead of whole grids switching on and off.
+ */
+export const GRID_FADE_FROM_PX = 4;
+export const GRID_FADE_TO_PX = 16;
 
 /**
- * Which grids to show for a camera this far (metres) from what it looks at, and how strongly.
- * Close: 1-unit lines with 10-unit lines over them. Medium: 10 units only. Far: 50 units only.
- * `unitM` is metres per unit: 1000 for km, 1852 for nautical miles. Cells are returned in metres.
+ * Grid cell sizes (metres) clearly visible where the camera looks, for the "grid …" note: those whose
+ * cells are at least GRID_FADE_TO_PX there. `metresPerPx` is the ground size of one CSS pixel at the
+ * focus point; `unitM` is metres per unit (1000 for km, 1852 for nautical miles). Finest first; the
+ * coarsest grid is always listed, as it is what shows when everything else has faded.
  */
-export function gridLevels(cameraDistanceM: number, unitM = 1000): { cell: number; opacity: number }[] {
-  const [fine, mid, coarse] = GRID_STEPS.map((s) => s * unitM) as [number, number, number];
-  if (cameraDistanceM < 40 * unitM)
-    return [
-      { cell: fine, opacity: 0.1 },
-      { cell: mid, opacity: 0.24 },
-    ];
-  if (cameraDistanceM < 300 * unitM) return [{ cell: mid, opacity: 0.22 }];
-  return [{ cell: coarse, opacity: 0.22 }];
+export function visibleGridCells(metresPerPx: number, unitM = 1000): number[] {
+  const cells = GRID_STEPS.map((s) => s * unitM);
+  const shown = cells.filter((c) => c / metresPerPx >= GRID_FADE_TO_PX);
+  return shown.length ? shown : cells.slice(-1);
 }
 
 /** Centre for a grid near `at`, snapped so its lines fall on whole multiples of the cell size. */
