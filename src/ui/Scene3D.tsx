@@ -31,8 +31,16 @@ import {
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { type FitTarget, fitAt } from "../map/fit.ts";
-import { type MapKind, sampleAt } from "../map/mapData.ts";
-import { drawLabels, pick, type ScreenHit, sideColor, type Theme } from "../map/render.ts";
+import type { MapKind } from "../map/mapData.ts";
+import {
+  drawLabels,
+  drawSelectionRing,
+  drawSightLine,
+  pick,
+  type ScreenHit,
+  sideColor,
+  type Theme,
+} from "../map/render.ts";
 import {
   buildFrame,
   type ColorFn,
@@ -43,7 +51,9 @@ import {
   toWorld,
 } from "../scene/frame.ts";
 import { distanceUnitM, distanceUnitName, fmtDist, labelText } from "../settings/units.ts";
+import { followTarget } from "./follow.ts";
 import { readTheme } from "./Map2D.tsx";
+import { useCtrlPick } from "./useCtrlPick.ts";
 import type { ViewProps } from "./viewTypes.ts";
 
 /**
@@ -103,7 +113,7 @@ export default function Scene3D(props: ViewProps) {
     try {
       // First view: what's alive at the current time (not the selection: that stays where it is).
       const now = propsRef.current;
-      gl = createScene(canvas, fitAt(data, now.t, null, now.ground));
+      gl = createScene(canvas, fitAt(data, now.t, { primary: null, secondary: null }, now.ground));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return;
@@ -153,57 +163,78 @@ export default function Scene3D(props: ViewProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: these props are read through propsRef when drawing
   useEffect(
     () => renderRef.current(),
-    [props.t, props.trailS, props.labels, props.ground, props.selected, props.follow, props.settings],
+    [
+      props.t,
+      props.trailS,
+      props.labels,
+      props.ground,
+      props.primary,
+      props.secondary,
+      props.follow,
+      props.settings,
+    ],
   );
 
-  // Follow: move the orbit target with the selected object, keeping the camera's offset.
+  // Camera follow: move the orbit target with the primary, the secondary, or the pair's midpoint,
+  // keeping the camera's offset. For the pair, back off when needed so both stay in view.
   useEffect(() => {
     const gl = glRef.current;
-    if (!gl || !props.follow || props.selected === null) return;
-    const tr = data.tracks.find((x) => x.uid === props.selected);
-    const s = tr ? sampleAt(data, tr, props.t) : null;
-    if (!s) return;
-    const next = toWorld(s.x, s.y, s.alt);
+    if (!gl) return;
+    const f = followTarget(data, props.t, props.follow, {
+      primary: props.primary,
+      secondary: props.secondary,
+    });
+    if (!f) return;
+    const next = toWorld(f.x, f.y, f.alt);
     const delta = next.clone().sub(gl.controls.target);
     gl.controls.target.add(delta);
     gl.camera.position.add(delta);
+    if (f.basis === "pair") {
+      const need = cameraForFit(f).position.distanceTo(cameraForFit(f).target);
+      const offset = gl.camera.position.clone().sub(gl.controls.target);
+      if (offset.length() < need) gl.camera.position.copy(gl.controls.target).add(offset.setLength(need));
+    }
     renderRef.current();
-  }, [props.follow, props.selected, props.t, data]);
+  }, [props.follow, props.primary, props.secondary, props.t, data]);
 
-  // Frame an object requested from the tables: 6 km away, from the south-east, slightly above.
+  // Frame what the tables asked for: the pair if both exist, else the object, from the south-east.
   useEffect(() => {
     const gl = glRef.current;
     const f = props.focus;
     if (!gl || !f) return;
-    const tr = data.tracks.find((x) => x.uid === f.uid);
-    const s = tr ? sampleAt(data, tr, Math.min(f.time, tr.t1)) : null;
-    if (!s) return;
-    const target = toWorld(s.x, s.y, s.alt);
+    const pair = fitAt(data, f.time, { primary: f.primary, secondary: f.secondary });
+    const one = fitAt(data, f.time, { primary: f.uid, secondary: null });
+    const fit = pair.basis === "pair" ? pair : one;
+    if (fit.basis === "alive" || fit.basis === "recording") return;
+    const target = toWorld(fit.x, fit.y, fit.alt);
+    const dist = Math.max(6000, cameraForFit(fit).position.distanceTo(cameraForFit(fit).target));
     gl.controls.target.copy(target);
-    gl.camera.position.copy(target).add(new Vector3(4200, 2500, 4200));
+    gl.camera.position.copy(target).add(new Vector3(1, 0.6, 1).setLength(dist));
     renderRef.current();
   }, [props.focus, data]);
 
-  // A click (no drag) selects the nearest symbol.
+  useCtrlPick(wrapRef, hitsRef, props.onPick);
+
+  // A plain click (no drag) picks the nearest symbol; Ctrl clicks are handled by useCtrlPick.
   const down = useRef<{ x: number; y: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    down.current = { x: e.clientX, y: e.clientY };
+    down.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
   };
   const onPointerUp = (e: React.PointerEvent) => {
     const d = down.current;
     down.current = null;
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return;
     const r = e.currentTarget.getBoundingClientRect();
-    props.onSelect(pick(hitsRef.current, e.clientX - r.left, e.clientY - r.top, 14));
+    props.onPick(pick(hitsRef.current, e.clientX - r.left, e.clientY - r.top, 14), "primary", false);
   };
 
-  // Fit: the selected object, else what's in the air now (see fitAt). Keeps the current viewing
-  // direction; for a selected object it only ever moves closer.
+  // Fit: the pair, the selected object, else what's in the air now (see fitAt). Keeps the current
+  // viewing direction; for a single selected object it only ever moves closer.
   const frameView = (top: boolean) => {
     const gl = glRef.current;
     if (!gl) return;
     props.onUserMove();
-    const f = fitAt(data, props.t, props.selected, props.ground);
+    const f = fitAt(data, props.t, { primary: props.primary, secondary: props.secondary }, props.ground);
     const { target, position } = cameraForFit(f);
     let dist = position.distanceTo(target);
     const current = gl.camera.position.distanceTo(gl.controls.target);
@@ -234,7 +265,7 @@ export default function Scene3D(props: ViewProps) {
         ref={canvasRef}
         className="map-canvas scene3d"
         tabIndex={0}
-        aria-label="3D view. Drag to orbit, right-drag to pan, scroll to zoom, click an aircraft to select it. Space plays or pauses."
+        aria-label="3D view. Drag to orbit, right-drag to pan, scroll to zoom. Click or Ctrl+click an aircraft for the primary selection, Ctrl+right-click for the secondary. Space plays or pauses."
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
       />
@@ -249,7 +280,13 @@ export default function Scene3D(props: ViewProps) {
         <button
           type="button"
           className="secondary"
-          title={props.selected !== null ? "Centre on the selected object" : "Fit everything in the air now"}
+          title={
+            props.primary !== null && props.secondary !== null
+              ? "Fit the selected pair"
+              : props.primary !== null || props.secondary !== null
+                ? "Centre on the selected object"
+                : "Fit everything in the air now"
+          }
           onClick={() => frameView(false)}
         >
           Fit
@@ -439,7 +476,8 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
   const perPx = (2 * Math.tan((camera.fov * Math.PI) / 180 / 2)) / Math.max(h, 1);
   const scaleAt = (pos: Vector3, px: number) => camera.position.distanceTo(pos) * perPx * px;
 
-  const f = buildFrame(p.data, p.t, { trailS: p.trailS, ground: p.ground, selected: p.selected }, sideRgb);
+  const selectedUids = [p.primary, p.secondary].filter((u): u is number => u !== null);
+  const f = buildFrame(p.data, p.t, { trailS: p.trailS, ground: p.ground, selected: selectedUids }, sideRgb);
 
   // Symbols, one instanced mesh per kind.
   const byKind: Record<string, typeof f.objects> = {};
@@ -452,7 +490,7 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
     const list = byKind[kind] ?? [];
     const mesh = ensureCapacity(gl, kind, list.length);
     list.forEach((o, i) => {
-      const px = PX[kind] * (o.uid === p.selected ? 1.5 : 1);
+      const px = PX[kind] * (selectedUids.includes(o.uid) ? 1.5 : 1);
       const s = scaleAt(o.pos, px);
       const rot = kind === "ground" || kind === "chute" || kind === "bullseye" ? noRot : o.rot;
       tmpM.compose(kind === "bullseye" ? tmpV.set(o.pos.x, 1, o.pos.z) : o.pos, rot, tmpS.set(s, s, s));
@@ -495,7 +533,7 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
   // Labels and click targets, projected to the screen.
   const hits: ScreenHit[] = [];
   const labels: { text: string; x: number; y: number; first: boolean }[] = [];
-  const cam = camera.position;
+  const rings: { sx: number; sy: number; role: "primary" | "secondary" }[] = [];
   for (const o of f.objects) {
     if (o.kind === "bullseye") continue;
     tmpV.copy(o.pos).project(camera);
@@ -504,20 +542,33 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
     const sy = ((1 - tmpV.y) / 2) * h;
     if (sx < -50 || sy < -50 || sx > w + 50 || sy > h + 50) continue;
     hits.push({ uid: o.uid, sx, sy });
-    const selected = o.uid === p.selected;
-    if ((p.labels && (o.kind === "air" || o.kind === "heli")) || selected) {
+    const role = o.uid === p.primary ? "primary" : o.uid === p.secondary ? "secondary" : null;
+    if (role) rings.push({ sx, sy, role });
+    if ((p.labels && (o.kind === "air" || o.kind === "heli")) || role) {
       const text = labelText(o.pilot, o.name, o.alt, o.speed, p.settings);
-      const away = selected ? ` · ${fmtDist(cam.distanceTo(o.pos), p.settings.units.distance)} away` : "";
-      labels.push({ text: `${text}${away}`, x: sx + 12, y: sy - 10, first: selected });
+      labels.push({ text, x: sx + 14, y: sy - 12, first: role !== null });
     }
   }
   hitsRef.current = hits;
+  // Line of sight between the pair (both in front of the camera), with the slant range.
+  const a = f.objects.find((o) => o.uid === p.primary);
+  const b = f.objects.find((o) => o.uid === p.secondary);
+  const sight = a && b ? { a: toScreenPt(a.pos, camera, w, h), b: toScreenPt(b.pos, camera, w, h) } : null;
   if (overlay) {
     const ctx = overlay.getContext("2d");
     if (ctx) {
       const dpr = window.devicePixelRatio || 1;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      if (a && b && sight?.a && sight.b)
+        drawSightLine(
+          ctx,
+          sight.a,
+          sight.b,
+          fmtDist(a.pos.distanceTo(b.pos), p.settings.units.distance),
+          gl.theme,
+        );
+      for (const r of rings) drawSelectionRing(ctx, r.sx, r.sy, r.role, gl.theme);
       drawLabels(ctx, labels, gl.theme);
       // Grid spacing note, bottom left (like the 2D map's scale text).
       ctx.font = "12px system-ui, sans-serif";
@@ -532,6 +583,14 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
     }
   }
 }
+
+/** Screen position (CSS px) of a world point, or null when it's behind the camera. */
+function toScreenPt(pos: Vector3, camera: PerspectiveCamera, w: number, h: number): [number, number] | null {
+  const v = tmpV2.copy(pos).project(camera);
+  if (v.z > 1 || v.z < -1) return null;
+  return [((v.x + 1) / 2) * w, ((1 - v.y) / 2) * h];
+}
+const tmpV2 = new Vector3();
 
 /**
  * Show the grids that suit the camera distance (in the user's km or nm), centred under what the

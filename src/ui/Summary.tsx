@@ -77,7 +77,16 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
           analysis={outcome.analysis}
           onShowOnMap={
             outcome.map
-              ? (k) => setFocus((f) => ({ time: k.time, uid: k.victimUid, seq: (f?.seq ?? 0) + 1 }))
+              ? (k) =>
+                  // Killer as primary ("ownship"), victim as secondary ("target"): the engagement
+                  // panel then reads from the shooter's point of view.
+                  setFocus((f) => ({
+                    time: k.time,
+                    uid: k.victimUid,
+                    primary: k.killer?.uid ?? k.victimUid,
+                    secondary: k.killer ? k.victimUid : null,
+                    seq: (f?.seq ?? 0) + 1,
+                  }))
               : undefined
           }
         />

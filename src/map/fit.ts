@@ -2,7 +2,7 @@ import { type MapData, type MapKind, sampleAt } from "./mapData.ts";
 
 /**
  * What the "Fit" button (and the initial view) should frame at time t:
- *  1. the selected object, if it exists at t;
+ *  1. the primary and secondary objects together, or whichever one exists at t;
  *  2. otherwise everything alive at t: aircraft and weapons first, ground/sea units only if nothing flies.
  *     Centred on the median position and sized to cover ~90% of objects, so one far-off aircraft
  *     (an AWACS orbit, a tanker track) neither drags the centre nor zooms everything to specks;
@@ -16,7 +16,7 @@ export interface FitTarget {
   alt: number;
   /** Radius around (x, y) that should be in view. */
   radius: number;
-  basis: "selected" | "alive" | "recording";
+  basis: "selected" | "pair" | "alive" | "recording";
   /** Objects the fit was computed from. */
   count: number;
 }
@@ -33,20 +33,34 @@ const TRIM_FROM = 3;
 const FLYING: ReadonlySet<MapKind> = new Set(["air", "heli", "weapon"]);
 const SURFACE: ReadonlySet<MapKind> = new Set(["ground", "sea", "chute"]);
 
-export function fitAt(d: MapData, t: number, selected: number | null, includeSurface = true): FitTarget {
-  if (selected !== null) {
-    const tr = d.tracks.find((x) => x.uid === selected);
+export interface Selection {
+  primary: number | null;
+  secondary: number | null;
+}
+
+export function fitAt(d: MapData, t: number, sel: Selection, includeSurface = true): FitTarget {
+  const at = (uid: number | null) => {
+    if (uid === null) return null;
+    const tr = d.tracks.find((x) => x.uid === uid);
     const s = tr ? sampleAt(d, tr, t) : null;
-    if (s)
-      return {
-        x: s.x,
-        y: s.y,
-        alt: Number.isFinite(s.alt) ? s.alt : 0,
-        radius: SELECTED_RADIUS_M,
-        basis: "selected",
-        count: 1,
-      };
+    return s ? { x: s.x, y: s.y, alt: Number.isFinite(s.alt) ? s.alt : 0 } : null;
+  };
+  const p = at(sel.primary);
+  const q = at(sel.secondary);
+  // Both selected and present: the pair, centred between them.
+  if (p && q) {
+    const half = Math.hypot(p.x - q.x, p.y - q.y) / 2;
+    return {
+      x: (p.x + q.x) / 2,
+      y: (p.y + q.y) / 2,
+      alt: (p.alt + q.alt) / 2,
+      radius: Math.max(half * 1.3, MIN_RADIUS_M),
+      basis: "pair",
+      count: 2,
+    };
   }
+  const one = p ?? q;
+  if (one) return { ...one, radius: SELECTED_RADIUS_M, basis: "selected", count: 1 };
 
   const collect = (kinds: ReadonlySet<MapKind>) => {
     const pts: { x: number; y: number; alt: number }[] = [];

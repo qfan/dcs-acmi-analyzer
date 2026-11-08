@@ -260,7 +260,7 @@ export interface MapSample {
   /** Degrees; from the recording, or (pitch only) from the climb angle; roll 0 if unknown. */
   roll: number;
   pitch: number;
-  /** Ground speed in m/s (2D) from neighbouring samples. */
+  /** Ground speed in m/s (horizontal only) from neighbouring samples; combine with vz for true speed. */
   speed: number;
   /** Vertical speed in m/s (positive = climbing). */
   vz: number;

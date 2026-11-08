@@ -21,7 +21,10 @@ export interface DrawOptions {
   trailS: number;
   labels: boolean;
   ground: boolean;
-  selectedUid: number | null;
+  primaryUid: number | null;
+  secondaryUid: number | null;
+  /** Range text for the line of sight between primary and secondary. */
+  rangeLabel: (metres: number) => string;
   /** Builds an aircraft label from pilot, type, altitude (m) and speed (m/s) in the user's units. */
   labelFor: (pilot: string, name: string, altM: number, speedMs: number) => string;
   /** Grid and scale bar unit: metres per unit and its name. */
@@ -127,28 +130,36 @@ export function drawMap(
   }
   ctx.globalAlpha = 1;
 
+  // Line of sight between the primary and secondary selection, under the symbols.
+  const pairPts: { x: number; y: number; alt: number }[] = [];
+  for (const uid of [o.primaryUid, o.secondaryUid]) {
+    const tr = uid === null ? undefined : d.tracks.find((x) => x.uid === uid);
+    const s = tr ? sampleAt(d, tr, t) : null;
+    if (s) pairPts.push(s);
+  }
+  if (pairPts.length === 2) {
+    const [a, b] = pairPts as [(typeof pairPts)[number], (typeof pairPts)[number]];
+    const range = Math.hypot(a.x - b.x, a.y - b.y, (a.alt || 0) - (b.alt || 0));
+    drawSightLine(ctx, toScreen(v, a.x, a.y), toScreen(v, b.x, b.y), o.rangeLabel(range), theme);
+  }
+
   for (const tr of visible) {
     const s = sampleAt(d, tr, t);
     if (!s) continue;
     const [sx, sy] = toScreen(v, s.x, s.y);
     const color = sideColor(tr.side);
-    const selected = tr.uid === o.selectedUid;
+    const role = tr.uid === o.primaryUid ? "primary" : tr.uid === o.secondaryUid ? "secondary" : null;
+    const selected = role !== null;
     const moving = tr.kind === "air" || tr.kind === "heli" || tr.kind === "weapon";
     if (moving && (o.trailS > 0 || selected))
       drawTrail(ctx, d, v, tr, t, selected ? t - tr.t0 : o.trailS, s, color);
     if (sx < -50 || sy < -50 || sx > v.w + 50 || sy > v.h + 50) continue;
     drawIcon(ctx, tr, sx, sy, s.hdg, color);
-    if (selected) {
-      ctx.strokeStyle = theme.text;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 12, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    if (role) drawSelectionRing(ctx, sx, sy, role, theme);
     if (tr.kind !== "bullseye") hits.push({ uid: tr.uid, sx, sy });
     if ((o.labels && (tr.kind === "air" || tr.kind === "heli")) || selected) {
       labels.push({
-        text: o.labelFor(pilotAt(tr, t), tr.name, s.alt, s.speed),
+        text: o.labelFor(pilotAt(tr, t), tr.name, s.alt, Math.hypot(s.speed, s.vz)),
         x: sx + 10,
         y: sy - 8,
         first: selected,
@@ -160,6 +171,48 @@ export function drawMap(
   return hits;
 }
 
+export const SECONDARY_COLOR = "#f59e0b";
+
+/** Solid ring for the primary selection, dashed amber ring for the secondary. */
+export function drawSelectionRing(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  role: "primary" | "secondary",
+  theme: Theme,
+) {
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = role === "primary" ? theme.text : SECONDARY_COLOR;
+  if (role === "secondary") ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.arc(sx, sy, 13, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Dashed line of sight between the two selected objects, with the range at its middle. */
+export function drawSightLine(
+  ctx: CanvasRenderingContext2D,
+  a: [number, number],
+  b: [number, number],
+  text: string,
+  theme: Theme,
+) {
+  ctx.save();
+  ctx.strokeStyle = SECONDARY_COLOR;
+  ctx.globalAlpha = 0.85;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(a[0], a[1]);
+  ctx.lineTo(b[0], b[1]);
+  ctx.stroke();
+  ctx.restore();
+  if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 40)
+    label(ctx, text, (a[0] + b[0]) / 2 + 6, (a[1] + b[1]) / 2 - 6, theme);
+}
+
 /** Draw labels, skipping any that would overlap one already placed (the selected one goes first). */
 export function drawLabels(
   ctx: CanvasRenderingContext2D,
@@ -169,13 +222,22 @@ export function drawLabels(
   ctx.font = "12px system-ui, sans-serif";
   const placed: [number, number, number, number][] = [];
   labels.sort((a, b) => Number(b.first) - Number(a.first));
+  const overlaps = (b: [number, number, number, number]) =>
+    placed.some((p) => b[0] < p[2] && b[2] > p[0] && b[1] < p[3] && b[3] > p[1]);
   for (const l of labels) {
     const w = ctx.measureText(l.text).width;
-    const box: [number, number, number, number] = [l.x - 2, l.y - 12, l.x + w + 2, l.y + 4];
-    if (!l.first && placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1]))
-      continue;
+    let y = l.y;
+    let box: [number, number, number, number] = [l.x - 2, y - 12, l.x + w + 2, y + 4];
+    if (overlaps(box)) {
+      // Selected objects always get a label: move it down a line or two instead of hiding it.
+      if (!l.first) continue;
+      for (let step = 1; step <= 3 && overlaps(box); step++) {
+        y = l.y + step * 16;
+        box = [l.x - 2, y - 12, l.x + w + 2, y + 4];
+      }
+    }
     placed.push(box);
-    label(ctx, l.text, l.x, l.y, theme);
+    label(ctx, l.text, l.x, y, theme);
   }
 }
 

@@ -195,4 +195,12 @@ and parser warnings with line numbers.
    write-back). Built-in profiles (NATO / Western, Russian / Eastern, Mixed) change units only; user profiles save
    everything; JSON export/import (refuses files from a newer version).
    **To change the format:** bump SETTINGS_VERSION, add a MIGRATIONS step, update Settings/DEFAULT_SETTINGS/sanitize.
-8. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.
+8. **Primary / secondary selection and engagement geometry** (`src/map/engagement.ts`, `src/ui/SelectionPanel.tsx`,
+   `src/ui/useCtrlPick.ts`, `src/ui/follow.ts`). Ctrl+left = primary, Ctrl+right = secondary (Cmd on Mac), clicking the
+   selected object again clears it, an object can't hold both roles; plain click = primary; "Pick secondary…" for
+   touch. Engagement readout: range (slant/horizontal), closure and time to merge, clock position high/low and
+   altitude difference, ATA, aspect angle (with words), angle off tail, target ATA. Camera follow: free / primary /
+   secondary / pair (midpoint, backs off to keep both in view). Rings (solid / dashed amber) and a line of sight with
+   range in 2D and 3D. Fit frames the pair. "Show on map" selects killer (primary) and victim (secondary).
+   Verified in the 2D view with real Ctrl clicks; the 3D Ctrl+right path still needs a hands-on check.
+9. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.

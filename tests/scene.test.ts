@@ -86,7 +86,7 @@ describe("3D frame building (2v1 sample)", async () => {
   const uidOf = (id: string) => (rec.objects.find((o) => o.id === id) as AcmiObject).uid;
 
   it("places the live objects at time t, with altitude and the player's pilot name", () => {
-    const f = buildFrame(d, 64, { trailS: 60, ground: true, selected: null }, white);
+    const f = buildFrame(d, 64, { trailS: 60, ground: true, selected: [] }, white);
     const f16 = f.objects.find((o) => o.uid === uidOf("1401"));
     expect(f16?.kind).toBe("air");
     expect(f16?.alt).toBeGreaterThan(5000);
@@ -96,14 +96,14 @@ describe("3D frame building (2v1 sample)", async () => {
     expect(f.objects.some((o) => o.uid === uidOf("1e01") && o.kind === "weapon")).toBe(true);
     // The MiG is gone after its kill.
     expect(
-      buildFrame(d, 70, { trailS: 0, ground: true, selected: null }, white).objects.some(
+      buildFrame(d, 70, { trailS: 0, ground: true, selected: [] }, white).objects.some(
         (o) => o.uid === uidOf("101"),
       ),
     ).toBe(false);
   });
 
   it("builds trail and drop-line segments as GPU-ready arrays", () => {
-    const f = buildFrame(d, 64, { trailS: 15, ground: true, selected: null }, white);
+    const f = buildFrame(d, 64, { trailS: 15, ground: true, selected: [] }, white);
     expect(f.trail.count % 2).toBe(0);
     expect(f.trail.positions.length).toBe(f.trail.count * 3);
     expect(f.trail.colors.length).toBe(f.trail.positions.length);
@@ -112,8 +112,8 @@ describe("3D frame building (2v1 sample)", async () => {
     expect(f.drops.count).toBe(aircraft * 2);
     expect(f.drops.positions[4]).toBe(0);
     // Longer trails mean more segments.
-    expect(
-      buildFrame(d, 64, { trailS: 60, ground: true, selected: null }, white).trail.count,
-    ).toBeGreaterThan(f.trail.count);
+    expect(buildFrame(d, 64, { trailS: 60, ground: true, selected: [] }, white).trail.count).toBeGreaterThan(
+      f.trail.count,
+    );
   });
 });

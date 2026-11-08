@@ -47,7 +47,8 @@ export interface FrameObject {
 export interface FrameOptions {
   trailS: number;
   ground: boolean;
-  selected: number | null;
+  /** Selected objects (primary, secondary): drawn with their whole trail. */
+  selected: readonly number[];
 }
 
 export interface Frame {
@@ -86,7 +87,7 @@ export function buildFrame(d: MapData, t: number, o: FrameOptions, color: ColorF
       label: `${pilot ? `${pilot} ` : ""}${tr.name}`,
       pilot,
       name: tr.name,
-      speed: s.speed,
+      speed: Math.hypot(s.speed, s.vz),
     });
     const rgb = color(tr.side);
     const flying = tr.kind === "air" || tr.kind === "heli" || tr.kind === "weapon";
@@ -95,7 +96,7 @@ export function buildFrame(d: MapData, t: number, o: FrameOptions, color: ColorF
         dropP.push(pos.x, pos.y, pos.z, pos.x, 0, pos.z);
         dropC.push(...rgb, ...rgb);
       }
-      const seconds = tr.uid === o.selected ? t - tr.t0 : o.trailS;
+      const seconds = o.selected.includes(tr.uid) ? t - tr.t0 : o.trailS;
       if (seconds > 0) appendTrail(d, tr, t, seconds, pos, rgb, trailP, trailC, v, prev);
     }
   }

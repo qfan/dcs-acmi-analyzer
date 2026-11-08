@@ -1,11 +1,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { firstActivity, type MapData, pilotAt, sampleAt } from "../map/mapData.ts";
-import { sideColor } from "../map/render.ts";
+import { firstActivity, type MapData } from "../map/mapData.ts";
 import { settingsStore, useSettings } from "../settings/react.ts";
 import { type MapMode, PLAYBACK_SPEEDS, TRAIL_CHOICES } from "../settings/schema.ts";
-import { fmtAlt, fmtSpeed, fmtVz } from "../settings/units.ts";
 import { Map2D } from "./Map2D.tsx";
-import { hasWebGL2, type MapFocus, type ViewProps } from "./viewTypes.ts";
+import { SelectionPanel } from "./SelectionPanel.tsx";
+import { type FollowMode, hasWebGL2, type MapFocus, type PickRole, type ViewProps } from "./viewTypes.ts";
 
 export type { MapFocus } from "./viewTypes.ts";
 
@@ -38,14 +37,47 @@ export function MapView({
   const trailS = settings.map.trailS;
   const labels = settings.labels.show;
   const ground = settings.map.groundUnits;
-  const units = settings.units;
 
   const [t, setT] = useState(() => firstActivity(data));
   const [playing, setPlaying] = useState(false);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [follow, setFollow] = useState(false);
+  const [primary, setPrimary] = useState<number | null>(null);
+  const [secondary, setSecondary] = useState<number | null>(null);
+  const [follow, setFollow] = useState<FollowMode>("off");
+  const [armSecondary, setArmSecondary] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const trackByUid = useMemo(() => new Map(data.tracks.map((tr) => [tr.uid, tr])), [data]);
+
+  /**
+   * Selection rules: Ctrl+left = primary, Ctrl+right = secondary; a plain click = primary (or the
+   * secondary when "Pick secondary" is armed). Clicking the object already in that role clears it.
+   * An object can't hold both roles. A click on empty map changes nothing.
+   */
+  const onPick = (uid: number | null, role: PickRole, explicit: boolean) => {
+    if (uid === null) return;
+    const r: PickRole = !explicit && armSecondary ? "secondary" : role;
+    setArmSecondary(false);
+    if (r === "primary") {
+      if (uid === primary) setPrimary(null);
+      else {
+        setPrimary(uid);
+        if (uid === secondary) setSecondary(null);
+      }
+    } else if (uid === secondary) setSecondary(null);
+    else {
+      setSecondary(uid);
+      if (uid === primary) setPrimary(null);
+    }
+  };
+
+  // Stop following a role that has been cleared.
+  useEffect(() => {
+    if (
+      (follow === "primary" && primary === null) ||
+      (follow === "secondary" && secondary === null) ||
+      (follow === "pair" && (primary === null || secondary === null))
+    )
+      setFollow("off");
+  }, [follow, primary, secondary]);
 
   // Playback. The current time is mirrored in a ref so the animation loop reads it synchronously.
   const tRef = useRef(t);
@@ -77,7 +109,8 @@ export function MapView({
     if (!focus) return;
     setPlaying(false);
     setT(Math.max(data.timeStart, focus.time - 8));
-    setSelected(focus.uid);
+    setPrimary(focus.primary);
+    setSecondary(focus.secondary);
     panelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focus, data.timeStart]);
 
@@ -104,24 +137,26 @@ export function MapView({
         onClick={() => {
           setPlaying(false);
           setT(Math.max(data.timeStart, k.time - 8));
-          setSelected(k.victimUid);
+          setPrimary(k.victimUid);
+          setSecondary(null);
         }}
       />
     ));
   }, [data, fmt]);
 
-  const sel = selected !== null ? trackByUid.get(selected) : undefined;
-  const selSample = sel ? sampleAt(data, sel, t) : null;
+  const primaryTrack = primary !== null ? trackByUid.get(primary) : undefined;
+  const secondaryTrack = secondary !== null ? trackByUid.get(secondary) : undefined;
   const viewProps: ViewProps = {
     data,
     t,
     trailS,
     labels,
     ground,
-    selected,
+    primary,
+    secondary,
     follow,
-    onSelect: setSelected,
-    onUserMove: () => setFollow(false),
+    onPick,
+    onUserMove: () => setFollow("off"),
     focus,
     settings,
   };
@@ -189,36 +224,28 @@ export function MapView({
         ) : (
           <Map2D {...viewProps} />
         )}
-        {sel && selSample && (
-          <div className="map-info">
-            <div className="map-info-title">
-              <span className="dot" style={{ background: sideColor(sel.side) }} />
-              {pilotAt(sel, t) ? `${pilotAt(sel, t)} · ` : ""}
-              {sel.name}
-            </div>
-            <div>
-              {fmtAlt(Number.isFinite(selSample.alt) ? selSample.alt : null, units.altitude)}
-              {Math.abs(selSample.vz) >= 2
-                ? ` · ${selSample.vz > 0 ? "climbing" : "descending"} ${fmtVz(selSample.vz, units.altitude)}`
-                : ""}
-            </div>
-            <div>
-              {fmtSpeed(selSample.speed, units.speed)} ground speed · heading {Math.round(selSample.hdg)}°
-            </div>
-            <label className="toggle">
-              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow
-            </label>
-            <button
-              type="button"
-              className="link close"
-              aria-label="Deselect"
-              onClick={() => setSelected(null)}
-            >
-              ×
-            </button>
-          </div>
+        {(primaryTrack || secondaryTrack) && (
+          <SelectionPanel
+            data={data}
+            t={t}
+            primary={primaryTrack}
+            secondary={secondaryTrack}
+            follow={follow}
+            setFollow={setFollow}
+            onClear={(role) => (role === "primary" ? setPrimary(null) : setSecondary(null))}
+            onSwap={() => {
+              setPrimary(secondary);
+              setSecondary(primary);
+            }}
+            armSecondary={armSecondary}
+            setArmSecondary={setArmSecondary}
+            settings={settings}
+          />
         )}
       </div>
+      <p className="muted small map-hint">
+        Click or Ctrl+click: primary · Ctrl+right-click: secondary · click a selected object again to clear it
+      </p>
       <div className="timeline">
         <button type="button" onClick={() => setPlaying((p) => !p)} aria-label={playing ? "Pause" : "Play"}>
           {playing ? "❚❚" : "▶"}

@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type FitTarget, fitAt } from "../map/fit.ts";
-import { sampleAt } from "../map/mapData.ts";
 import {
   type DrawOptions,
   drawMap,
@@ -10,7 +9,9 @@ import {
   toWorld,
   type View,
 } from "../map/render.ts";
-import { distanceUnitM, distanceUnitName, labelText } from "../settings/units.ts";
+import { distanceUnitM, distanceUnitName, fmtDist, labelText } from "../settings/units.ts";
+import { followTarget } from "./follow.ts";
+import { useCtrlPick } from "./useCtrlPick.ts";
 import type { ViewProps } from "./viewTypes.ts";
 
 /** Top-down 2D canvas map: light enough for any device. */
@@ -20,9 +21,10 @@ export function Map2D({
   trailS,
   labels,
   ground,
-  selected,
+  primary,
+  secondary,
   follow,
-  onSelect,
+  onPick,
   onUserMove,
   focus,
   settings,
@@ -32,7 +34,7 @@ export function Map2D({
   const hitsRef = useRef<ScreenHit[]>([]);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [view, setView] = useState<View | null>(null);
-  const trackByUid = useMemo(() => new Map(data.tracks.map((tr) => [tr.uid, tr])), [data]);
+  useCtrlPick(wrapRef, hitsRef, onPick);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -43,9 +45,9 @@ export function Map2D({
     return () => ro.disconnect();
   }, []);
 
-  // The current time and selection, readable from effects without re-running them.
-  const nowRef = useRef({ t, selected, ground });
-  nowRef.current = { t, selected, ground };
+  // The current time and options, readable from effects without re-running them.
+  const nowRef = useRef({ t, ground });
+  nowRef.current = { t, ground };
 
   // First view: what's alive at the starting time. Then keep the view's size in sync.
   useEffect(() => {
@@ -53,28 +55,34 @@ export function Map2D({
     setView((v) => {
       if (v) return { ...v, w: size.w, h: size.h };
       const now = nowRef.current;
-      return viewForFit(fitAt(data, now.t, null, now.ground), size.w, size.h, null);
+      return viewForFit(fitAt(data, now.t, NO_SELECTION, now.ground), size.w, size.h, null);
     });
   }, [size, data]);
 
-  // Follow the selected object.
+  // Camera follow: primary, secondary, or the pair (centred, zooming out only when they'd leave the view).
   useEffect(() => {
-    if (!follow || selected === null) return;
-    const tr = trackByUid.get(selected);
-    const s = tr ? sampleAt(data, tr, t) : null;
-    if (s) setView((v) => (v ? { ...v, cx: s.x, cy: s.y } : v));
-  }, [follow, selected, t, data, trackByUid]);
+    const f = followTarget(data, t, follow, { primary, secondary });
+    if (!f) return;
+    setView((v) => {
+      if (!v) return v;
+      const fitScale = (Math.min(v.w, v.h) * 0.9) / (2 * f.radius);
+      return { ...v, cx: f.x, cy: f.y, scale: f.basis === "pair" ? Math.min(v.scale, fitScale) : v.scale };
+    });
+  }, [follow, primary, secondary, t, data]);
 
-  // Frame an object requested from the tables (about 40 km across unless already closer).
+  // Frame what the tables asked for (about 40 km across unless already closer), or the pair.
   useEffect(() => {
     if (!focus) return;
-    const tr = trackByUid.get(focus.uid);
-    const s = tr ? sampleAt(data, tr, Math.min(focus.time, tr.t1)) : null;
-    if (s)
-      setView((v) =>
-        v ? { ...v, cx: s.x, cy: s.y, scale: Math.max(v.scale, Math.min(v.w, v.h) / 40000) } : v,
-      );
-  }, [focus, data, trackByUid]);
+    const f = fitAt(data, focus.time, { primary: focus.primary, secondary: focus.secondary });
+    const one = fitAt(data, focus.time, { primary: focus.uid, secondary: null });
+    const target = f.basis === "pair" ? f : one;
+    if (target.basis === "alive" || target.basis === "recording") return;
+    setView((v) => {
+      if (!v) return v;
+      const fitScale = (Math.min(v.w, v.h) * 0.9) / (2 * Math.max(target.radius, 20000));
+      return { ...v, cx: target.x, cy: target.y, scale: Math.max(v.scale, fitScale) };
+    });
+  }, [focus, data]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -91,13 +99,15 @@ export function Map2D({
       trailS,
       labels,
       ground,
-      selectedUid: selected,
+      primaryUid: primary,
+      secondaryUid: secondary,
+      rangeLabel: (m) => fmtDist(m, settings.units.distance),
       labelFor: (pilot, name, alt, speed) => labelText(pilot, name, alt, speed, settings),
       unitM: distanceUnitM(settings.units.distance),
       unitName: distanceUnitName(settings.units.distance),
     };
     hitsRef.current = drawMap(ctx, data, view, t, opts, readTheme());
-  }, [data, view, t, trailS, labels, ground, selected, settings]);
+  }, [data, view, t, trailS, labels, ground, primary, secondary, settings]);
 
   const zoomAt = useCallback((sx: number, sy: number, factor: number) => {
     setView((v) => {
@@ -122,9 +132,10 @@ export function Map2D({
     return () => canvas.removeEventListener("wheel", onWheel);
   }, [zoomAt]);
 
-  // Drag to pan; a click without movement selects.
+  // Drag to pan; a plain click without movement picks (Ctrl clicks are handled by useCtrlPick).
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, moved: false };
   };
@@ -145,8 +156,15 @@ export function Map2D({
     drag.current = null;
     if (!d || d.moved) return;
     const r = e.currentTarget.getBoundingClientRect();
-    onSelect(pick(hitsRef.current, e.clientX - r.left, e.clientY - r.top));
+    onPick(pick(hitsRef.current, e.clientX - r.left, e.clientY - r.top), "primary", false);
   };
+
+  const fitTitle =
+    primary !== null && secondary !== null
+      ? "Fit the selected pair"
+      : primary !== null || secondary !== null
+        ? "Centre on the selected object"
+        : "Fit everything in the air now";
 
   return (
     <div className="map-view" ref={wrapRef}>
@@ -155,7 +173,7 @@ export function Map2D({
         className="map-canvas"
         style={{ width: size.w, height: size.h }}
         tabIndex={0}
-        aria-label="Top-down map. Drag to pan, scroll to zoom, click an aircraft to select it. Space plays or pauses."
+        aria-label="Top-down map. Drag to pan, scroll to zoom. Click or Ctrl+click an aircraft for the primary selection, Ctrl+right-click for the secondary. Space plays or pauses."
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -180,11 +198,11 @@ export function Map2D({
         <button
           type="button"
           className="secondary"
-          title={selected !== null ? "Centre on the selected object" : "Fit everything in the air now"}
+          title={fitTitle}
           onClick={() => {
             onUserMove();
             if (!size.w) return;
-            setView((v) => viewForFit(fitAt(data, t, selected, ground), size.w, size.h, v));
+            setView((v) => viewForFit(fitAt(data, t, { primary, secondary }, ground), size.w, size.h, v));
           }}
         >
           Fit
@@ -194,9 +212,11 @@ export function Map2D({
   );
 }
 
+const NO_SELECTION = { primary: null, secondary: null };
+
 /**
- * A 2D view showing a fit target. For a selected object the zoom only ever increases, so pressing
- * Fit while already zoomed in close re-centres without pulling the view back out.
+ * A 2D view showing a fit target. For a single selected object the zoom only ever increases, so
+ * pressing Fit while already zoomed in close re-centres without pulling the view back out.
  */
 function viewForFit(f: FitTarget, w: number, h: number, current: View | null): View {
   const scale = (Math.min(w, h) * 0.9) / (2 * f.radius);
