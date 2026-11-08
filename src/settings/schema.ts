@@ -20,14 +20,21 @@ export type Clock = "elapsed" | "timeOfDay";
 export interface Settings {
   units: { altitude: AltitudeUnit; speed: SpeedUnit; distance: DistanceUnit };
   labels: { show: boolean; pilot: boolean; aircraft: boolean; altitude: boolean; speed: boolean };
-  map: { mode: MapMode; trailS: number; groundUnits: boolean; playbackSpeed: number };
+  map: {
+    mode: MapMode;
+    trailS: number;
+    groundUnits: boolean;
+    playbackSpeed: number;
+    /** Selection panel expanded (object details and engagement) or collapsed to the camera controls. */
+    infoPanel: boolean;
+  };
   time: { clock: Clock };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   units: { altitude: "ft", speed: "kt", distance: "nm" },
   labels: { show: true, pilot: true, aircraft: true, altitude: true, speed: false },
-  map: { mode: "2d", trailS: 60, groundUnits: true, playbackSpeed: 8 },
+  map: { mode: "2d", trailS: 60, groundUnits: true, playbackSpeed: 8, infoPanel: true },
   time: { clock: "elapsed" },
 };
 
@@ -73,6 +80,8 @@ export function sanitize(raw: unknown): Settings {
         PLAYBACK_SPEEDS,
         d.map.playbackSpeed as (typeof PLAYBACK_SPEEDS)[number],
       ),
+      // Added within version 1: older stored settings simply get the default.
+      infoPanel: bool(m.infoPanel, d.map.infoPanel),
     },
     time: { clock: pick(t.clock, ["elapsed", "timeOfDay"] as const, d.time.clock) },
   };

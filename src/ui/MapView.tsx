@@ -239,6 +239,8 @@ export function MapView({
             }}
             armSecondary={armSecondary}
             setArmSecondary={setArmSecondary}
+            expanded={settings.map.infoPanel}
+            setExpanded={(v) => update({ map: { infoPanel: v } })}
             settings={settings}
           />
         )}

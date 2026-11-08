@@ -16,13 +16,57 @@ interface Props {
   onSwap: () => void;
   armSecondary: boolean;
   setArmSecondary: (v: boolean) => void;
+  /** Show the object details and engagement; when collapsed only names and the camera controls show. */
+  expanded: boolean;
+  setExpanded: (v: boolean) => void;
   settings: Settings;
 }
 
 /** Selected objects, the engagement between them, and camera follow. Overlaid on the map. */
 export function SelectionPanel(p: Props) {
   const u = p.settings.units;
-  const e = p.primary && p.secondary ? engagementAt(p.data, p.primary, p.secondary, p.t) : null;
+  const e = p.expanded && p.primary && p.secondary ? engagementAt(p.data, p.primary, p.secondary, p.t) : null;
+  const actions = (
+    <div className="sel-actions">
+      <label className="follow">
+        Camera
+        <select value={p.follow} onChange={(ev) => p.setFollow(ev.target.value as FollowMode)}>
+          <option value="off">Free</option>
+          <option value="primary" disabled={!p.primary}>
+            Follow primary
+          </option>
+          <option value="secondary" disabled={!p.secondary}>
+            Follow secondary
+          </option>
+          <option value="pair" disabled={!p.primary || !p.secondary}>
+            Follow the pair
+          </option>
+        </select>
+      </label>
+      {p.primary && p.secondary && (
+        <button type="button" className="link small" title="Swap primary and secondary" onClick={p.onSwap}>
+          ⇄ swap
+        </button>
+      )}
+      <button
+        type="button"
+        className="link small sel-toggle"
+        aria-expanded={p.expanded}
+        title={p.expanded ? "Hide the details" : "Show the details"}
+        onClick={() => p.setExpanded(!p.expanded)}
+      >
+        {p.expanded ? "▴ hide" : "▾ details"}
+      </button>
+    </div>
+  );
+  if (!p.expanded)
+    return (
+      <div className="map-info sel-panel collapsed">
+        {p.primary && <ObjectName track={p.primary} which="primary" t={p.t} />}
+        {p.secondary && <ObjectName track={p.secondary} which="secondary" t={p.t} />}
+        {actions}
+      </div>
+    );
   return (
     <div className="map-info sel-panel">
       {p.primary && <ObjectCard {...p} track={p.primary} which="primary" />}
@@ -42,29 +86,33 @@ export function SelectionPanel(p: Props) {
       {p.primary && p.secondary && !e && (
         <p className="muted small">The pair don't both exist at this time.</p>
       )}
-      <div className="sel-actions">
-        <label className="follow">
-          Camera
-          <select value={p.follow} onChange={(ev) => p.setFollow(ev.target.value as FollowMode)}>
-            <option value="off">Free</option>
-            <option value="primary" disabled={!p.primary}>
-              Follow primary
-            </option>
-            <option value="secondary" disabled={!p.secondary}>
-              Follow secondary
-            </option>
-            <option value="pair" disabled={!p.primary || !p.secondary}>
-              Follow the pair
-            </option>
-          </select>
-        </label>
-        {p.primary && p.secondary && (
-          <button type="button" className="link small" title="Swap primary and secondary" onClick={p.onSwap}>
-            ⇄ swap
-          </button>
-        )}
-      </div>
+      {actions}
     </div>
+  );
+}
+
+/** One line per selected object for the collapsed panel: role mark, side colour, pilot and type. */
+function ObjectName({ track, which, t }: { track: MapTrack; which: PickRole; t: number }) {
+  const pilot = pilotAt(track, t);
+  return (
+    <div className="map-info-title sel-name">
+      <RoleMark which={which} />
+      <span className="dot" style={{ background: sideColor(track.side) }} />
+      <span className="sel-name-text">
+        {pilot ? `${pilot} · ` : ""}
+        {track.name}
+      </span>
+    </div>
+  );
+}
+
+function RoleMark({ which }: { which: PickRole }) {
+  return (
+    <span
+      className={`role-mark ${which}`}
+      style={which === "secondary" ? { borderColor: SECONDARY_COLOR } : undefined}
+      title={which === "primary" ? "Primary" : "Secondary"}
+    />
   );
 }
 
@@ -76,11 +124,7 @@ function ObjectCard(props: Props & { track: MapTrack; which: PickRole }) {
   return (
     <div className={`sel-card ${role}`}>
       <div className="map-info-title">
-        <span
-          className={`role-mark ${role}`}
-          style={role === "secondary" ? { borderColor: SECONDARY_COLOR } : undefined}
-          title={role === "primary" ? "Primary" : "Secondary"}
-        />
+        <RoleMark which={role} />
         <span className="dot" style={{ background: sideColor(track.side) }} />
         {pilot ? `${pilot} · ` : ""}
         {track.name}

@@ -60,6 +60,12 @@ describe("settings schema", () => {
     expect(sanitize(migrate({ mapMode: "3d" }, 0)).map.mode).toBe("3d");
     expect(sanitize(migrate({ mapMode: null }, 0)).map.mode).toBe("2d");
   });
+
+  it("gives settings saved before a field existed its default (selection panel expanded)", () => {
+    const old = { map: { mode: "3d", trailS: 15, groundUnits: false, playbackSpeed: 2 } };
+    expect(sanitize(old).map).toEqual({ ...old.map, infoPanel: true });
+    expect(sanitize({ map: { infoPanel: false } }).map.infoPanel).toBe(false);
+  });
 });
 
 describe("versioned storage", () => {
