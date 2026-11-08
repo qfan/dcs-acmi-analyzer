@@ -1,0 +1,162 @@
+import { Euler, Quaternion, Vector3 } from "three";
+import { type MapData, type MapKind, type MapTrack, pilotAt, sampleAt } from "../map/mapData.ts";
+
+/**
+ * Pure per-frame scene building for the 3D view (no WebGL here, so it is unit-tested).
+ *
+ * World axes (three.js is Y-up): X = east, Y = altitude MSL, Z = south (−north). All in metres,
+ * on the flat plane of the map projection — like DCS itself, which uses a flat world per map.
+ */
+
+const DEG = Math.PI / 180;
+
+export function toWorld(x: number, y: number, alt: number, out = new Vector3()): Vector3 {
+  return out.set(x, Number.isFinite(alt) ? alt : 0, -y);
+}
+
+const euler = new Euler();
+/**
+ * Rotation for a symbol modelled nose along −Z (north), right wing along +X, up along +Y.
+ * Heading: clockwise from north. Pitch: nose up positive. Roll: right wing down positive.
+ */
+export function attitude(
+  hdgDeg: number,
+  pitchDeg: number,
+  rollDeg: number,
+  out = new Quaternion(),
+): Quaternion {
+  euler.set(pitchDeg * DEG, -hdgDeg * DEG, -rollDeg * DEG, "YXZ");
+  return out.setFromEuler(euler);
+}
+
+export interface FrameObject {
+  uid: number;
+  kind: MapKind;
+  side: string;
+  pos: Vector3;
+  rot: Quaternion;
+  /** Distance above the ground plane (for drop lines). */
+  alt: number;
+  label: string;
+}
+
+export interface FrameOptions {
+  trailS: number;
+  ground: boolean;
+  selected: number | null;
+}
+
+export interface Frame {
+  objects: FrameObject[];
+  /** Line segments (pairs of xyz) and their RGB colours, for trails. */
+  trail: { positions: Float32Array; colors: Float32Array; count: number };
+  /** Vertical lines from aircraft to the ground plane. */
+  drops: { positions: Float32Array; colors: Float32Array; count: number };
+}
+
+export type ColorFn = (side: string) => [number, number, number];
+
+export function buildFrame(d: MapData, t: number, o: FrameOptions, color: ColorFn): Frame {
+  const objects: FrameObject[] = [];
+  const trailP: number[] = [];
+  const trailC: number[] = [];
+  const dropP: number[] = [];
+  const dropC: number[] = [];
+  const v = new Vector3();
+  const prev = new Vector3();
+  for (const tr of d.tracks) {
+    if (t < tr.t0 || t > tr.t1) continue;
+    if (!o.ground && (tr.kind === "ground" || tr.kind === "sea")) continue;
+    const s = sampleAt(d, tr, t);
+    if (!s) continue;
+    const alt = Number.isFinite(s.alt) ? s.alt : 0;
+    const pos = toWorld(s.x, s.y, alt);
+    const pilot = pilotAt(tr, t);
+    objects.push({
+      uid: tr.uid,
+      kind: tr.kind,
+      side: tr.side,
+      pos,
+      rot: attitude(s.hdg, s.pitch, s.roll),
+      alt,
+      label: `${pilot ? `${pilot} ` : ""}${tr.name}`,
+    });
+    const rgb = color(tr.side);
+    const flying = tr.kind === "air" || tr.kind === "heli" || tr.kind === "weapon";
+    if (flying && (tr.kind !== "weapon" || alt > 0)) {
+      if (tr.kind !== "weapon") {
+        dropP.push(pos.x, pos.y, pos.z, pos.x, 0, pos.z);
+        dropC.push(...rgb, ...rgb);
+      }
+      const seconds = tr.uid === o.selected ? t - tr.t0 : o.trailS;
+      if (seconds > 0) appendTrail(d, tr, t, seconds, pos, rgb, trailP, trailC, v, prev);
+    }
+  }
+  return {
+    objects,
+    trail: {
+      positions: Float32Array.from(trailP),
+      colors: Float32Array.from(trailC),
+      count: trailP.length / 3,
+    },
+    drops: { positions: Float32Array.from(dropP), colors: Float32Array.from(dropC), count: dropP.length / 3 },
+  };
+}
+
+function appendTrail(
+  d: MapData,
+  tr: MapTrack,
+  t: number,
+  seconds: number,
+  head: Vector3,
+  rgb: [number, number, number],
+  outP: number[],
+  outC: number[],
+  v: Vector3,
+  prev: Vector3,
+) {
+  const from = t - seconds;
+  // First sample at or after `from` (binary search).
+  let lo = 0;
+  let hi = tr.count;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((d.times[tr.start + mid] as number) < from) lo = mid + 1;
+    else hi = mid;
+  }
+  let have = false;
+  for (let i = lo; i < tr.count; i++) {
+    const k = tr.start + i;
+    if ((d.times[k] as number) > t) break;
+    toWorld(d.x[k] as number, d.y[k] as number, d.alt[k] as number, v);
+    if (have) {
+      outP.push(prev.x, prev.y, prev.z, v.x, v.y, v.z);
+      outC.push(...rgb, ...rgb);
+    }
+    prev.copy(v);
+    have = true;
+  }
+  if (have) {
+    outP.push(prev.x, prev.y, prev.z, head.x, head.y, head.z);
+    outC.push(...rgb, ...rgb);
+  }
+}
+
+/** Camera placement that frames a horizontal box (metres) from the south-east, looking down ~35°. */
+export function framingCamera(
+  b: { minX: number; minY: number; maxX: number; maxY: number },
+  altitude: number,
+  fovDeg: number,
+): { target: Vector3; position: Vector3 } {
+  const target = toWorld((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, altitude);
+  const span = Math.max(b.maxX - b.minX, b.maxY - b.minY, 2000);
+  const dist = (span / 2 / Math.tan((fovDeg * DEG) / 2)) * 1.1;
+  const elev = 35 * DEG;
+  const azim = 200 * DEG; // from slightly west of south, looking north-east-ish
+  const position = new Vector3(
+    target.x + dist * Math.cos(elev) * Math.sin(azim),
+    target.y + dist * Math.sin(elev),
+    target.z - dist * Math.cos(elev) * Math.cos(azim),
+  );
+  return { target, position };
+}

@@ -174,4 +174,13 @@ and parser warnings with line numbers.
    decluttering, kill markers, bullseyes, km grid and scale bar; pan/zoom/fit; play/pause, ±10 s, 1–64× speed, kill ticks
    on the timeline; click to select (pilot at that time, altitude, speed, heading, follow); "Show on map" from a kill.
    Scrambled tracks are left out. 87 MB recording: 8.2 s to load, redraw within one 60 fps frame.
-6. **Later:** 3D view; optional map tiles; display-name table for DCS type names.
+6. **3D view** (three.js 0.187.0, zero runtime dependencies; `@types/three` dev-only).
+   ✅ Done 2026-11-08 (`src/scene/frame.ts`, `src/ui/Scene3D.tsx`, shared panel in `src/ui/MapView.tsx`).
+   Flat-earth scene like DCS itself (X east, Y altitude, Z south), so it's best for engagements within ~100 km; the 2D
+   view stays for overviews and low-end devices (2D/3D switch, remembered; 3D disabled without WebGL 2). Symbols:
+   delta + fin for jets (with real roll/pitch/yaw), rods for missiles (lighter shade), boxes/hulls/cones for ground,
+   ships and parachutes; one instanced draw call per kind, constant on-screen size; trails and altitude drop lines;
+   kill markers; decluttered labels; logarithmic depth buffer. Orbit/pan/zoom-to-cursor, Fit, Top, Follow, and
+   "Show on map" frames the victim from 6 km. Renders on demand. three.js is a separate 144 KB (gzip) chunk loaded only
+   when 3D is first opened. 87 MB recording renders within one 60 fps frame.
+7. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.

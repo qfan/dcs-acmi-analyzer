@@ -153,7 +153,7 @@ export function drawMap(
 }
 
 /** Draw labels, skipping any that would overlap one already placed (the selected one goes first). */
-function drawLabels(
+export function drawLabels(
   ctx: CanvasRenderingContext2D,
   labels: { text: string; x: number; y: number; first: boolean }[],
   theme: Theme,

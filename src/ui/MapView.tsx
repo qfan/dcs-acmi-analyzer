@@ -1,25 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { firstActivity, type MapData, pilotAt, sampleAt } from "../map/mapData.ts";
-import {
-  type DrawOptions,
-  drawMap,
-  fitView,
-  pick,
-  type ScreenHit,
-  sideColor,
-  type Theme,
-  toWorld,
-  type View,
-} from "../map/render.ts";
+import { sideColor } from "../map/render.ts";
+import { Map2D } from "./Map2D.tsx";
 import { fmtAlt, fmtSpeed } from "./records.ts";
+import { hasWebGL2, type MapFocus, type ViewProps } from "./viewTypes.ts";
 
-export interface MapFocus {
-  time: number;
-  uid: number;
-  /** Increments on every request so the same kill can be shown twice. */
-  seq: number;
-}
+export type { MapFocus } from "./viewTypes.ts";
 
+// three.js is only downloaded when the 3D view is first opened.
+const Scene3D = lazy(() => import("./Scene3D.tsx"));
+
+type Mode = "2d" | "3d";
+const MODE_KEY = "acmi-viewer.mapMode";
 const SPEEDS = [1, 2, 4, 8, 16, 32, 64];
 const TRAILS = [
   { s: 0, label: "No trails" },
@@ -28,6 +20,17 @@ const TRAILS = [
   { s: 300, label: "5 min trails" },
 ];
 
+function loadMode(webgl: boolean): Mode {
+  try {
+    const m = localStorage.getItem(MODE_KEY);
+    if (m === "2d" || (m === "3d" && webgl)) return m;
+  } catch {
+    // storage unavailable: fall through to the default
+  }
+  return "2d";
+}
+
+/** The map panel: shared time, playback, selection and options, with a 2D or 3D view inside. */
 export function MapView({
   data,
   fmt,
@@ -37,11 +40,8 @@ export function MapView({
   fmt: (t: number) => string;
   focus: MapFocus | null;
 }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const hitsRef = useRef<ScreenHit[]>([]);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const [view, setView] = useState<View | null>(null);
+  const webgl = useMemo(hasWebGL2, []);
+  const [mode, setModeState] = useState<Mode>(() => loadMode(webgl));
   const [t, setT] = useState(() => firstActivity(data));
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(8);
@@ -50,23 +50,17 @@ export function MapView({
   const [ground, setGround] = useState(true);
   const [selected, setSelected] = useState<number | null>(null);
   const [follow, setFollow] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
   const trackByUid = useMemo(() => new Map(data.tracks.map((tr) => [tr.uid, tr])), [data]);
 
-  // Canvas size follows its container.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
-    return () => ro.disconnect();
-  }, []);
-
-  // First fit, and keep the view's size in sync.
-  useEffect(() => {
-    if (size.w === 0 || size.h === 0) return;
-    setView((v) => (v ? { ...v, w: size.w, h: size.h } : fitView(data.focus, size.w, size.h)));
-  }, [size, data]);
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {
+      // not remembered; fine
+    }
+  };
 
   // Playback. The current time is mirrored in a ref so the animation loop reads it synchronously.
   const tRef = useRef(t);
@@ -93,96 +87,14 @@ export function MapView({
     return () => cancelAnimationFrame(raf);
   }, [playing, speed, data.timeEnd, data.timeStart]);
 
-  // Follow the selected object.
-  useEffect(() => {
-    if (!follow || selected === null) return;
-    const tr = trackByUid.get(selected);
-    const s = tr ? sampleAt(data, tr, t) : null;
-    if (s) setView((v) => (v ? { ...v, cx: s.x, cy: s.y } : v));
-  }, [follow, selected, t, data, trackByUid]);
-
-  // Jump to a kill requested from the tables.
+  // Jump to a kill requested from the tables; the active view frames it.
   useEffect(() => {
     if (!focus) return;
     setPlaying(false);
     setT(Math.max(data.timeStart, focus.time - 8));
     setSelected(focus.uid);
-    const tr = trackByUid.get(focus.uid);
-    const s = tr ? sampleAt(data, tr, Math.min(focus.time, tr.t1)) : null;
-    if (s)
-      setView((v) => {
-        if (!v) return v;
-        // Show about 40 km across unless already zoomed in closer.
-        const scale = Math.max(v.scale, Math.min(v.w, v.h) / 40000);
-        return { ...v, cx: s.x, cy: s.y, scale };
-      });
-    wrapRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [focus, data, trackByUid]);
-
-  // Draw.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !view || view.w === 0) return;
-    const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== Math.round(view.w * dpr) || canvas.height !== Math.round(view.h * dpr)) {
-      canvas.width = Math.round(view.w * dpr);
-      canvas.height = Math.round(view.h * dpr);
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const opts: DrawOptions = { trailS, labels, ground, selectedUid: selected };
-    hitsRef.current = drawMap(ctx, data, view, t, opts, readTheme());
-  }, [data, view, t, trailS, labels, ground, selected]);
-
-  // Wheel zoom around the cursor (non-passive so the page doesn't scroll).
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const r = canvas.getBoundingClientRect();
-      zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
-    };
-    canvas.addEventListener("wheel", onWheel, { passive: false });
-    return () => canvas.removeEventListener("wheel", onWheel);
-  });
-
-  const zoomAt = useCallback((sx: number, sy: number, factor: number) => {
-    setView((v) => {
-      if (!v) return v;
-      const [wx, wy] = toWorld(v, sx, sy);
-      const scale = Math.min(Math.max(v.scale * factor, 1e-5), 2);
-      // Keep the world point under the cursor fixed.
-      return { ...v, scale, cx: wx - (sx - v.w / 2) / scale, cy: wy + (sy - v.h / 2) / scale };
-    });
-  }, []);
-
-  // Drag to pan; a click without movement selects.
-  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, y: e.clientY, moved: false };
-  };
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const d = drag.current;
-    if (!d) return;
-    const dx = e.clientX - d.x;
-    const dy = e.clientY - d.y;
-    if (!d.moved && Math.hypot(dx, dy) < 4) return;
-    d.moved = true;
-    d.x = e.clientX;
-    d.y = e.clientY;
-    setFollow(false);
-    setView((v) => (v ? { ...v, cx: v.cx - dx / v.scale, cy: v.cy + dy / v.scale } : v));
-  };
-  const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const d = drag.current;
-    drag.current = null;
-    if (!d || d.moved) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    setSelected(pick(hitsRef.current, e.clientX - r.left, e.clientY - r.top));
-  };
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focus, data.timeStart]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -212,13 +124,46 @@ export function MapView({
       />
     ));
   }, [data, fmt]);
+
   const sel = selected !== null ? trackByUid.get(selected) : undefined;
   const selSample = sel ? sampleAt(data, sel, t) : null;
+  const viewProps: ViewProps = {
+    data,
+    t,
+    trailS,
+    labels,
+    ground,
+    selected,
+    follow,
+    onSelect: setSelected,
+    onUserMove: () => setFollow(false),
+    focus,
+  };
 
   return (
-    <section className="card map-card">
+    <section className="card map-card" ref={panelRef}>
       <div className="card-head">
-        <h3>Map</h3>
+        <fieldset className="mode-switch">
+          <legend className="sr-only">Map view</legend>
+          <button
+            type="button"
+            className={mode === "2d" ? "on" : ""}
+            aria-pressed={mode === "2d"}
+            onClick={() => setMode("2d")}
+          >
+            2D
+          </button>
+          <button
+            type="button"
+            className={mode === "3d" ? "on" : ""}
+            aria-pressed={mode === "3d"}
+            disabled={!webgl}
+            title={webgl ? "3D view (GPU)" : "3D needs WebGL 2, which this browser or device doesn't provide"}
+            onClick={() => setMode("3d")}
+          >
+            3D
+          </button>
+        </fieldset>
         <div className="head-actions map-options">
           <select
             value={trailS}
@@ -241,46 +186,14 @@ export function MapView({
         </div>
       </div>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard shortcuts for the map; all actions also have buttons */}
-      <div className="map-wrap" ref={wrapRef} onKeyDown={onKeyDown}>
-        <canvas
-          ref={canvasRef}
-          className="map-canvas"
-          style={{ width: size.w, height: size.h }}
-          tabIndex={0}
-          aria-label="Map of the recording. Drag to pan, scroll to zoom, click an aircraft to select it. Space plays or pauses."
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-        />
-        <div className="map-zoom">
-          <button
-            type="button"
-            className="secondary"
-            aria-label="Zoom in"
-            onClick={() => view && zoomAt(view.w / 2, view.h / 2, 1.6)}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            aria-label="Zoom out"
-            onClick={() => view && zoomAt(view.w / 2, view.h / 2, 1 / 1.6)}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            title="Fit the action"
-            onClick={() => {
-              setFollow(false);
-              if (size.w) setView(fitView(data.focus, size.w, size.h));
-            }}
-          >
-            Fit
-          </button>
-        </div>
+      <div className="map-wrap" onKeyDown={onKeyDown}>
+        {mode === "3d" ? (
+          <Suspense fallback={<p className="map-loading muted">Loading 3D view…</p>}>
+            <Scene3D {...viewProps} />
+          </Suspense>
+        ) : (
+          <Map2D {...viewProps} />
+        )}
         {sel && selSample && (
           <div className="map-info">
             <div className="map-info-title">
@@ -288,7 +201,12 @@ export function MapView({
               {pilotAt(sel, t) ? `${pilotAt(sel, t)} · ` : ""}
               {sel.name}
             </div>
-            <div>{fmtAlt(Number.isFinite(selSample.alt) ? selSample.alt : null)}</div>
+            <div>
+              {fmtAlt(Number.isFinite(selSample.alt) ? selSample.alt : null)}
+              {Math.abs(selSample.vz) >= 2
+                ? ` · ${selSample.vz > 0 ? "climbing" : "descending"} ${Math.round(Math.abs(selSample.vz))} m/s`
+                : ""}
+            </div>
             <div>
               {fmtSpeed(selSample.speed)} ground speed · heading {Math.round(selSample.hdg)}°
             </div>
@@ -351,16 +269,4 @@ export function MapView({
       </div>
     </section>
   );
-}
-
-function readTheme(): Theme {
-  const cs = getComputedStyle(document.documentElement);
-  const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-  return {
-    bg: v("--map-bg", "#0f172a"),
-    grid: v("--map-grid", "rgba(148,163,184,0.18)"),
-    gridText: v("--muted", "#94a3b8"),
-    text: v("--text", "#e5e7eb"),
-    halo: v("--map-bg", "#0f172a"),
-  };
 }

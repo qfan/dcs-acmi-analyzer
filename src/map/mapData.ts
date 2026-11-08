@@ -1,5 +1,5 @@
 import type { AcmiObject, Recording } from "../acmi/model.ts";
-import { T_YAW } from "../acmi/tracks.ts";
+import { T_PITCH, T_ROLL, T_YAW } from "../acmi/tracks.ts";
 import type { Analysis } from "../analysis/analyze.ts";
 
 /**
@@ -34,6 +34,8 @@ export interface MapKill {
   time: number;
   x: number;
   y: number;
+  /** Altitude MSL where the victim was lost (0 if unknown). */
+  alt: number;
   victimUid: number;
   cause: string;
 }
@@ -51,6 +53,9 @@ export interface MapData {
   alt: Float32Array;
   /** Heading in degrees clockwise from north (NaN if unknown). */
   hdg: Float32Array;
+  /** Roll (positive = right wing down) and pitch (positive = nose up), degrees; NaN if unknown. */
+  roll: Float32Array;
+  pitch: Float32Array;
   kills: MapKill[];
   /** Initial view: the area where aircraft and weapons were (falls back to everything). */
   focus: { minX: number; minY: number; maxX: number; maxY: number };
@@ -141,6 +146,8 @@ export function buildMapData(rec: Recording, analysis: Analysis | null): MapData
   const y = new Float32Array(total);
   const alt = new Float32Array(total);
   const hdg = new Float32Array(total);
+  const roll = new Float32Array(total);
+  const pitch = new Float32Array(total);
   const tracks: MapTrack[] = [];
   let at = 0;
   picked.forEach(({ o, kind }, k) => {
@@ -154,6 +161,8 @@ export function buildMapData(rec: Recording, analysis: Analysis | null): MapData
       y[at] = projY(tf.lat[i] as number);
       alt[at] = tf.rest[i * 7] as number;
       hdg[at] = tf.rest[i * 7 + (T_YAW - 2)] as number;
+      roll[at] = tf.rest[i * 7 + (T_ROLL - 2)] as number;
+      pitch[at] = tf.rest[i * 7 + (T_PITCH - 2)] as number;
       at++;
     }
     const p = o.text.Pilot;
@@ -183,13 +192,23 @@ export function buildMapData(rec: Recording, analysis: Analysis | null): MapData
     y,
     alt,
     hdg,
+    roll,
+    pitch,
     kills: [],
     focus: { minX: 0, minY: 0, maxX: 0, maxY: 0 },
   };
   for (const k of analysis?.kills ?? []) {
     const tr = byUid.get(k.victimUid);
     const s = tr ? sampleAt(data, tr, k.time) : null;
-    if (s) data.kills.push({ time: k.time, x: s.x, y: s.y, victimUid: k.victimUid, cause: k.cause });
+    if (s)
+      data.kills.push({
+        time: k.time,
+        x: s.x,
+        y: s.y,
+        alt: Number.isFinite(s.alt) ? s.alt : 0,
+        victimUid: k.victimUid,
+        cause: k.cause,
+      });
   }
   // Initial framing: where weapons flew and kills happened (the fight), else all aircraft.
   const fight = bounds((k) => k === "weapon");
@@ -238,8 +257,13 @@ export interface MapSample {
   alt: number;
   /** Degrees clockwise from north; from the recording, or from the direction of motion. */
   hdg: number;
+  /** Degrees; from the recording, or (pitch only) from the climb angle; roll 0 if unknown. */
+  roll: number;
+  pitch: number;
   /** Ground speed in m/s (2D) from neighbouring samples. */
   speed: number;
+  /** Vertical speed in m/s (positive = climbing). */
+  vz: number;
 }
 
 /** Interpolated state of a track at time t, or null if it does not exist at t. */
@@ -275,9 +299,33 @@ export function sampleAt(d: MapData, tr: MapTrack, t: number): MapSample | null 
   const dx = (d.x[m1] as number) - (d.x[m0] as number);
   const dy = (d.y[m1] as number) - (d.y[m0] as number);
   const speed = dt > 0 ? Math.hypot(dx, dy) / dt : 0;
-  let hdg = d.hdg[a] as number;
-  if (!Number.isFinite(hdg)) hdg = speed > 1 ? (Math.atan2(dx, dy) / DEG + 360) % 360 : 0;
-  return { x: lerp(d.x), y: lerp(d.y), alt: lerp(d.alt), hdg, speed };
+  const a0 = d.alt[m0] as number;
+  const a1 = d.alt[m1] as number;
+  const vz = dt > 0 && Number.isFinite(a0) && Number.isFinite(a1) ? (a1 - a0) / dt : 0;
+  const lerpAngle = (arr: Float32Array) => {
+    const p = arr[a] as number;
+    const q = arr[b] as number;
+    if (!Number.isFinite(p)) return Number.NaN;
+    if (!Number.isFinite(q)) return p;
+    const diff = ((q - p + 540) % 360) - 180; // shortest way round
+    return p + diff * f;
+  };
+  let hdg = lerpAngle(d.hdg);
+  if (!Number.isFinite(hdg)) hdg = speed > 1 ? Math.atan2(dx, dy) / DEG : 0;
+  hdg = (hdg + 360) % 360;
+  let pitch = lerp(d.pitch);
+  if (!Number.isFinite(pitch)) pitch = speed > 1 || vz !== 0 ? Math.atan2(vz, speed) / DEG : 0;
+  const roll = lerpAngle(d.roll);
+  return {
+    x: lerp(d.x),
+    y: lerp(d.y),
+    alt: lerp(d.alt),
+    hdg,
+    roll: Number.isFinite(roll) ? roll : 0,
+    pitch,
+    speed,
+    vz,
+  };
 }
 
 export function pilotAt(tr: MapTrack, t: number): string {
@@ -291,5 +339,13 @@ export function pilotAt(tr: MapTrack, t: number): string {
 
 /** The buffers to list as transferables when posting MapData. */
 export function mapTransferables(d: MapData): ArrayBuffer[] {
-  return [d.times.buffer, d.x.buffer, d.y.buffer, d.alt.buffer, d.hdg.buffer] as ArrayBuffer[];
+  return [
+    d.times.buffer,
+    d.x.buffer,
+    d.y.buffer,
+    d.alt.buffer,
+    d.hdg.buffer,
+    d.roll.buffer,
+    d.pitch.buffer,
+  ] as ArrayBuffer[];
 }
