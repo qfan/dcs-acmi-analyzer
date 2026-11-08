@@ -322,7 +322,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <p className="muted small">
-        Saved in this browser only. CSV exports always use metres and seconds so spreadsheets stay consistent.
+        Saved in this browser only. Use Export/Import to take them to another browser.
       </p>
     </div>
   );

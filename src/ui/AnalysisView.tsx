@@ -6,24 +6,20 @@ import type { Settings } from "../settings/schema.ts";
 import { fmtAlt, fmtDist, fmtShortDist, fmtSpeed } from "../settings/units.ts";
 import {
   type Clock,
-  exportBaseName,
   type Filter,
   formatClock,
   formatElapsed,
   type KillRecord,
   killMatches,
   killRecords,
-  killsCsv,
   NO_FILTER,
   type Party,
   partyLabel,
   pilotMatches,
   pilotSides,
-  pilotsCsv,
   type ShotRecord,
   shotMatches,
   shotRecords,
-  shotsCsv,
   timeOfDay,
 } from "./records.ts";
 
@@ -32,12 +28,11 @@ const SHOT_LIMIT = 300;
 interface Props {
   summary: RecordingSummary;
   analysis: Analysis;
-  fileName: string;
   /** Present when a map is available. */
   onShowOnMap?: (k: Kill) => void;
 }
 
-export function AnalysisView({ summary, analysis, fileName, onShowOnMap }: Props) {
+export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
   const { settings } = useSettings();
   const clock = settings.time.clock;
   const setClock = (c: Clock) => settingsStore.update({ time: { clock: c } });
@@ -47,7 +42,6 @@ export function AnalysisView({ summary, analysis, fileName, onShowOnMap }: Props
   const sides = useMemo(() => pilotSides(summary), [summary]);
   const refTime = summary.referenceTime;
   const fmt = (t: number) => formatClock(clock, refTime, t);
-  const base = exportBaseName(summary, fileName);
 
   const sideOptions = useMemo(() => {
     const s = new Set<string>();
@@ -74,12 +68,7 @@ export function AnalysisView({ summary, analysis, fileName, onShowOnMap }: Props
       />
 
       <section className="card">
-        <div className="card-head">
-          <h3>Kills and losses ({filtered ? `${visibleKills.length} of ${kills.length}` : kills.length})</h3>
-          {visibleKills.length > 0 && (
-            <ExportButton onClick={() => download(`${base} - kills.csv`, killsCsv(visibleKills, refTime))} />
-          )}
-        </div>
+        <h3>Kills and losses ({filtered ? `${visibleKills.length} of ${kills.length}` : kills.length})</h3>
         {analysis.scrambled.objects > 0 && (
           <p className="notice">
             {analysis.scrambled.protectedHeader ? "This is a protected multiplayer recording: the" : "The"}{" "}
@@ -101,14 +90,7 @@ export function AnalysisView({ summary, analysis, fileName, onShowOnMap }: Props
 
       {analysis.pilots.length > 0 && (
         <section className="card">
-          <div className="card-head">
-            <h3>Pilots and units</h3>
-            {visiblePilots.length > 0 && (
-              <ExportButton
-                onClick={() => download(`${base} - pilots.csv`, pilotsCsv(visiblePilots, sides))}
-              />
-            )}
-          </div>
+          <h3>Pilots and units</h3>
           <PilotTable
             pilots={visiblePilots}
             sides={sides}
@@ -118,13 +100,7 @@ export function AnalysisView({ summary, analysis, fileName, onShowOnMap }: Props
         </section>
       )}
 
-      <ShotsTable
-        all={shots}
-        visible={visibleShots}
-        filtered={filtered}
-        fmt={fmt}
-        onExport={(rows) => download(`${base} - shots.csv`, shotsCsv(rows, refTime))}
-      />
+      <ShotsTable all={shots} visible={visibleShots} filtered={filtered} fmt={fmt} />
     </>
   );
 }
@@ -460,13 +436,11 @@ function ShotsTable({
   visible,
   filtered,
   fmt,
-  onExport,
 }: {
   all: ShotRecord[];
   visible: ShotRecord[];
   filtered: boolean;
   fmt: (t: number) => string;
-  onExport: (rows: ShotRecord[]) => void;
 }) {
   const [showGuns, setShowGuns] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -481,15 +455,12 @@ function ShotsTable({
           Shots ({all.length - gunCount} weapons{gunCount ? `, ${gunCount} gun bursts` : ""}
           {filtered ? `; ${shown.length} shown` : ""})
         </h3>
-        <div className="head-actions">
-          {gunCount > 0 && (
-            <label className="toggle">
-              <input type="checkbox" checked={showGuns} onChange={(e) => setShowGuns(e.target.checked)} />{" "}
-              Show gun bursts
-            </label>
-          )}
-          {shown.length > 0 && <ExportButton onClick={() => onExport(shown)} />}
-        </div>
+        {gunCount > 0 && (
+          <label className="toggle">
+            <input type="checkbox" checked={showGuns} onChange={(e) => setShowGuns(e.target.checked)} /> Show
+            gun bursts
+          </label>
+        )}
       </div>
       {shown.length === 0 ? (
         <p className="muted">No shots match the filter.</p>
@@ -604,14 +575,6 @@ function Footnotes({ analysis }: { analysis: Analysis }) {
   );
 }
 
-function ExportButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button type="button" className="secondary small-btn" onClick={onClick}>
-      Export CSV
-    </button>
-  );
-}
-
 /** "Pilot (Aircraft)" with a side-coloured dot. */
 function Who({ p }: { p: Party | null }) {
   if (!p) return <span className="muted">Unknown</span>;
@@ -631,15 +594,4 @@ function Who({ p }: { p: Party | null }) {
 
 function SideDot({ side }: { side: string }) {
   return <span className={`dot side-bg-${(side || "grey").toLowerCase()}`} />;
-}
-
-function download(name: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

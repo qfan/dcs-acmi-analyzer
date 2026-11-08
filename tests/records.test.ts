@@ -3,22 +3,19 @@ import { parseAcmi } from "../src/acmi/parser.ts";
 import { summarize } from "../src/acmi/summary.ts";
 import { analyze } from "../src/analysis/analyze.ts";
 import {
-  exportBaseName,
+  formatClock,
   killMatches,
   killRecords,
-  killsCsv,
   NO_FILTER,
   pilotMatches,
   pilotSides,
-  pilotsCsv,
   shotMatches,
   shotRecords,
   timeOfDay,
-  toCsv,
 } from "../src/ui/records.ts";
 import { fileChunks, sample } from "./helpers.ts";
 
-describe("records for the UI and CSV (2v1 sample)", async () => {
+describe("records for the UI tables (2v1 sample)", async () => {
   const rec = await parseAcmi(fileChunks(sample("dcs-2021-f16-2v1-acm.zip.acmi")));
   const summary = summarize(rec);
   const analysis = analyze(rec);
@@ -53,38 +50,18 @@ describe("records for the UI and CSV (2v1 sample)", async () => {
     ).toEqual(["QFAN", "F-16C_50 (Player)"]);
   });
 
-  it("exports kills as CSV with mission time of day", () => {
-    const csv = killsCsv(kills, summary.referenceTime);
-    const lines = csv.replace(/^﻿/, "").trim().split("\r\n");
-    expect(lines).toHaveLength(4);
-    expect(lines[1]).toMatch(/^65\.68,03:01:05,Adversary Front,MiG-29A,Red,QFAN,F-16C_50,Blue,AIM-9X,/);
-    expect(pilotsCsv(analysis.pilots, sides).split("\r\n")[1]).toMatch(
-      /^QFAN,Blue,F-16C_50,2,2,0,0,0,0,1,6,/,
-    );
-  });
-
-  it("names exports after the mission title", () => {
-    expect(exportBaseName(summary, "x.zip.acmi")).toBe("F-16C - Caucasus - 2v1 ACM");
+  it("shows kill times since start or as mission time of day", () => {
+    expect(formatClock("elapsed", summary.referenceTime, 65.68)).toBe("1:05");
+    expect(formatClock("timeOfDay", summary.referenceTime, 65.68)).toBe("03:01:05");
   });
 });
 
-describe("CSV and time helpers", () => {
-  it("quotes, escapes, and neutralises formula-like text", () => {
-    const csv = toCsv(
-      ["a", "b"],
-      [
-        ["x, y", 'say "hi"'],
-        ["=HYPERLINK(1)", -5],
-        ["@cmd", null],
-        [true, 1.23456],
-      ],
-    );
-    expect(csv).toBe('﻿a,b\r\n"x, y","say ""hi"""\r\n\'=HYPERLINK(1),-5\r\n\'@cmd,\r\nyes,1.23\r\n');
-  });
-
+describe("time helpers", () => {
   it("converts mission seconds to time of day from ReferenceTime", () => {
     expect(timeOfDay("2018-08-01T03:00:00Z", 3725)).toBe("04:02:05");
     expect(timeOfDay(null, 10)).toBeNull();
     expect(timeOfDay("not a date", 10)).toBeNull();
+    // Without a reference time, time of day falls back to time since start.
+    expect(formatClock("timeOfDay", null, 3725)).toBe("1:02:05");
   });
 });

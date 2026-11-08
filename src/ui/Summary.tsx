@@ -75,7 +75,6 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
         <AnalysisView
           summary={r}
           analysis={outcome.analysis}
-          fileName={name}
           onShowOnMap={
             outcome.map
               ? (k) => setFocus((f) => ({ time: k.time, uid: k.victimUid, seq: (f?.seq ?? 0) + 1 }))

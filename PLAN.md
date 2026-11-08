@@ -164,8 +164,8 @@ and parser warnings with line numbers.
 4. **UI polish:** filters (by pilot or coalition), click a kill to see its details, export the log to CSV.
    ✅ Done 2026-11-08: filter bar (side, pilot, multi-word search; clicking a pilot in the scoreboard filters to them),
    expandable kill rows (launch range, weapon flight time, miss distance, both aircraft's altitude/speed at launch, in
-   metric and imperial, confidence explained), CSV export of what is shown for kills/shots/pilots (UTF-8 with BOM for
-   Excel; formula-like text neutralised), switch between time since start and in-mission time of day. 51 tests.
+   metric and imperial, confidence explained), switch between time since start and in-mission time of day.
+   (A CSV export was added here and removed on 2026-11-09 as not useful; it's in git history, commit 6afd44f.)
 5. **2D map + timeline.**
    ✅ Done 2026-11-08 (`src/map/`, `src/ui/MapView.tsx`). Decision: a self-drawn canvas map with **no basemap tiles**
    (no network requests, no new dependencies; a tile background can be an opt-in later). The worker projects tracks to
@@ -193,6 +193,6 @@ and parser warnings with line numbers.
    then sanitised field by field (bad or unknown values fall back to defaults). Keys from newer versions are never read
    or overwritten, so downgrade-then-upgrade loses nothing. Cross-tab sync via the storage event (reload without
    write-back). Built-in profiles (NATO / Western, Russian / Eastern, Mixed) change units only; user profiles save
-   everything; JSON export/import (refuses files from a newer version). CSV exports stay metric.
+   everything; JSON export/import (refuses files from a newer version).
    **To change the format:** bump SETTINGS_VERSION, add a MIGRATIONS step, update Settings/DEFAULT_SETTINGS/sanitize.
 8. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.
