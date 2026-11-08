@@ -4,7 +4,15 @@ import type { AcmiObject } from "../src/acmi/model.ts";
 import { parseAcmi } from "../src/acmi/parser.ts";
 import { analyze } from "../src/analysis/analyze.ts";
 import { buildMapData } from "../src/map/mapData.ts";
-import { attitude, buildFrame, framingCamera, toWorld } from "../src/scene/frame.ts";
+import {
+  attitude,
+  buildFrame,
+  fogRange,
+  framingCamera,
+  gridLevels,
+  snapGridCentre,
+  toWorld,
+} from "../src/scene/frame.ts";
 import { fileChunks, sample } from "./helpers.ts";
 
 /** Nose and right-wing directions after applying an attitude. Model: nose −Z, right wing +X, up +Y. */
@@ -41,6 +49,19 @@ describe("3D orientation (X east, Y up, Z south)", () => {
   it("maps map coordinates to world coordinates", () => {
     expect(toWorld(100, 200, 300).toArray()).toEqual([100, 300, -200]);
     expect(toWorld(1, 2, Number.NaN).y).toBe(0); // ships have no altitude in DCS files
+  });
+
+  it("thins the grid as the camera moves away", () => {
+    const cells = (d: number) => gridLevels(d).map((l) => l.cell);
+    expect(cells(5_000)).toEqual([1_000, 10_000]); // inside a dogfight
+    expect(cells(100_000)).toEqual([10_000]); // a whole engagement area
+    expect(cells(800_000)).toEqual([50_000]); // the theatre
+    expect(snapGridCentre(12_345, 10_000)).toBe(10_000);
+    expect(snapGridCentre(-26_000, 50_000)).toBe(-50_000);
+    const near = fogRange(10_000);
+    const far = fogRange(100_000);
+    expect(far.near).toBeGreaterThan(near.near);
+    expect(near.far).toBeGreaterThan(near.near);
   });
 
   it("frames a box from above and to the south", () => {

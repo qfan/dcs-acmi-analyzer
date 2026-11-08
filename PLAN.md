@@ -183,4 +183,6 @@ and parser warnings with line numbers.
    kill markers; decluttered labels; logarithmic depth buffer. Orbit/pan/zoom-to-cursor, Fit, Top, Follow, and
    "Show on map" frames the victim from 6 km. Renders on demand. three.js is a separate 144 KB (gzip) chunk loaded only
    when 3D is first opened. 87 MB recording renders within one 60 fps frame.
+   Ground grid adapts to camera distance (<40 km: 1 km + 10 km; <300 km: 10 km; beyond: 50 km), stays centred under
+   the camera target, and fades into distance fog so the horizon doesn't turn into a band of lines.
 7. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.

@@ -142,6 +142,34 @@ function appendTrail(
   }
 }
 
+/** Grid spacings in metres, finest first; each is a GridHelper in the 3D scene. */
+export const GRID_CELLS_M = [1_000, 10_000, 50_000] as const;
+
+/**
+ * Which grids to show for a camera this far (metres) from what it looks at, and how strongly.
+ * Close: 1 km lines with 10 km lines over them. Medium: 10 km only. Far: 50 km only.
+ */
+export function gridLevels(cameraDistanceM: number): { cell: number; opacity: number }[] {
+  if (cameraDistanceM < 40_000)
+    return [
+      { cell: 1_000, opacity: 0.1 },
+      { cell: 10_000, opacity: 0.24 },
+    ];
+  if (cameraDistanceM < 300_000) return [{ cell: 10_000, opacity: 0.22 }];
+  return [{ cell: 50_000, opacity: 0.22 }];
+}
+
+/** Centre for a grid near `at`, snapped so its lines fall on whole multiples of the cell size. */
+export function snapGridCentre(at: number, cell: number): number {
+  return Math.round(at / cell) * cell;
+}
+
+/** Fog distances that fade the ground and grid out towards the horizon. */
+export function fogRange(cameraDistanceM: number): { near: number; far: number } {
+  const d = Math.max(cameraDistanceM, 2_000);
+  return { near: d * 1.5, far: d * 7 };
+}
+
 /** Camera placement that frames a horizontal box (metres) from the south-east, looking down ~35°. */
 export function framingCamera(
   b: { minX: number; minY: number; maxX: number; maxY: number },

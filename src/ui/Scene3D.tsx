@@ -9,6 +9,7 @@ import {
   DirectionalLight,
   DoubleSide,
   Float32BufferAttribute,
+  Fog,
   GridHelper,
   HemisphereLight,
   InstancedMesh,
@@ -31,7 +32,16 @@ import {
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { type MapData, type MapKind, sampleAt } from "../map/mapData.ts";
 import { drawLabels, pick, type ScreenHit, sideColor, type Theme } from "../map/render.ts";
-import { buildFrame, type ColorFn, framingCamera, toWorld } from "../scene/frame.ts";
+import {
+  buildFrame,
+  type ColorFn,
+  fogRange,
+  framingCamera,
+  GRID_CELLS_M,
+  gridLevels,
+  snapGridCentre,
+  toWorld,
+} from "../scene/frame.ts";
 import { readTheme } from "./Map2D.tsx";
 import type { ViewProps } from "./viewTypes.ts";
 
@@ -53,7 +63,6 @@ const PX: Record<MapKind | "kill", number> = {
   kill: 9,
 };
 const KILL_FADE_S = 60;
-const FINE_GRID_MAX_DIST_M = 60_000;
 
 interface Gl {
   renderer: WebGLRenderer;
@@ -65,8 +74,8 @@ interface Gl {
   killsOld: InstancedMesh;
   trail: LineSegments;
   drops: LineSegments;
-  /** The 1 km grid; hidden from far away, where it would only show as a moiré patch. */
-  fineGrid: GridHelper;
+  /** Ground grids by cell size (m); which ones show depends on the camera distance. */
+  grids: Map<number, GridHelper>;
   theme: Theme;
   dispose: () => void;
 }
@@ -279,7 +288,9 @@ function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
   sun.position.set(0.4, 1, 0.3);
   scene.add(sun);
 
-  // Ground: a plane at sea level with a 10 km grid over the theatre and a 1 km grid near the action.
+  // Ground: a plane at sea level, with grids whose spacing follows the camera distance (see draw()).
+  // Fog fades the ground and grids towards the horizon, where lines would otherwise bunch up.
+  scene.fog = new Fog(theme.bg, 100_000, 700_000);
   const groundColor = new Color(theme.bg).lerp(new Color(theme.gridText), 0.08);
   const groundMat = new MeshBasicMaterial({
     color: groundColor,
@@ -287,28 +298,27 @@ function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
     polygonOffsetFactor: 2,
     polygonOffsetUnits: 2,
   });
-  const ground = new Mesh(new PlaneGeometry(3_000_000, 3_000_000).rotateX(-Math.PI / 2), groundMat);
+  const ground = new Mesh(new PlaneGeometry(6_000_000, 6_000_000).rotateX(-Math.PI / 2), groundMat);
   scene.add(ground);
-  const cx = (data.focus.minX + data.focus.maxX) / 2;
-  const cz = -(data.focus.minY + data.focus.maxY) / 2;
   const gridColor = new Color(theme.gridText);
-  const grids = [
-    new GridHelper(2_000_000, 200, gridColor, gridColor),
-    new GridHelper(200_000, 200, gridColor, gridColor),
-  ];
-  grids.forEach((g, i) => {
-    g.position.set(Math.round(cx / 10000) * 10000, 0, Math.round(cz / 10000) * 10000);
+  const grids = new Map<number, GridHelper>();
+  for (const cell of GRID_CELLS_M) {
+    // About 200 cells across, so each grid reaches well past the fog at the distances it is shown.
+    const divisions = cell >= 50_000 ? 100 : 200;
+    const g = new GridHelper(cell * divisions, divisions, gridColor, gridColor);
     const mats = Array.isArray(g.material) ? g.material : [g.material];
     for (const m of mats) {
       m.transparent = true;
-      m.opacity = i === 0 ? 0.22 : 0.1;
       m.depthWrite = false;
     }
+    g.visible = false;
     scene.add(g);
-  });
+    grids.set(cell, g);
+  }
 
-  const lit = new MeshLambertMaterial({ side: DoubleSide });
-  const flat = new MeshBasicMaterial({ side: DoubleSide });
+  // Aircraft, weapons and trails ignore the fog: they must stay crisp at any distance.
+  const lit = new MeshLambertMaterial({ side: DoubleSide, fog: false });
+  const flat = new MeshBasicMaterial({ side: DoubleSide, fog: false });
   const make = (geo: BufferGeometry, mat: MeshBasicMaterial | MeshLambertMaterial) => {
     const m = new InstancedMesh(geo, mat, 1);
     m.count = 0;
@@ -326,17 +336,20 @@ function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
     chute: make(new ConeGeometry(0.5, 0.45, 10, 1, true), lit),
     bullseye: make(new RingGeometry(0.42, 0.5, 40).rotateX(-Math.PI / 2), flat),
   };
-  const killsNew = make(new OctahedronGeometry(0.5), new MeshBasicMaterial({ color: 0xf97316 }));
+  const killsNew = make(new OctahedronGeometry(0.5), new MeshBasicMaterial({ color: 0xf97316, fog: false }));
   const killsOld = make(
     new OctahedronGeometry(0.5),
-    new MeshBasicMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.5 }),
+    new MeshBasicMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.5, fog: false }),
   );
 
   const lines = (opacity: number) => {
     const g = new BufferGeometry();
     g.setAttribute("position", new Float32BufferAttribute(new Float32Array(6), 3));
     g.setAttribute("color", new Float32BufferAttribute(new Float32Array(6), 3));
-    const l = new LineSegments(g, new LineBasicMaterial({ vertexColors: true, transparent: true, opacity }));
+    const l = new LineSegments(
+      g,
+      new LineBasicMaterial({ vertexColors: true, transparent: true, opacity, fog: false }),
+    );
     l.frustumCulled = false;
     scene.add(l);
     return l;
@@ -354,7 +367,7 @@ function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
     killsOld,
     trail,
     drops,
-    fineGrid: grids[1] as GridHelper,
+    grids,
     theme,
     dispose: () => {
       controls.dispose();
@@ -477,7 +490,7 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
 
   setLines(gl.trail, f.trail);
   setLines(gl.drops, f.drops);
-  gl.fineGrid.visible = camera.position.distanceTo(gl.controls.target) < FINE_GRID_MAX_DIST_M;
+  const gridCell = updateGrids(gl);
   renderer.render(gl.scene, camera);
 
   // Labels and click targets, projected to the screen.
@@ -512,8 +525,41 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       drawLabels(ctx, labels, gl.theme);
+      // Grid spacing note, bottom left (like the 2D map's scale text).
+      const fine = gl.grids.get(GRID_CELLS_M[0])?.visible;
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillStyle = gl.theme.gridText;
+      ctx.fillText(
+        `grid ${gridCell / 1000} km${fine ? ` · fine ${GRID_CELLS_M[0] / 1000} km` : ""}`,
+        12,
+        h - 12,
+      );
     }
   }
+}
+
+/**
+ * Show the grids that suit the camera distance, centred under what the camera looks at, and set
+ * the fog to match. Returns the coarsest visible spacing (for the on-screen note).
+ */
+function updateGrids(gl: Gl): number {
+  const d = gl.camera.position.distanceTo(gl.controls.target);
+  const levels = gridLevels(d);
+  const target = gl.controls.target;
+  for (const [cell, g] of gl.grids) {
+    const level = levels.find((l) => l.cell === cell);
+    g.visible = level !== undefined;
+    if (!level) continue;
+    g.position.set(snapGridCentre(target.x, cell), 0, snapGridCentre(target.z, cell));
+    const mats = Array.isArray(g.material) ? g.material : [g.material];
+    for (const m of mats) m.opacity = level.opacity;
+  }
+  if (gl.scene.fog instanceof Fog) {
+    const f = fogRange(d);
+    gl.scene.fog.near = f.near;
+    gl.scene.fog.far = f.far;
+  }
+  return levels[levels.length - 1]?.cell ?? 0;
 }
 
 function ensureCapacity(gl: Gl, kind: MapKind, n: number): InstancedMesh {
