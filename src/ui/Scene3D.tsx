@@ -30,7 +30,8 @@ import {
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { type MapData, type MapKind, sampleAt } from "../map/mapData.ts";
+import { type FitTarget, fitAt } from "../map/fit.ts";
+import { type MapKind, sampleAt } from "../map/mapData.ts";
 import { drawLabels, pick, type ScreenHit, sideColor, type Theme } from "../map/render.ts";
 import {
   buildFrame,
@@ -100,7 +101,9 @@ export default function Scene3D(props: ViewProps) {
     if (!canvas || !wrap) return;
     let gl: Gl;
     try {
-      gl = createScene(canvas, data);
+      // First view: what's alive at the current time (not the selection: that stays where it is).
+      const now = propsRef.current;
+      gl = createScene(canvas, fitAt(data, now.t, null, now.ground));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return;
@@ -194,14 +197,21 @@ export default function Scene3D(props: ViewProps) {
     props.onSelect(pick(hitsRef.current, e.clientX - r.left, e.clientY - r.top, 14));
   };
 
+  // Fit: the selected object, else what's in the air now (see fitAt). Keeps the current viewing
+  // direction; for a selected object it only ever moves closer.
   const frameView = (top: boolean) => {
     const gl = glRef.current;
     if (!gl) return;
     props.onUserMove();
-    const { target, position } = framingCamera(data.focus, typicalAltitude(data), FOV);
+    const f = fitAt(data, props.t, props.selected, props.ground);
+    const { target, position } = cameraForFit(f);
+    let dist = position.distanceTo(target);
+    const current = gl.camera.position.distanceTo(gl.controls.target);
+    if (f.basis === "selected") dist = Math.min(dist, current);
+    const dir = gl.camera.position.clone().sub(gl.controls.target).normalize();
     gl.controls.target.copy(target);
-    if (top) gl.camera.position.set(target.x, target.y + position.distanceTo(target), target.z + 1);
-    else gl.camera.position.copy(position);
+    if (top) gl.camera.position.set(target.x, target.y + dist, target.z + 1);
+    else gl.camera.position.copy(target).addScaledVector(dir, dist);
     renderRef.current();
   };
   const dolly = (factor: number) => {
@@ -236,7 +246,12 @@ export default function Scene3D(props: ViewProps) {
         <button type="button" className="secondary" aria-label="Zoom out" onClick={() => dolly(1.6)}>
           −
         </button>
-        <button type="button" className="secondary" title="Frame the action" onClick={() => frameView(false)}>
+        <button
+          type="button"
+          className="secondary"
+          title={props.selected !== null ? "Centre on the selected object" : "Fit everything in the air now"}
+          onClick={() => frameView(false)}
+        >
           Fit
         </button>
         <button
@@ -253,27 +268,20 @@ export default function Scene3D(props: ViewProps) {
 }
 
 /** Median altitude of aircraft samples (camera target height for the initial view). */
-function typicalAltitude(d: MapData): number {
-  const alts: number[] = [];
-  for (const tr of d.tracks) {
-    if (tr.kind !== "air" && tr.kind !== "heli") continue;
-    for (let i = 0; i < tr.count; i += 20) {
-      const a = d.alt[tr.start + i] as number;
-      if (Number.isFinite(a)) alts.push(a);
-    }
-  }
-  alts.sort((a, b) => a - b);
-  return alts.length ? (alts[Math.floor(alts.length / 2)] as number) : 3000;
+/** Camera target and position (from the south-east, looking down ~35°) that show a fit target. */
+function cameraForFit(f: FitTarget) {
+  const box = { minX: f.x - f.radius, maxX: f.x + f.radius, minY: f.y - f.radius, maxY: f.y + f.radius };
+  return framingCamera(box, f.alt, FOV);
 }
 
-function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
+function createScene(canvas: HTMLCanvasElement, initial: FitTarget): Gl {
   const renderer = new WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   const theme = readTheme();
   const scene = new Scene();
   scene.background = new Color(theme.bg);
   const camera = new PerspectiveCamera(FOV, 1, 1, 3_000_000);
-  const { target, position } = framingCamera(data.focus, typicalAltitude(data), FOV);
+  const { target, position } = cameraForFit(initial);
   camera.position.copy(position);
   const controls = new OrbitControls(camera, canvas);
   controls.target.copy(target);

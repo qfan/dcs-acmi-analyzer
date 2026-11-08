@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FitTarget, fitAt } from "../map/fit.ts";
 import { sampleAt } from "../map/mapData.ts";
 import {
   type DrawOptions,
   drawMap,
-  fitView,
   pick,
   type ScreenHit,
   type Theme,
@@ -43,10 +43,18 @@ export function Map2D({
     return () => ro.disconnect();
   }, []);
 
-  // First fit, and keep the view's size in sync.
+  // The current time and selection, readable from effects without re-running them.
+  const nowRef = useRef({ t, selected, ground });
+  nowRef.current = { t, selected, ground };
+
+  // First view: what's alive at the starting time. Then keep the view's size in sync.
   useEffect(() => {
     if (size.w === 0 || size.h === 0) return;
-    setView((v) => (v ? { ...v, w: size.w, h: size.h } : fitView(data.focus, size.w, size.h)));
+    setView((v) => {
+      if (v) return { ...v, w: size.w, h: size.h };
+      const now = nowRef.current;
+      return viewForFit(fitAt(data, now.t, null, now.ground), size.w, size.h, null);
+    });
   }, [size, data]);
 
   // Follow the selected object.
@@ -172,10 +180,11 @@ export function Map2D({
         <button
           type="button"
           className="secondary"
-          title="Fit the action"
+          title={selected !== null ? "Centre on the selected object" : "Fit everything in the air now"}
           onClick={() => {
             onUserMove();
-            if (size.w) setView(fitView(data.focus, size.w, size.h));
+            if (!size.w) return;
+            setView((v) => viewForFit(fitAt(data, t, selected, ground), size.w, size.h, v));
           }}
         >
           Fit
@@ -183,6 +192,21 @@ export function Map2D({
       </div>
     </div>
   );
+}
+
+/**
+ * A 2D view showing a fit target. For a selected object the zoom only ever increases, so pressing
+ * Fit while already zoomed in close re-centres without pulling the view back out.
+ */
+function viewForFit(f: FitTarget, w: number, h: number, current: View | null): View {
+  const scale = (Math.min(w, h) * 0.9) / (2 * f.radius);
+  return {
+    cx: f.x,
+    cy: f.y,
+    scale: f.basis === "selected" && current ? Math.max(current.scale, scale) : scale,
+    w,
+    h,
+  };
 }
 
 export function readTheme(): Theme {
