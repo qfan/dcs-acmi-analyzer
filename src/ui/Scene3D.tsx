@@ -74,6 +74,14 @@ const PX: Record<MapKind | "kill", number> = {
   kill: 9,
 };
 const KILL_FADE_S = 60;
+/**
+ * OrbitControls gesture states that move the focus point (pan, touch pan, two-finger zoom+pan).
+ * Values from three's OrbitControls `_STATE` (not exported): ROTATE 0, DOLLY 1, PAN 2,
+ * TOUCH_ROTATE 3, TOUCH_PAN 4, TOUCH_DOLLY_PAN 5, TOUCH_DOLLY_ROTATE 6.
+ */
+const PAN_STATES = new Set([2, 4, 5]);
+/** The current gesture: OrbitControls sets `state` (public at runtime, missing from @types/three) before "start". */
+const gestureState = (c: OrbitControls) => (c as unknown as { state: number }).state;
 
 interface Gl {
   renderer: WebGLRenderer;
@@ -135,7 +143,11 @@ export default function Scene3D(props: ViewProps) {
       draw(gl, propsRef.current, overlayRef.current, hitsRef);
     };
     gl.controls.addEventListener("change", request);
-    gl.controls.addEventListener("start", () => propsRef.current.onUserMove());
+    // Only a pan moves the camera's focus point off a followed object, so only a pan ends "follow".
+    // Rotating (left-drag) and zooming just change the preferred viewing angle and distance.
+    gl.controls.addEventListener("start", () => {
+      if (PAN_STATES.has(gestureState(gl.controls))) propsRef.current.onUserMove();
+    });
     const ro = new ResizeObserver(() => {
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
@@ -174,6 +186,12 @@ export default function Scene3D(props: ViewProps) {
       props.settings,
     ],
   );
+
+  // While following, zoom towards the followed object (zoom-to-cursor would shift the focus point off it).
+  useEffect(() => {
+    const gl = glRef.current;
+    if (gl) gl.controls.zoomToCursor = props.follow === "off";
+  }, [props.follow]);
 
   // Camera follow: move the orbit target with the primary, the secondary, or the pair's midpoint,
   // keeping the camera's offset. For the pair, back off when needed so both stay in view.
@@ -233,7 +251,8 @@ export default function Scene3D(props: ViewProps) {
   const frameView = (top: boolean) => {
     const gl = glRef.current;
     if (!gl) return;
-    props.onUserMove();
+    // Fit re-frames on purpose and ends following; "Top" is just a viewing angle and keeps it.
+    if (!top) props.onUserMove();
     const f = fitAt(data, props.t, { primary: props.primary, secondary: props.secondary }, props.ground);
     const { target, position } = cameraForFit(f);
     let dist = position.distanceTo(target);
