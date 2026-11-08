@@ -59,14 +59,29 @@ export function Map2D({
     });
   }, [size, data]);
 
-  // Camera follow: primary, secondary, or the pair (centred, zooming out only when they'd leave the view).
+  // Camera follow: primary, secondary, or the pair. For the pair, keep the zoom the user chose and
+  // zoom out beyond it only while the two would otherwise leave the view.
+  const followScale = useRef<{ set: number | null; preferred: number | null }>({
+    set: null,
+    preferred: null,
+  });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new follow mode or selection starts from the current zoom
+  useEffect(() => {
+    followScale.current = { set: null, preferred: null };
+  }, [follow, primary, secondary]);
   useEffect(() => {
     const f = followTarget(data, t, follow, { primary, secondary });
     if (!f) return;
     setView((v) => {
       if (!v) return v;
+      if (f.basis !== "pair") return { ...v, cx: f.x, cy: f.y };
+      const s = followScale.current;
+      // A zoom other than the one follow last set means the user zoomed: that's the new preference.
+      if (s.set === null || Math.abs(v.scale - s.set) > v.scale * 1e-6) s.preferred = v.scale;
       const fitScale = (Math.min(v.w, v.h) * 0.9) / (2 * f.radius);
-      return { ...v, cx: f.x, cy: f.y, scale: f.basis === "pair" ? Math.min(v.scale, fitScale) : v.scale };
+      const scale = Math.min(s.preferred ?? v.scale, fitScale);
+      s.set = scale;
+      return { ...v, cx: f.x, cy: f.y, scale };
     });
   }, [follow, primary, secondary, t, data]);
 

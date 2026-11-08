@@ -74,14 +74,6 @@ const PX: Record<MapKind | "kill", number> = {
   kill: 9,
 };
 const KILL_FADE_S = 60;
-/**
- * OrbitControls gesture states that move the focus point (pan, touch pan, two-finger zoom+pan).
- * Values from three's OrbitControls `_STATE` (not exported): ROTATE 0, DOLLY 1, PAN 2,
- * TOUCH_ROTATE 3, TOUCH_PAN 4, TOUCH_DOLLY_PAN 5, TOUCH_DOLLY_ROTATE 6.
- */
-const PAN_STATES = new Set([2, 4, 5]);
-/** The current gesture: OrbitControls sets `state` (public at runtime, missing from @types/three) before "start". */
-const gestureState = (c: OrbitControls) => (c as unknown as { state: number }).state;
 
 interface Gl {
   renderer: WebGLRenderer;
@@ -109,6 +101,13 @@ export default function Scene3D(props: ViewProps) {
   const propsRef = useRef(props);
   propsRef.current = props;
   const renderRef = useRef<() => void>(() => {});
+  /** Where camera follow last put the orbit centre (null when not following). */
+  const followAtRef = useRef<Vector3 | null>(null);
+  /** Camera distance follow last set, and the distance the user chose (by zooming) while following. */
+  const followDistRef = useRef<{ set: number | null; preferred: number | null }>({
+    set: null,
+    preferred: null,
+  });
   const [error, setError] = useState<string | null>(null);
   const { data } = props;
 
@@ -143,10 +142,17 @@ export default function Scene3D(props: ViewProps) {
       draw(gl, propsRef.current, overlayRef.current, hitsRef);
     };
     gl.controls.addEventListener("change", request);
-    // Only a pan moves the camera's focus point off a followed object, so only a pan ends "follow".
-    // Rotating (left-drag) and zooming just change the preferred viewing angle and distance.
-    gl.controls.addEventListener("start", () => {
-      if (PAN_STATES.has(gestureState(gl.controls))) propsRef.current.onUserMove();
+    // Only a pan (right-drag, Shift+drag, two-finger touch) moves the orbit centre off a followed
+    // object, so only that ends "follow". Rotating and zooming (towards the centre while following)
+    // leave it in place: they just change the preferred viewing angle and distance.
+    gl.controls.addEventListener("change", () => {
+      const at = followAtRef.current;
+      if (!at) return;
+      const dist = gl.camera.position.distanceTo(gl.controls.target);
+      if (gl.controls.target.distanceTo(at) > Math.max(0.5, dist * 1e-4)) {
+        followAtRef.current = null;
+        propsRef.current.onUserMove();
+      }
     });
     const ro = new ResizeObserver(() => {
       const w = wrap.clientWidth;
@@ -194,7 +200,12 @@ export default function Scene3D(props: ViewProps) {
   }, [props.follow]);
 
   // Camera follow: move the orbit target with the primary, the secondary, or the pair's midpoint,
-  // keeping the camera's offset. For the pair, back off when needed so both stay in view.
+  // keeping the camera's offset. For the pair, the camera stays at the distance the user zoomed to,
+  // backing off beyond it only while the two would otherwise leave the view.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new follow mode or selection starts from the current distance
+  useEffect(() => {
+    followDistRef.current = { set: null, preferred: null };
+  }, [props.follow, props.primary, props.secondary]);
   useEffect(() => {
     const gl = glRef.current;
     if (!gl) return;
@@ -202,16 +213,25 @@ export default function Scene3D(props: ViewProps) {
       primary: props.primary,
       secondary: props.secondary,
     });
-    if (!f) return;
+    if (!f) {
+      followAtRef.current = null;
+      return;
+    }
     const next = toWorld(f.x, f.y, f.alt);
     const delta = next.clone().sub(gl.controls.target);
     gl.controls.target.add(delta);
     gl.camera.position.add(delta);
+    const offset = gl.camera.position.clone().sub(gl.controls.target);
+    const dist = followDistRef.current;
+    // A distance other than the one follow last set means the user zoomed: that's the new preference.
+    const current = offset.length();
+    if (dist.set === null || Math.abs(current - dist.set) > 0.5) dist.preferred = current;
     if (f.basis === "pair") {
-      const need = cameraForFit(f).position.distanceTo(cameraForFit(f).target);
-      const offset = gl.camera.position.clone().sub(gl.controls.target);
-      if (offset.length() < need) gl.camera.position.copy(gl.controls.target).add(offset.setLength(need));
+      const want = Math.max(dist.preferred ?? current, distanceToShow(f.radius, gl.camera));
+      gl.camera.position.copy(gl.controls.target).add(offset.setLength(want));
     }
+    dist.set = gl.camera.position.distanceTo(gl.controls.target);
+    followAtRef.current = gl.controls.target.clone();
     renderRef.current();
   }, [props.follow, props.primary, props.secondary, props.t, data]);
 
@@ -228,6 +248,8 @@ export default function Scene3D(props: ViewProps) {
     const dist = Math.max(6000, cameraForFit(fit).position.distanceTo(cameraForFit(fit).target));
     gl.controls.target.copy(target);
     gl.camera.position.copy(target).add(new Vector3(1, 0.6, 1).setLength(dist));
+    // Not a pan: if following, the follow carries on from here.
+    if (followAtRef.current) followAtRef.current = target.clone();
     renderRef.current();
   }, [props.focus, data]);
 
@@ -262,6 +284,7 @@ export default function Scene3D(props: ViewProps) {
     gl.controls.target.copy(target);
     if (top) gl.camera.position.set(target.x, target.y + dist, target.z + 1);
     else gl.camera.position.copy(target).addScaledVector(dir, dist);
+    followAtRef.current = top && followAtRef.current ? target.clone() : null;
     renderRef.current();
   };
   const dolly = (factor: number) => {
@@ -323,7 +346,13 @@ export default function Scene3D(props: ViewProps) {
   );
 }
 
-/** Median altitude of aircraft samples (camera target height for the initial view). */
+/** Camera distance at which a sphere of this radius just fits in the camera's view. */
+function distanceToShow(radius: number, camera: PerspectiveCamera): number {
+  const halfV = (camera.fov * Math.PI) / 360;
+  const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+  return radius / Math.sin(Math.min(halfV, halfH));
+}
+
 /** Camera target and position (from the south-east, looking down ~35°) that show a fit target. */
 function cameraForFit(f: FitTarget) {
   const box = { minX: f.x - f.radius, maxX: f.x + f.radius, minY: f.y - f.radius, maxY: f.y + f.radius };
