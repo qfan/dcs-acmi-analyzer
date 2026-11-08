@@ -1,6 +1,9 @@
+import { useState } from "react";
 import type { ObjectSummary } from "../acmi/summary.ts";
 import type { ParseOutcome } from "../worker/client.ts";
 import { AnalysisView } from "./AnalysisView.tsx";
+import { type MapFocus, MapView } from "./MapView.tsx";
+import { type Clock, formatClock } from "./records.ts";
 
 const GLOBAL_ORDER = [
   "Title",
@@ -21,6 +24,8 @@ const isAircraft = (o: ObjectSummary) =>
 const isWeapon = (o: ObjectSummary) => o.tags.includes("Weapon");
 
 export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome }) {
+  const [clock, setClock] = useState<Clock>("elapsed");
+  const [focus, setFocus] = useState<MapFocus | null>(null);
   const r = outcome.summary;
   const g = r.globals;
   const duration = r.timeEnd - r.timeStart;
@@ -60,7 +65,24 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
         )}
       </section>
 
-      {outcome.analysis && <AnalysisView summary={r} analysis={outcome.analysis} fileName={name} />}
+      {outcome.map && outcome.map.tracks.length > 0 && (
+        <MapView data={outcome.map} fmt={(t) => formatClock(clock, r.referenceTime, t)} focus={focus} />
+      )}
+
+      {outcome.analysis && (
+        <AnalysisView
+          summary={r}
+          analysis={outcome.analysis}
+          fileName={name}
+          clock={clock}
+          setClock={setClock}
+          onShowOnMap={
+            outcome.map
+              ? (k) => setFocus((f) => ({ time: k.time, uid: k.victimUid, seq: (f?.seq ?? 0) + 1 }))
+              : undefined
+          }
+        />
+      )}
       {outcome.analysisError && (
         <section className="card">
           <p className="notice">The kill analysis failed: {outcome.analysisError}</p>

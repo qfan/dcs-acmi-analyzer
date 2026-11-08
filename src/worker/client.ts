@@ -1,11 +1,13 @@
 import type { RecordingSummary } from "../acmi/summary.ts";
 import type { Analysis } from "../analysis/analyze.ts";
+import type { MapData } from "../map/mapData.ts";
 import type { WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export interface ParseOutcome {
   summary: RecordingSummary;
   analysis: Analysis | null;
   analysisError: string | null;
+  map: MapData | null;
   elapsedMs: number;
 }
 
@@ -26,6 +28,7 @@ export function parseInWorker(
           summary: msg.summary,
           analysis: msg.analysis,
           analysisError: msg.analysisError,
+          map: msg.map,
           elapsedMs: msg.elapsedMs,
         });
       } else {

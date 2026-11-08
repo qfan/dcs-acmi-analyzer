@@ -118,7 +118,7 @@ describe("analysis rules on synthetic recordings", () => {
     const lons = [2.56, 3.8, 6.79, 4.35, 4.59, 1.2, 5.5, 2.1];
     const lines = lons.map((lon, i) => `#${i * 0.2}\n${jet("a", lon, 300 - i)}`).join("\n");
     const { a } = await run(`0,PlaybackKey=x\n${lines}\n#2\n-a\n`);
-    expect(a.scrambled).toEqual({ objects: 1, aircraft: 1, protectedHeader: true });
+    expect(a.scrambled).toEqual({ objects: 1, aircraft: 1, protectedHeader: true, uids: [0] });
     expect(a.kills).toEqual([]);
   });
 

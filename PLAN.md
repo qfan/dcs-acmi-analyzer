@@ -166,4 +166,12 @@ and parser warnings with line numbers.
    expandable kill rows (launch range, weapon flight time, miss distance, both aircraft's altitude/speed at launch, in
    metric and imperial, confidence explained), CSV export of what is shown for kills/shots/pilots (UTF-8 with BOM for
    Excel; formula-like text neutralised), switch between time since start and in-mission time of day. 51 tests.
-5. **Later:** 2D map + timeline, then 3D.
+5. **2D map + timeline.**
+   ✅ Done 2026-11-08 (`src/map/`, `src/ui/MapView.tsx`). Decision: a self-drawn canvas map with **no basemap tiles**
+   (no network requests, no new dependencies; a tile background can be an opt-in later). The worker projects tracks to
+   flat metres around the action (equirectangular; 0.08% distance error measured), thins them to ≤4 samples/s, and
+   transfers them as five typed arrays (no copy). Features: side-coloured icons by kind with heading, trails, labels with
+   decluttering, kill markers, bullseyes, km grid and scale bar; pan/zoom/fit; play/pause, ±10 s, 1–64× speed, kill ticks
+   on the timeline; click to select (pilot at that time, altitude, speed, heading, follow); "Show on map" from a kill.
+   Scrambled tracks are left out. 87 MB recording: 8.2 s to load, redraw within one 60 fps frame.
+6. **Later:** 3D view; optional map tiles; display-name table for DCS type names.

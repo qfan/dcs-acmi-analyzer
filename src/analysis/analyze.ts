@@ -164,7 +164,7 @@ export interface Analysis {
    * Protected recordings: objects whose horizontal positions are scrambled, so they take no part
    * in shooter/hit/kill inference. `protectedHeader` is true when the file has a PlaybackKey.
    */
-  scrambled: { objects: number; aircraft: number; protectedHeader: boolean };
+  scrambled: { objects: number; aircraft: number; protectedHeader: boolean; uids: number[] };
   timingMs: number;
 }
 
@@ -553,6 +553,7 @@ export function analyze(rec: Recording): Analysis {
       objects: scrambledObjs.length,
       aircraft: scrambledObjs.filter(isAircraft).length,
       protectedHeader: rec.globals.PlaybackKey !== undefined,
+      uids: scrambledObjs.map((o) => o.uid),
     },
     mergedLives,
     timingMs: performance.now() - started,

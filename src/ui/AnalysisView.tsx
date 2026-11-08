@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import type { RecordingSummary } from "../acmi/summary.ts";
-import type { Analysis, PilotStats } from "../analysis/analyze.ts";
+import type { Analysis, Kill, PilotStats } from "../analysis/analyze.ts";
 import {
   type Clock,
   exportBaseName,
@@ -33,11 +33,14 @@ interface Props {
   summary: RecordingSummary;
   analysis: Analysis;
   fileName: string;
+  clock: Clock;
+  setClock: (c: Clock) => void;
+  /** Present when a map is available. */
+  onShowOnMap?: (k: Kill) => void;
 }
 
-export function AnalysisView({ summary, analysis, fileName }: Props) {
+export function AnalysisView({ summary, analysis, fileName, clock, setClock, onShowOnMap }: Props) {
   const [filter, setFilter] = useState<Filter>(NO_FILTER);
-  const [clock, setClock] = useState<Clock>("elapsed");
   const kills = useMemo(() => killRecords(summary, analysis), [summary, analysis]);
   const shots = useMemo(() => shotRecords(summary, analysis), [summary, analysis]);
   const sides = useMemo(() => pilotSides(summary), [summary]);
@@ -90,7 +93,7 @@ export function AnalysisView({ summary, analysis, fileName }: Props) {
         ) : visibleKills.length === 0 ? (
           <p className="muted">No kills match the filter.</p>
         ) : (
-          <KillTable records={visibleKills} fmt={fmt} refTime={refTime} />
+          <KillTable records={visibleKills} fmt={fmt} refTime={refTime} onShowOnMap={onShowOnMap} />
         )}
         <Footnotes analysis={analysis} />
       </section>
@@ -193,10 +196,12 @@ function KillTable({
   records,
   fmt,
   refTime,
+  onShowOnMap,
 }: {
   records: KillRecord[];
   fmt: (t: number) => string;
   refTime: string | null;
+  onShowOnMap?: (k: Kill) => void;
 }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (id: string) => {
@@ -265,7 +270,7 @@ function KillTable({
                 {isOpen && (
                   <tr className="details-row">
                     <td colSpan={5}>
-                      <KillDetailsPanel r={r} fmt={fmt} refTime={refTime} />
+                      <KillDetailsPanel r={r} fmt={fmt} refTime={refTime} onShowOnMap={onShowOnMap} />
                     </td>
                   </tr>
                 )}
@@ -282,16 +287,23 @@ function KillDetailsPanel({
   r,
   fmt,
   refTime,
+  onShowOnMap,
 }: {
   r: KillRecord;
   fmt: (t: number) => string;
   refTime: string | null;
+  onShowOnMap?: (k: Kill) => void;
 }) {
   const k = r.kill;
   const d = k.details;
   const tod = timeOfDay(refTime, k.time);
   return (
     <div className="details">
+      {onShowOnMap && (
+        <button type="button" className="secondary small-btn details-map" onClick={() => onShowOnMap(k)}>
+          Show on map
+        </button>
+      )}
       <p>
         {k.cause === "weapon" && d ? (
           <>

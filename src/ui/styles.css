@@ -9,6 +9,8 @@
   --warn-bg: #fff6e0;
   --warn-text: #7a4b00;
   --error: #b42318;
+  --map-bg: #eef2f6;
+  --map-grid: rgba(71, 85, 105, 0.16);
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
   font-size: 15px;
@@ -26,6 +28,8 @@
     --warn-bg: #3a2e12;
     --warn-text: #f3d08a;
     --error: #ff8a80;
+    --map-bg: #0e1520;
+    --map-grid: rgba(148, 163, 184, 0.14);
   }
 }
 
@@ -397,6 +401,130 @@ button.row-toggle {
 }
 .kv.compact {
   font-size: 13px;
+}
+
+.map-card {
+  padding-bottom: 10px;
+}
+.map-options select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.map-wrap {
+  position: relative;
+  height: min(62vh, 640px);
+  min-height: 320px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--map-bg);
+}
+.map-canvas {
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.map-canvas:active {
+  cursor: grabbing;
+}
+.map-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.map-zoom {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.map-zoom button {
+  background: var(--surface);
+  min-width: 34px;
+  padding: 4px 8px;
+}
+.map-info {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  max-width: calc(100% - 80px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 30px 8px 10px;
+  font-size: 13px;
+}
+.map-info-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.map-info .close {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+}
+.timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.timeline button {
+  padding: 4px 10px;
+}
+.timeline select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.time-now {
+  font-variant-numeric: tabular-nums;
+  min-width: 64px;
+}
+.slider {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+.slider input[type="range"] {
+  width: 100%;
+  margin: 0;
+}
+.ticks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  height: 8px;
+  pointer-events: none;
+}
+.tick {
+  position: absolute;
+  width: 3px;
+  height: 8px;
+  margin-left: -1px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  background: #f97316;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.details-map {
+  float: right;
+  margin-left: 12px;
 }
 
 .footnote-left {
