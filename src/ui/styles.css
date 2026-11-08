@@ -227,6 +227,84 @@ td {
   color: var(--muted);
 }
 
+.who {
+  white-space: nowrap;
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+  background: var(--muted);
+}
+.side-bg-red {
+  background: #d92d20;
+}
+.side-bg-blue {
+  background: #2e6fdc;
+}
+.side-bg-violet {
+  background: #8a4fd8;
+}
+.side-bg-green {
+  background: #2f9e44;
+}
+.side-bg-orange {
+  background: #e8590c;
+}
+.side-bg-yellow {
+  background: #e0b000;
+}
+.side-bg-cyan {
+  background: #0ca5b0;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0 6px;
+  margin: 1px 4px 1px 0;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-color: transparent;
+}
+.badge.info {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toggle {
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+button.more {
+  margin-top: 10px;
+}
+
 .footnote-left {
   font-size: 13px;
   margin: 8px 0 0;

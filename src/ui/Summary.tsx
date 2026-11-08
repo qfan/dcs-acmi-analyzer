@@ -1,5 +1,6 @@
 import type { ObjectSummary } from "../acmi/summary.ts";
 import type { ParseOutcome } from "../worker/client.ts";
+import { AnalysisView } from "./AnalysisView.tsx";
 
 const GLOBAL_ORDER = [
   "Title",
@@ -59,6 +60,13 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
         )}
       </section>
 
+      {outcome.analysis && <AnalysisView summary={r} analysis={outcome.analysis} />}
+      {outcome.analysisError && (
+        <section className="card">
+          <p className="notice">The kill analysis failed: {outcome.analysisError}</p>
+        </section>
+      )}
+
       <section className="card">
         <h3>Aircraft ({aircraft.length})</h3>
         <div className="table-wrap">
@@ -117,9 +125,6 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
                 })}
             </tbody>
           </table>
-          <p className="muted footnote-left">
-            Who fired each weapon and what it hit is not recorded in these files; that analysis comes next.
-          </p>
         </section>
       )}
 

@@ -11,6 +11,7 @@ import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { parseAcmi } from "../src/acmi/parser.ts";
+import { analyze } from "../src/analysis/analyze.ts";
 
 export interface FileResult {
   path: string;
@@ -40,7 +41,22 @@ export interface FileResult {
   textPropsSeen?: string[];
   truncated?: boolean;
   firstWarnings?: string[];
+  /** With --analyze: */
+  analyzeMs?: number;
+  analysisError?: string;
+  kills?: Record<string, number>;
+  killsLowConfidence?: number;
+  friendlyKills?: number;
+  shots?: number;
+  shotsWithoutShooter?: number;
+  shotsLowConfidenceShooter?: number;
+  gunBursts?: number;
+  gunBurstsWithoutShooter?: number;
+  scrambledObjects?: number;
+  protectedHeader?: boolean;
 }
+
+const ANALYZE = process.argv.includes("--analyze") || workerData?.analyze === true;
 
 const INTERESTING_TEXT = [
   "Parent",
@@ -67,7 +83,37 @@ async function parseOne(path: string): Promise<FileResult> {
     for (const o of r.objects)
       for (const k of Object.keys(o.text))
         if (INTERESTING_TEXT.some((p) => k.startsWith(p))) textPropsSeen.add(k);
+    const extra: Partial<FileResult> = {};
+    if (ANALYZE) {
+      const ta = performance.now();
+      try {
+        const a = analyze(r);
+        const kills: Record<string, number> = {};
+        for (const k of a.kills) kills[k.cause] = (kills[k.cause] ?? 0) + 1;
+        const weaponsShots = a.shots.filter((s) => !s.isGun);
+        const bursts = a.shots.filter((s) => s.isGun);
+        Object.assign(extra, {
+          analyzeMs: performance.now() - ta,
+          kills,
+          killsLowConfidence: a.kills.filter((k) => k.confidence === "low").length,
+          friendlyKills: a.kills.filter((k) => k.friendly).length,
+          shots: weaponsShots.length,
+          shotsWithoutShooter: weaponsShots.filter((s) => !s.shooter).length,
+          shotsLowConfidenceShooter: weaponsShots.filter((s) => s.shooter && s.shooter.confidence !== "high")
+            .length,
+          gunBursts: bursts.length,
+          gunBurstsWithoutShooter: bursts.filter((s) => !s.shooter).length,
+          scrambledObjects: a.scrambled.objects,
+          protectedHeader: a.scrambled.protectedHeader,
+        });
+      } catch (err) {
+        extra.analysisError =
+          err instanceof Error ? `${err.message} ${err.stack?.split("\n")[1] ?? ""}` : String(err);
+        extra.analyzeMs = performance.now() - ta;
+      }
+    }
     return {
+      ...extra,
       path,
       size,
       ok: true,
@@ -159,7 +205,7 @@ async function main() {
   const t0 = performance.now();
   const workers = Array.from({ length: Math.min(jobs, files.length) }, () => {
     const w = new Worker(new URL(import.meta.url), {
-      workerData: { worker: true },
+      workerData: { worker: true, analyze: ANALYZE },
       resourceLimits: { maxOldGenerationSizeMb: 6144 },
     });
     return new Promise<void>((resolve) => {
@@ -248,8 +294,40 @@ async function main() {
     add(sum.eventTypes, r.eventTypes);
     for (const k of r.textPropsSeen ?? []) sum.filesWithTextProp[k] = (sum.filesWithTextProp[k] ?? 0) + 1;
   }
-  writeFileSync(join(outDir, "summary.json"), JSON.stringify(sum, null, 2));
-  console.log(JSON.stringify(sum, null, 2));
+  const out: Record<string, unknown> = { ...sum };
+  if (ANALYZE) {
+    const total = (f: (r: FileResult) => number | undefined) => ok.reduce((s, r) => s + (f(r) ?? 0), 0);
+    const kills: Record<string, number> = {};
+    for (const r of ok) add(kills, r.kills);
+    out.analysis = {
+      errors: ok.filter((r) => r.analysisError).map((r) => `${r.path}: ${r.analysisError}`),
+      seconds: total((r) => r.analyzeMs) / 1000,
+      kills,
+      killsLowConfidence: total((r) => r.killsLowConfidence),
+      friendlyKills: total((r) => r.friendlyKills),
+      shots: total((r) => r.shots),
+      shotsWithoutShooter: total((r) => r.shotsWithoutShooter),
+      shotsLowConfidenceShooter: total((r) => r.shotsLowConfidenceShooter),
+      gunBursts: total((r) => r.gunBursts),
+      gunBurstsWithoutShooter: total((r) => r.gunBurstsWithoutShooter),
+      filesWithProtectedHeader: ok.filter((r) => r.protectedHeader).length,
+      filesWithScrambledObjects: ok.filter((r) => (r.scrambledObjects ?? 0) > 0).length,
+      filesProtectedButNotScrambled: ok.filter((r) => r.protectedHeader && !r.scrambledObjects).length,
+      filesScrambledWithoutProtectedHeader: ok.filter(
+        (r) => !r.protectedHeader && (r.scrambledObjects ?? 0) > 0,
+      ).length,
+      slowest: [...ok]
+        .sort((a, b) => (b.analyzeMs ?? 0) - (a.analyzeMs ?? 0))
+        .slice(0, 3)
+        .map((r) => ({
+          path: r.path,
+          parseMs: Math.round(r.ms - (r.analyzeMs ?? 0)),
+          analyzeMs: Math.round(r.analyzeMs ?? 0),
+        })),
+    };
+  }
+  writeFileSync(join(outDir, "summary.json"), JSON.stringify(out, null, 2));
+  console.log(JSON.stringify(out, null, 2));
 }
 
 if (isMainThread) {

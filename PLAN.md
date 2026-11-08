@@ -52,21 +52,40 @@ Places where the files go beyond the spec or contradict it. The parser must hand
 | 11 | **Remove-and-re-add glitch**: DCS2ACMI removes an aircraft and re-adds it under the same ID 0.02–1 s later, at the same spot with the same name and pilot (82 cases across the corpus). | Not covered. The parser links the two (`previousUid`, `reappearGap`); kill analysis must not count these. |
 | 12 | IDs are recycled for unrelated new objects after longer gaps (88,603 cases, nearly all bullets and debris in large server recordings). | Not covered. These are separate objects. |
 | 13 | `LockedTarget` **is** written in 167 DCS files (my first 111-file sample missed it). `Registration` appears in 65. | Defined. Useful extra evidence for kill attribution. |
+| 14 | Ships leave altitude empty (`T=lon\|lat\|\|…`), so it is never set. | Not covered. Geometry treats a never-set altitude as 0 m. |
+| 15 | The `Pilot` of an aircraft changes mid-recording when a player jumps between seats (single player) or slots. | Allowed. Credit uses the pilot *at the time* of the event. |
+| 16 | **Protected multiplayer recordings** (68 files have `PlaybackKey`/`PlaybackDelay` in the header): horizontal positions of objects are scrambled (degrees of jump per frame) while altitude/attitude stay smooth. | Not covered. We do **not** try to decode this (it would mean reverse-engineering Tacview). Scrambled objects are detected and left out of geometry, with a notice. |
+| 17 | In multiplayer *client* recordings, objects appear/disappear as they enter/leave the client's view, and weapons can first appear mid-flight. Missions end with everything removed in the last frame. | Not covered. Removals need evidence to count as losses (see §3). |
 
-## 3. Inferring kills (the core logic)
+## 3. Inferring kills (the core logic) — implemented in `src/analysis/`
 
 Example from the 2v1 ACM sample:
 `62.55s AIM_9X spawns next to an F-16` → `65.68s AIM_9X and MiG-29A removed in the same frame, plus Shrapnel and a PILOT_SU27_SEAT object spawn`.
 
-Planned rules, each with a confidence level:
-1. **Shooter of a weapon:** the nearest Air/Sea/Ground object (not a weapon) to the weapon at its first sample.
-   Prefer the same coalition. Use `Parent=` when present.
-2. **Missile/bomb kill:** weapon removed within *R* metres of a target **and** the target is removed, `Destroyed`
-   or `Disabled` within *Δt*. Shrapnel spawning near the target strengthens the match.
-3. **Gun kill:** shells from shooter X pass within *R* of the target in the few seconds before its removal.
-4. **Other outcomes:** ejection (Parachutist or `*SEAT` objects), crash (removed near the ground with no weapon nearby),
-   left area, or a mission end where the object was still alive.
-5. Thresholds (*R*, *Δt*) are tuned against the Tacview CSV ground truth, then checked across the whole corpus.
+Rules (constants in `RULES` in `src/analysis/analyze.ts`):
+1. **Shooter:** `Parent=` if present; otherwise the nearest aircraft/vehicle/ship to the weapon when it first appears
+   (≤1.5 km, same coalition preferred; launchers sit 2–70 m away in practice). Sub-munitions inherit from a nearby
+   parent weapon. The pilot is the one in the seat *at launch time*.
+2. **Hit:** when a weapon vanishes, its last path is extended to the moment it vanished, and the **closest approach** to
+   each object is computed (targets also extended if they stopped being sampled). ≤60 m for missiles/bombs/rockets,
+   ≤20 m for bullets. A weapon never "hits" its own launcher.
+3. **Kill:** a victim disappears (after merging the remove/re-add glitch) and was hit within the previous 180 s; the last
+   hit's shooter gets the kill, other shooters are listed as also hitting it. Friendly fire is flagged.
+4. **Losses without a weapon need evidence:** collision (two aircraft vanish within 1 s and 100 m, both moving), crash
+   (aircraft sinking ≥20 m/s, at ≤20 m MSL while moving, or with an ejection). Everything else that vanishes — players
+   leaving, despawns, units out of a client's view, everything removed in the final second, batches of ≥10 at once — is
+   **not** a loss; it is counted in a footnote.
+5. **Gun bursts:** rounds from one shooter less than 1 s apart.
+
+**Calibration against Tacview's own exported log** (`tests/fixtures/ground-truth/`, SAMs vs TALD decoys, 2024):
+- Fired: 122 of 122 matched, with the same shooter and the same pilot-at-the-time.
+- Hits: 40 of Tacview's 44 matched. The 4 differences are deliberate: 3 are a SAM bursting 114–133 m from its own
+  launcher ship, and 1 is a near miss that Tacview's ~150 m radius counts but the decoy flew on for 5 s.
+- We find 26 more hits (13 SAM/decoy interceptions at 3–19 m closest approach) that Tacview logs only as "destroyed",
+  because it judges from last-sampled positions that were up to 250 m apart.
+
+**Whole corpus (7,207 recordings):** no analysis errors; 17,426 weapon kills, 6,221 crashes, 254 collisions;
+analysis adds ~10% to parse time (1.7 s on the largest 87 MB file).
 
 ## 4. Tool choices
 
@@ -140,5 +159,7 @@ and parser warnings with line numbers.
      There are no `Event=` lines anywhere and no unknown properties.
 3. **Analysis v1:** mission summary, participants/pilots, shots fired, kill log with confidence levels.
    Scored against the Tacview CSV.
+   ✅ Done 2026-11-08: kill log, pilot scoreboard, shots table (gun bursts optional), notices for protected recordings
+   and for removals that aren't losses. See §3 for rules and calibration. 44 tests.
 4. **UI polish:** filters (by pilot or coalition), click a kill to see its details, export the log to CSV.
 5. **Later:** 2D map + timeline, then 3D.

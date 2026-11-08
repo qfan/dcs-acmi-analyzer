@@ -1,8 +1,11 @@
 import type { RecordingSummary } from "../acmi/summary.ts";
+import type { Analysis } from "../analysis/analyze.ts";
 import type { WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export interface ParseOutcome {
   summary: RecordingSummary;
+  analysis: Analysis | null;
+  analysisError: string | null;
   elapsedMs: number;
 }
 
@@ -19,7 +22,12 @@ export function parseInWorker(
       if (msg.kind === "progress") onProgress(msg.totalBytes ? msg.rawBytes / msg.totalBytes : 0);
       else if (msg.kind === "done") {
         worker.terminate();
-        resolve({ summary: msg.summary, elapsedMs: msg.elapsedMs });
+        resolve({
+          summary: msg.summary,
+          analysis: msg.analysis,
+          analysisError: msg.analysisError,
+          elapsedMs: msg.elapsedMs,
+        });
       } else {
         worker.terminate();
         reject(new Error(msg.message));
