@@ -139,10 +139,17 @@ export function Jog({ hold, speed, playing, onHold, onLatch, onSpeed }: Props) {
         </span>
         <span className="jog-knob" aria-hidden="true" style={{ transform: `translate(${kx}px, ${ky}px)` }} />
       </div>
-      <span className={`jog-readout${hold || playing ? "" : " muted"}`} aria-hidden="true">
+      {/* The speed, which also resets it to real time (like double-clicking the pad). */}
+      <button
+        type="button"
+        className={`jog-readout${hold || playing ? "" : " muted"}`}
+        title="Reset to real time (1× forward)"
+        aria-label={`Play speed ${speedText}. Reset to real time`}
+        onClick={() => onSpeed(0)}
+      >
         {hold ? (rate === 0 ? "jog" : `${rate < 0 ? "◀" : "▶"} ${fmtRate(rate)}`) : speedText}
         {latching ? <span className="jog-tag">keep</span> : null}
-      </span>
+      </button>
     </div>
   );
 }

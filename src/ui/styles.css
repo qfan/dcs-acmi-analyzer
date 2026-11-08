@@ -613,11 +613,26 @@ button.row-toggle {
 .jog-pad.set .jog-knob {
   background: color-mix(in srgb, var(--accent) 30%, var(--surface));
 }
-.jog-readout {
+.timeline .jog-readout {
   min-width: 92px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font: inherit;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  text-align: left;
   white-space: nowrap;
+  cursor: pointer;
+}
+.timeline .jog-readout.muted {
+  color: var(--muted);
+}
+.timeline .jog-readout:hover {
+  background: var(--bg);
+  text-decoration: underline dotted;
 }
 .jog-tag {
   margin-left: 4px;
