@@ -24,6 +24,10 @@ export interface Settings {
     mode: MapMode;
     trailS: number;
     groundUnits: boolean;
+    /**
+     * The play button's speed (× real time, negative = backwards), set from the speed menu or by
+     * latching the jog control. 0 = not set: plays in real time.
+     */
     playbackSpeed: number;
     /** Selection panel expanded (object details and engagement) or collapsed to the camera controls. */
     infoPanel: boolean;
@@ -34,7 +38,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   units: { altitude: "ft", speed: "kt", distance: "nm" },
   labels: { show: true, pilot: true, aircraft: true, altitude: true, speed: false },
-  map: { mode: "2d", trailS: 60, groundUnits: true, playbackSpeed: 8, infoPanel: true },
+  map: { mode: "2d", trailS: 60, groundUnits: true, playbackSpeed: 0, infoPanel: true },
   time: { clock: "elapsed" },
 };
 
@@ -42,7 +46,13 @@ export const ALTITUDE_UNITS: readonly AltitudeUnit[] = ["ft", "m", "ft+m", "m+ft
 export const SPEED_UNITS: readonly SpeedUnit[] = ["kt", "kmh", "kt+kmh", "kmh+kt"];
 export const DISTANCE_UNITS: readonly DistanceUnit[] = ["nm", "km", "nm+km", "km+nm"];
 export const TRAIL_CHOICES = [0, 15, 60, 300] as const;
-export const PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64] as const;
+/** Fastest play speed either way (the speed menu's top preset). */
+export const MAX_PLAYBACK_SPEED = 64;
+/** Play speed: 0 (not set), or a finite rate up to the maximum either way, to 0.01×. */
+const playSpeed = (v: unknown, fallback: number) =>
+  typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= MAX_PLAYBACK_SPEED
+    ? Math.round(v * 100) / 100
+    : fallback;
 
 type Raw = Record<string, unknown>;
 const obj = (v: unknown): Raw => (v && typeof v === "object" && !Array.isArray(v) ? (v as Raw) : {});
@@ -75,11 +85,7 @@ export function sanitize(raw: unknown): Settings {
       mode: pick(m.mode, ["2d", "3d"] as const, d.map.mode),
       trailS: pick(m.trailS, TRAIL_CHOICES, d.map.trailS as (typeof TRAIL_CHOICES)[number]),
       groundUnits: bool(m.groundUnits, d.map.groundUnits),
-      playbackSpeed: pick(
-        m.playbackSpeed,
-        PLAYBACK_SPEEDS,
-        d.map.playbackSpeed as (typeof PLAYBACK_SPEEDS)[number],
-      ),
+      playbackSpeed: playSpeed(m.playbackSpeed, d.map.playbackSpeed),
       // Added within version 1: older stored settings simply get the default.
       infoPanel: bool(m.infoPanel, d.map.infoPanel),
     },

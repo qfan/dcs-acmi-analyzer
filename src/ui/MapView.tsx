@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { firstActivity, type MapData } from "../map/mapData.ts";
 import { settingsStore, useSettings } from "../settings/react.ts";
-import { type MapMode, PLAYBACK_SPEEDS, TRAIL_CHOICES } from "../settings/schema.ts";
+import { type MapMode, TRAIL_CHOICES } from "../settings/schema.ts";
 import { Jog } from "./Jog.tsx";
-import { type JogState, jogRate } from "./jog.ts";
+import { fmtRate, type JogState, jogRate, playRateOf, speedChoices } from "./jog.ts";
 import { Map2D } from "./Map2D.tsx";
 import { SelectionPanel } from "./SelectionPanel.tsx";
 import { type FollowMode, hasWebGL2, type MapFocus, type PickRole, type ViewProps } from "./viewTypes.ts";
@@ -90,11 +90,11 @@ export function MapView({
       setFollow("off");
   }, [follow, primary, secondary]);
 
-  // Playback: normal play at the chosen speed, or the jog control's rate (negative = backwards) while
-  // it's held or latched. Time and rate are mirrored in refs so the animation loop reads them
-  // synchronously; the loop runs only while the rate is non-zero.
+  // Playback: the play button's speed (negative = backwards; latching the jog sets it), or the jog
+  // control's rate while it's held. Time and rate are mirrored in refs so the animation loop reads
+  // them synchronously; the loop runs only while the rate is non-zero.
   const [jog, setJog] = useState<JogState | null>(null);
-  const rate = jog ? jogRate(jog.dx) : playing ? speed : 0;
+  const rate = jog ? jogRate(jog.dx) : playing ? playRateOf(speed) : 0;
   const tRef = useRef(t);
   tRef.current = t;
   const rateRef = useRef(rate);
@@ -118,9 +118,8 @@ export function MapView({
         const end = atEnd ? data.timeEnd : data.timeStart;
         tRef.current = end;
         setT(end);
-        // Normal play and a latched jog stop at either end; a held jog waits there (drag back to leave).
+        // Play stops at either end; a held jog waits there (drag back to leave).
         if (!j) return setPlaying(false);
-        if (!j.holding) return setJog(null);
       } else {
         tRef.current = next;
         setT(next);
@@ -131,21 +130,28 @@ export function MapView({
     return () => cancelAnimationFrame(raf);
   }, [running, data.timeEnd, data.timeStart]);
 
-  /** Stop all motion: normal play and the jog. */
-  const stop = () => {
-    setPlaying(false);
-    setJog(null);
-  };
-  /** Play/pause button and Space: a latched jog counts as playing, so this stops it. */
+  /** Play/pause button and Space: play at the play button's speed, which may be backwards. */
   const togglePlay = () => {
-    if (jog || playing) return stop();
-    if (tRef.current >= data.timeEnd) setT(data.timeStart); // replay from the start
+    setJog(null);
+    if (playing) return setPlaying(false);
+    const r = playRateOf(speed);
+    // At the end it's heading for, start again from the other end.
+    if (r > 0 && tRef.current >= data.timeEnd) setT(data.timeStart);
+    if (r < 0 && tRef.current <= data.timeStart) setT(data.timeEnd);
     setPlaying(true);
   };
-  const onJog = (s: JogState | null) => {
+  /** A jog press takes over from play; releasing without latching leaves it stopped. */
+  const onJogHold = (s: JogState | null) => {
     if (s) setPlaying(false);
     setJog(s);
   };
+  /** A latched jog: keep playing at that rate, and make it the play button's speed. */
+  const onJogLatch = (r: number) => {
+    setJog(null);
+    update({ map: { playbackSpeed: Math.round(r * 100) / 100 } });
+    setPlaying(true);
+  };
+  const setSpeed = (r: number) => update({ map: { playbackSpeed: Math.round(r * 100) / 100 } });
 
   // Jump to a kill requested from the tables; the active view frames it.
   useEffect(() => {
@@ -297,8 +303,15 @@ export function MapView({
         object again to clear it
       </p>
       <div className="timeline">
-        <button type="button" onClick={togglePlay} aria-label={playing || jog ? "Pause" : "Play"}>
-          {playing || jog ? "❚❚" : "▶"}
+        <button
+          type="button"
+          onClick={togglePlay}
+          aria-label={playing ? "Pause" : "Play"}
+          title={
+            playing ? "Pause" : `Play at ${playRateOf(speed) < 0 ? "◀ " : ""}${fmtRate(playRateOf(speed))}`
+          }
+        >
+          {playing ? "❚❚" : playRateOf(speed) < 0 ? "◀" : "▶"}
         </button>
         <button
           type="button"
@@ -316,7 +329,14 @@ export function MapView({
         >
           +10s
         </button>
-        <Jog value={jog} onChange={onJog} />
+        <Jog
+          hold={jog}
+          speed={speed}
+          playing={playing}
+          onHold={onJogHold}
+          onLatch={onJogLatch}
+          onSpeed={setSpeed}
+        />
         <span className="time-now">{fmt(t)}</span>
         <div className="slider">
           <input
@@ -333,13 +353,13 @@ export function MapView({
           </div>
         </div>
         <select
-          value={speed}
-          onChange={(e) => update({ map: { playbackSpeed: Number(e.target.value) } })}
+          value={playRateOf(speed)}
+          onChange={(e) => setSpeed(Number(e.target.value))}
           aria-label="Playback speed"
         >
-          {PLAYBACK_SPEEDS.map((s) => (
-            <option key={s} value={s}>
-              {s}×
+          {speedChoices(speed).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
             </option>
           ))}
         </select>

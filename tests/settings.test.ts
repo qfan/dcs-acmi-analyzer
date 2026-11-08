@@ -66,6 +66,17 @@ describe("settings schema", () => {
     expect(sanitize(old).map).toEqual({ ...old.map, infoPanel: true });
     expect(sanitize({ map: { infoPanel: false } }).map.infoPanel).toBe(false);
   });
+
+  it("keeps any play speed up to 64× either way (a latched jog), 0 meaning not set", () => {
+    const speedOf = (v: unknown) => sanitize({ map: { playbackSpeed: v } }).map.playbackSpeed;
+    expect(DEFAULT_SETTINGS.map.playbackSpeed).toBe(0);
+    expect(speedOf(8)).toBe(8); // saved by earlier versions
+    expect(speedOf(-1.23456)).toBe(-1.23);
+    expect(speedOf(0)).toBe(0);
+    expect(speedOf(65)).toBe(0);
+    expect(speedOf(Number.NaN)).toBe(0);
+    expect(speedOf("4")).toBe(0);
+  });
 });
 
 describe("versioned storage", () => {

@@ -603,11 +603,15 @@ button.row-toggle {
   transition: none;
 }
 .jog-pad.latching .jog-knob,
-.jog-pad.latched .jog-knob {
+.jog-pad.playing .jog-knob {
   background: var(--accent);
 }
-.jog-pad.latched {
+.jog-pad.playing {
   border-color: var(--accent);
+}
+/* Paused with a speed set: the knob waits at that speed. */
+.jog-pad.set .jog-knob {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface));
 }
 .jog-readout {
   min-width: 92px;

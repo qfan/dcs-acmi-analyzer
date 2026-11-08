@@ -7,7 +7,6 @@ import {
   BUILT_IN_PROFILES,
   DISTANCE_UNITS,
   type DistanceUnit,
-  PLAYBACK_SPEEDS,
   type Profile,
   type Settings,
   SPEED_UNITS,
@@ -15,6 +14,7 @@ import {
   TRAIL_CHOICES,
 } from "../settings/schema.ts";
 import { exportJson, importJson } from "../settings/store.ts";
+import { playRateOf, speedChoices } from "./jog.ts";
 
 const ALT_LABEL: Record<AltitudeUnit, string> = {
   ft: "Feet",
@@ -251,12 +251,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <label>
             Playback speed
             <select
-              value={s.map.playbackSpeed}
+              value={playRateOf(s.map.playbackSpeed)}
               onChange={(e) => update({ map: { playbackSpeed: Number(e.target.value) } })}
             >
-              {PLAYBACK_SPEEDS.map((v) => (
-                <option key={v} value={v}>
-                  {v}×
+              {speedChoices(s.map.playbackSpeed).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
                 </option>
               ))}
             </select>
