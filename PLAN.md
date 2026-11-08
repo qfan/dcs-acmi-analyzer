@@ -185,4 +185,14 @@ and parser warnings with line numbers.
    when 3D is first opened. 87 MB recording renders within one 60 fps frame.
    Ground grid adapts to camera distance (<40 km: 1 km + 10 km; <300 km: 10 km; beyond: 50 km), stays centred under
    the camera target, and fades into distance fog so the horizon doesn't turn into a band of lines.
-7. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.
+7. **View settings and profiles** (`src/settings/`, `src/ui/SettingsPanel.tsx`).
+   ✅ Done 2026-11-09. One Settings object (units: altitude ft/m/both, speed kt/km/h/both, distance and grid nm/km/both;
+   label fields; map mode, trails, ground units, playback speed; time format) behind a small store used by every view.
+   Storage: one localStorage key per format version (`acmi-viewer.settings.v1`, …) holding {savedAt, settings, profiles}.
+   Load = the most recently saved key the app understands, migrated forward step by step (`MIGRATIONS` in schema.ts),
+   then sanitised field by field (bad or unknown values fall back to defaults). Keys from newer versions are never read
+   or overwritten, so downgrade-then-upgrade loses nothing. Cross-tab sync via the storage event (reload without
+   write-back). Built-in profiles (NATO / Western, Russian / Eastern, Mixed) change units only; user profiles save
+   everything; JSON export/import (refuses files from a newer version). CSV exports stay metric.
+   **To change the format:** bump SETTINGS_VERSION, add a MIGRATIONS step, update Settings/DEFAULT_SETTINGS/sanitize.
+8. **Later:** optional map tiles (2D, then 3D terrain/imagery); display-name table for DCS type names.

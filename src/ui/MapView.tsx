@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { firstActivity, type MapData, pilotAt, sampleAt } from "../map/mapData.ts";
 import { sideColor } from "../map/render.ts";
+import { settingsStore, useSettings } from "../settings/react.ts";
+import { type MapMode, PLAYBACK_SPEEDS, TRAIL_CHOICES } from "../settings/schema.ts";
+import { fmtAlt, fmtSpeed, fmtVz } from "../settings/units.ts";
 import { Map2D } from "./Map2D.tsx";
-import { fmtAlt, fmtSpeed } from "./records.ts";
 import { hasWebGL2, type MapFocus, type ViewProps } from "./viewTypes.ts";
 
 export type { MapFocus } from "./viewTypes.ts";
@@ -10,25 +12,12 @@ export type { MapFocus } from "./viewTypes.ts";
 // three.js is only downloaded when the 3D view is first opened.
 const Scene3D = lazy(() => import("./Scene3D.tsx"));
 
-type Mode = "2d" | "3d";
-const MODE_KEY = "acmi-viewer.mapMode";
-const SPEEDS = [1, 2, 4, 8, 16, 32, 64];
-const TRAILS = [
-  { s: 0, label: "No trails" },
-  { s: 15, label: "15 s trails" },
-  { s: 60, label: "1 min trails" },
-  { s: 300, label: "5 min trails" },
-];
-
-function loadMode(webgl: boolean): Mode {
-  try {
-    const m = localStorage.getItem(MODE_KEY);
-    if (m === "2d" || (m === "3d" && webgl)) return m;
-  } catch {
-    // storage unavailable: fall through to the default
-  }
-  return "2d";
-}
+const TRAIL_LABEL: Record<number, string> = {
+  0: "No trails",
+  15: "15 s trails",
+  60: "1 min trails",
+  300: "5 min trails",
+};
 
 /** The map panel: shared time, playback, selection and options, with a 2D or 3D view inside. */
 export function MapView({
@@ -41,26 +30,22 @@ export function MapView({
   focus: MapFocus | null;
 }) {
   const webgl = useMemo(hasWebGL2, []);
-  const [mode, setModeState] = useState<Mode>(() => loadMode(webgl));
+  const { settings } = useSettings();
+  const update = settingsStore.update;
+  // Remembered choices come from the settings store; 3D falls back to 2D without WebGL 2.
+  const mode: MapMode = settings.map.mode === "3d" && webgl ? "3d" : "2d";
+  const speed = settings.map.playbackSpeed;
+  const trailS = settings.map.trailS;
+  const labels = settings.labels.show;
+  const ground = settings.map.groundUnits;
+  const units = settings.units;
+
   const [t, setT] = useState(() => firstActivity(data));
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(8);
-  const [trailS, setTrailS] = useState(60);
-  const [labels, setLabels] = useState(true);
-  const [ground, setGround] = useState(true);
   const [selected, setSelected] = useState<number | null>(null);
   const [follow, setFollow] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const trackByUid = useMemo(() => new Map(data.tracks.map((tr) => [tr.uid, tr])), [data]);
-
-  const setMode = (m: Mode) => {
-    setModeState(m);
-    try {
-      localStorage.setItem(MODE_KEY, m);
-    } catch {
-      // not remembered; fine
-    }
-  };
 
   // Playback. The current time is mirrored in a ref so the animation loop reads it synchronously.
   const tRef = useRef(t);
@@ -138,6 +123,7 @@ export function MapView({
     onSelect: setSelected,
     onUserMove: () => setFollow(false),
     focus,
+    settings,
   };
 
   return (
@@ -149,7 +135,7 @@ export function MapView({
             type="button"
             className={mode === "2d" ? "on" : ""}
             aria-pressed={mode === "2d"}
-            onClick={() => setMode("2d")}
+            onClick={() => update({ map: { mode: "2d" } })}
           >
             2D
           </button>
@@ -159,7 +145,7 @@ export function MapView({
             aria-pressed={mode === "3d"}
             disabled={!webgl}
             title={webgl ? "3D view (GPU)" : "3D needs WebGL 2, which this browser or device doesn't provide"}
-            onClick={() => setMode("3d")}
+            onClick={() => update({ map: { mode: "3d" } })}
           >
             3D
           </button>
@@ -167,21 +153,30 @@ export function MapView({
         <div className="head-actions map-options">
           <select
             value={trailS}
-            onChange={(e) => setTrailS(Number(e.target.value))}
+            onChange={(e) => update({ map: { trailS: Number(e.target.value) } })}
             aria-label="Trail length"
           >
-            {TRAILS.map((x) => (
-              <option key={x.s} value={x.s}>
-                {x.label}
+            {TRAIL_CHOICES.map((s) => (
+              <option key={s} value={s}>
+                {TRAIL_LABEL[s]}
               </option>
             ))}
           </select>
           <label className="toggle">
-            <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Labels
+            <input
+              type="checkbox"
+              checked={labels}
+              onChange={(e) => update({ labels: { show: e.target.checked } })}
+            />{" "}
+            Labels
           </label>
           <label className="toggle">
-            <input type="checkbox" checked={ground} onChange={(e) => setGround(e.target.checked)} /> Ground
-            and sea units
+            <input
+              type="checkbox"
+              checked={ground}
+              onChange={(e) => update({ map: { groundUnits: e.target.checked } })}
+            />{" "}
+            Ground and sea units
           </label>
         </div>
       </div>
@@ -202,13 +197,13 @@ export function MapView({
               {sel.name}
             </div>
             <div>
-              {fmtAlt(Number.isFinite(selSample.alt) ? selSample.alt : null)}
+              {fmtAlt(Number.isFinite(selSample.alt) ? selSample.alt : null, units.altitude)}
               {Math.abs(selSample.vz) >= 2
-                ? ` · ${selSample.vz > 0 ? "climbing" : "descending"} ${Math.round(Math.abs(selSample.vz))} m/s`
+                ? ` · ${selSample.vz > 0 ? "climbing" : "descending"} ${fmtVz(selSample.vz, units.altitude)}`
                 : ""}
             </div>
             <div>
-              {fmtSpeed(selSample.speed)} ground speed · heading {Math.round(selSample.hdg)}°
+              {fmtSpeed(selSample.speed, units.speed)} ground speed · heading {Math.round(selSample.hdg)}°
             </div>
             <label className="toggle">
               <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow
@@ -259,8 +254,12 @@ export function MapView({
             {ticks}
           </div>
         </div>
-        <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} aria-label="Playback speed">
-          {SPEEDS.map((s) => (
+        <select
+          value={speed}
+          onChange={(e) => update({ map: { playbackSpeed: Number(e.target.value) } })}
+          aria-label="Playback speed"
+        >
+          {PLAYBACK_SPEEDS.map((s) => (
             <option key={s} value={s}>
               {s}×
             </option>

@@ -38,6 +38,10 @@ export interface FrameObject {
   /** Distance above the ground plane (for drop lines). */
   alt: number;
   label: string;
+  pilot: string;
+  name: string;
+  /** Ground speed, m/s. */
+  speed: number;
 }
 
 export interface FrameOptions {
@@ -80,6 +84,9 @@ export function buildFrame(d: MapData, t: number, o: FrameOptions, color: ColorF
       rot: attitude(s.hdg, s.pitch, s.roll),
       alt,
       label: `${pilot ? `${pilot} ` : ""}${tr.name}`,
+      pilot,
+      name: tr.name,
+      speed: s.speed,
     });
     const rgb = color(tr.side);
     const flying = tr.kind === "air" || tr.kind === "heli" || tr.kind === "weapon";
@@ -142,21 +149,23 @@ function appendTrail(
   }
 }
 
-/** Grid spacings in metres, finest first; each is a GridHelper in the 3D scene. */
-export const GRID_CELLS_M = [1_000, 10_000, 50_000] as const;
+/** Grid spacings in distance units (km or nm), finest first. */
+export const GRID_STEPS = [1, 10, 50] as const;
 
 /**
  * Which grids to show for a camera this far (metres) from what it looks at, and how strongly.
- * Close: 1 km lines with 10 km lines over them. Medium: 10 km only. Far: 50 km only.
+ * Close: 1-unit lines with 10-unit lines over them. Medium: 10 units only. Far: 50 units only.
+ * `unitM` is metres per unit: 1000 for km, 1852 for nautical miles. Cells are returned in metres.
  */
-export function gridLevels(cameraDistanceM: number): { cell: number; opacity: number }[] {
-  if (cameraDistanceM < 40_000)
+export function gridLevels(cameraDistanceM: number, unitM = 1000): { cell: number; opacity: number }[] {
+  const [fine, mid, coarse] = GRID_STEPS.map((s) => s * unitM) as [number, number, number];
+  if (cameraDistanceM < 40 * unitM)
     return [
-      { cell: 1_000, opacity: 0.1 },
-      { cell: 10_000, opacity: 0.24 },
+      { cell: fine, opacity: 0.1 },
+      { cell: mid, opacity: 0.24 },
     ];
-  if (cameraDistanceM < 300_000) return [{ cell: 10_000, opacity: 0.22 }];
-  return [{ cell: 50_000, opacity: 0.22 }];
+  if (cameraDistanceM < 300 * unitM) return [{ cell: mid, opacity: 0.22 }];
+  return [{ cell: coarse, opacity: 0.22 }];
 }
 
 /** Centre for a grid near `at`, snapped so its lines fall on whole multiples of the cell size. */

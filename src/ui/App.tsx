@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchSample, SAMPLES, sampleFromUrl } from "../samples.ts";
 import { type ParseOutcome, parseInWorker } from "../worker/client.ts";
+import { SettingsPanel } from "./SettingsPanel.tsx";
 import { Summary } from "./Summary.tsx";
 
 type State =
@@ -14,6 +15,7 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const settingsDialog = useRef<HTMLDialogElement>(null);
 
   const open = useCallback(async (file: Blob, name: string) => {
     cancelRef.current?.();
@@ -101,6 +103,14 @@ export function App() {
           <button type="button" className="secondary" onClick={() => void openSample("default")}>
             Load sample
           </button>
+          <button
+            type="button"
+            className="secondary"
+            aria-haspopup="dialog"
+            onClick={() => settingsDialog.current?.showModal()}
+          >
+            Settings
+          </button>
           <input
             ref={fileInput}
             type="file"
@@ -143,6 +153,10 @@ export function App() {
         )}
         {state.phase === "done" && <Summary name={state.name} outcome={state.outcome} />}
       </main>
+
+      <dialog ref={settingsDialog} className="settings-dialog" aria-label="View settings">
+        <SettingsPanel onClose={() => settingsDialog.current?.close()} />
+      </dialog>
 
       {dragging && (
         <div className="drop-overlay">

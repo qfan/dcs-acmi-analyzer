@@ -1,4 +1,5 @@
 import type { MapData } from "../map/mapData.ts";
+import type { Settings } from "../settings/schema.ts";
 
 /** A request from the tables to show an event on the map. */
 export interface MapFocus {
@@ -22,6 +23,8 @@ export interface ViewProps {
   onUserMove: () => void;
   /** Frame this object/time when it changes. */
   focus: MapFocus | null;
+  /** Units and label fields. */
+  settings: Settings;
 }
 
 export function hasWebGL2(): boolean {

@@ -6,7 +6,9 @@ import { type Analysis, type Kill, type PilotStats, pilotKey, type Shot } from "
  * No React here so it can be unit-tested.
  */
 
-export type Clock = "elapsed" | "timeOfDay";
+export type { Clock } from "../settings/schema.ts";
+
+import type { Clock } from "../settings/schema.ts";
 
 export interface Party {
   /** Scoreboard key (pilot name, or "Type (Group)"). */
@@ -188,21 +190,6 @@ export function timeOfDay(referenceTime: string | null, sec: number): string | n
 export function formatClock(clock: Clock, referenceTime: string | null, sec: number): string {
   return clock === "timeOfDay" ? (timeOfDay(referenceTime, sec) ?? formatElapsed(sec)) : formatElapsed(sec);
 }
-
-// --- Units ------------------------------------------------------------------------------------------
-
-export const fmtAlt = (m: number | null) =>
-  m === null ? "–" : `${Math.round(m).toLocaleString()} m (${Math.round(m * 3.28084).toLocaleString()} ft)`;
-export const fmtSpeed = (ms: number | null) =>
-  ms === null
-    ? "–"
-    : `${Math.round(ms * 3.6).toLocaleString()} km/h (${Math.round(ms * 1.943844).toLocaleString()} kt)`;
-export const fmtRange = (m: number | null) =>
-  m === null
-    ? "–"
-    : m < 1000
-      ? `${Math.round(m)} m`
-      : `${(m / 1000).toFixed(1)} km (${(m / 1852).toFixed(1)} nm)`;
 
 // --- CSV ----------------------------------------------------------------------------------------------
 

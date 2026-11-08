@@ -22,6 +22,11 @@ export interface DrawOptions {
   labels: boolean;
   ground: boolean;
   selectedUid: number | null;
+  /** Builds an aircraft label from pilot, type, altitude (m) and speed (m/s) in the user's units. */
+  labelFor: (pilot: string, name: string, altM: number, speedMs: number) => string;
+  /** Grid and scale bar unit: metres per unit and its name. */
+  unitM: number;
+  unitName: string;
 }
 
 export interface ScreenHit {
@@ -69,7 +74,12 @@ export function niceStep(target: number): number {
   return 10 * p;
 }
 
-const fmtDist = (m: number) => (m >= 1000 ? `${m / 1000} km` : `${m} m`);
+/** A 1-2-5 step in the user's distance unit, returned in metres. */
+export function niceStepIn(targetM: number, unitM: number): number {
+  return niceStep(targetM / unitM) * unitM;
+}
+
+const fmtUnits = (m: number, unitM: number, name: string) => `${Number((m / unitM).toPrecision(3))} ${name}`;
 
 const KILL_FADE_S = 60;
 
@@ -83,7 +93,7 @@ export function drawMap(
 ): ScreenHit[] {
   ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, v.w, v.h);
-  drawGrid(ctx, v, theme);
+  drawGrid(ctx, v, theme, o.unitM);
 
   const hits: ScreenHit[] = [];
   const labels: { text: string; x: number; y: number; first: boolean }[] = [];
@@ -137,10 +147,8 @@ export function drawMap(
     }
     if (tr.kind !== "bullseye") hits.push({ uid: tr.uid, sx, sy });
     if ((o.labels && (tr.kind === "air" || tr.kind === "heli")) || selected) {
-      const pilot = pilotAt(tr, t);
-      const altFt = Number.isFinite(s.alt) ? ` · ${Math.round((s.alt * 3.28084) / 100) / 10}k ft` : "";
       labels.push({
-        text: `${pilot ? `${pilot} ` : ""}${tr.name}${altFt}`,
+        text: o.labelFor(pilotAt(tr, t), tr.name, s.alt, s.speed),
         x: sx + 10,
         y: sy - 8,
         first: selected,
@@ -148,7 +156,7 @@ export function drawMap(
     }
   }
   drawLabels(ctx, labels, theme);
-  drawScaleBar(ctx, v, theme);
+  drawScaleBar(ctx, v, theme, o.unitM, o.unitName);
   return hits;
 }
 
@@ -171,8 +179,8 @@ export function drawLabels(
   }
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, v: View, theme: Theme) {
-  const step = niceStep(110 / v.scale);
+function drawGrid(ctx: CanvasRenderingContext2D, v: View, theme: Theme, unitM: number) {
+  const step = niceStepIn(110 / v.scale, unitM);
   const [x0, y1] = [v.cx - v.w / 2 / v.scale, v.cy + v.h / 2 / v.scale];
   const [x1, y0] = [v.cx + v.w / 2 / v.scale, v.cy - v.h / 2 / v.scale];
   ctx.strokeStyle = theme.grid;
@@ -191,8 +199,8 @@ function drawGrid(ctx: CanvasRenderingContext2D, v: View, theme: Theme) {
   ctx.stroke();
 }
 
-function drawScaleBar(ctx: CanvasRenderingContext2D, v: View, theme: Theme) {
-  const m = niceStep(120 / v.scale);
+function drawScaleBar(ctx: CanvasRenderingContext2D, v: View, theme: Theme, unitM: number, unitName: string) {
+  const m = niceStepIn(120 / v.scale, unitM);
   const px = m * v.scale;
   const x = 12;
   const y = v.h - 14;
@@ -206,7 +214,8 @@ function drawScaleBar(ctx: CanvasRenderingContext2D, v: View, theme: Theme) {
   ctx.stroke();
   ctx.fillStyle = theme.gridText;
   ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText(`${fmtDist(m)} · grid ${fmtDist(niceStep(110 / v.scale))}`, x + px + 8, y);
+  const grid = niceStepIn(110 / v.scale, unitM);
+  ctx.fillText(`${fmtUnits(m, unitM, unitName)} · grid ${fmtUnits(grid, unitM, unitName)}`, x + px + 8, y);
 }
 
 function drawTrail(

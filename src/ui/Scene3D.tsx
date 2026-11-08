@@ -37,11 +37,11 @@ import {
   type ColorFn,
   fogRange,
   framingCamera,
-  GRID_CELLS_M,
   gridLevels,
   snapGridCentre,
   toWorld,
 } from "../scene/frame.ts";
+import { distanceUnitM, distanceUnitName, fmtDist, labelText } from "../settings/units.ts";
 import { readTheme } from "./Map2D.tsx";
 import type { ViewProps } from "./viewTypes.ts";
 
@@ -76,6 +76,7 @@ interface Gl {
   drops: LineSegments;
   /** Ground grids by cell size (m); which ones show depends on the camera distance. */
   grids: Map<number, GridHelper>;
+  gridColor: Color;
   theme: Theme;
   dispose: () => void;
 }
@@ -149,7 +150,7 @@ export default function Scene3D(props: ViewProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: these props are read through propsRef when drawing
   useEffect(
     () => renderRef.current(),
-    [props.t, props.trailS, props.labels, props.ground, props.selected, props.follow],
+    [props.t, props.trailS, props.labels, props.ground, props.selected, props.follow, props.settings],
   );
 
   // Follow: move the orbit target with the selected object, keeping the camera's offset.
@@ -301,20 +302,8 @@ function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
   const ground = new Mesh(new PlaneGeometry(6_000_000, 6_000_000).rotateX(-Math.PI / 2), groundMat);
   scene.add(ground);
   const gridColor = new Color(theme.gridText);
+  // Grids are created on first use for each cell size (km or nm), see updateGrids().
   const grids = new Map<number, GridHelper>();
-  for (const cell of GRID_CELLS_M) {
-    // About 200 cells across, so each grid reaches well past the fog at the distances it is shown.
-    const divisions = cell >= 50_000 ? 100 : 200;
-    const g = new GridHelper(cell * divisions, divisions, gridColor, gridColor);
-    const mats = Array.isArray(g.material) ? g.material : [g.material];
-    for (const m of mats) {
-      m.transparent = true;
-      m.depthWrite = false;
-    }
-    g.visible = false;
-    scene.add(g);
-    grids.set(cell, g);
-  }
 
   // Aircraft, weapons and trails ignore the fog: they must stay crisp at any distance.
   const lit = new MeshLambertMaterial({ side: DoubleSide, fog: false });
@@ -368,6 +357,7 @@ function createScene(canvas: HTMLCanvasElement, data: MapData): Gl {
     trail,
     drops,
     grids,
+    gridColor,
     theme,
     dispose: () => {
       controls.dispose();
@@ -490,7 +480,8 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
 
   setLines(gl.trail, f.trail);
   setLines(gl.drops, f.drops);
-  const gridCell = updateGrids(gl);
+  const unitM = distanceUnitM(p.settings.units.distance);
+  const grid = updateGrids(gl, unitM);
   renderer.render(gl.scene, camera);
 
   // Labels and click targets, projected to the screen.
@@ -507,14 +498,9 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
     hits.push({ uid: o.uid, sx, sy });
     const selected = o.uid === p.selected;
     if ((p.labels && (o.kind === "air" || o.kind === "heli")) || selected) {
-      const altFt = `${Math.round((o.alt * 3.28084) / 100) / 10}k ft`;
-      const km = cam.distanceTo(o.pos) / 1000;
-      labels.push({
-        text: `${o.label} · ${altFt}${selected ? ` · ${km.toFixed(1)} km away` : ""}`,
-        x: sx + 12,
-        y: sy - 10,
-        first: selected,
-      });
+      const text = labelText(o.pilot, o.name, o.alt, o.speed, p.settings);
+      const away = selected ? ` · ${fmtDist(cam.distanceTo(o.pos), p.settings.units.distance)} away` : "";
+      labels.push({ text: `${text}${away}`, x: sx + 12, y: sy - 10, first: selected });
     }
   }
   hitsRef.current = hits;
@@ -526,11 +512,12 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
       ctx.clearRect(0, 0, w, h);
       drawLabels(ctx, labels, gl.theme);
       // Grid spacing note, bottom left (like the 2D map's scale text).
-      const fine = gl.grids.get(GRID_CELLS_M[0])?.visible;
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillStyle = gl.theme.gridText;
+      const [coarse, fine] = grid.cells;
+      const name = distanceUnitName(p.settings.units.distance);
       ctx.fillText(
-        `grid ${gridCell / 1000} km${fine ? ` · fine ${GRID_CELLS_M[0] / 1000} km` : ""}`,
+        `grid ${(coarse ?? 0) / unitM} ${name}${fine !== undefined ? ` · fine ${fine / unitM} ${name}` : ""}`,
         12,
         h - 12,
       );
@@ -539,13 +526,26 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
 }
 
 /**
- * Show the grids that suit the camera distance, centred under what the camera looks at, and set
- * the fog to match. Returns the coarsest visible spacing (for the on-screen note).
+ * Show the grids that suit the camera distance (in the user's km or nm), centred under what the
+ * camera looks at, and set the fog to match. Returns the visible cell sizes, coarsest first.
  */
-function updateGrids(gl: Gl): number {
+function updateGrids(gl: Gl, unitM: number): { cells: number[] } {
   const d = gl.camera.position.distanceTo(gl.controls.target);
-  const levels = gridLevels(d);
+  const levels = gridLevels(d, unitM);
   const target = gl.controls.target;
+  for (const level of levels) {
+    if (gl.grids.has(level.cell)) continue;
+    // About 100–200 cells across, so each grid reaches past the fog at the distances it is shown.
+    const divisions = level.cell >= 50 * unitM ? 100 : 200;
+    const g = new GridHelper(level.cell * divisions, divisions, gl.gridColor, gl.gridColor);
+    const mats = Array.isArray(g.material) ? g.material : [g.material];
+    for (const m of mats) {
+      m.transparent = true;
+      m.depthWrite = false;
+    }
+    gl.scene.add(g);
+    gl.grids.set(level.cell, g);
+  }
   for (const [cell, g] of gl.grids) {
     const level = levels.find((l) => l.cell === cell);
     g.visible = level !== undefined;
@@ -559,7 +559,7 @@ function updateGrids(gl: Gl): number {
     gl.scene.fog.near = f.near;
     gl.scene.fog.far = f.far;
   }
-  return levels[levels.length - 1]?.cell ?? 0;
+  return { cells: levels.map((l) => l.cell).reverse() };
 }
 
 function ensureCapacity(gl: Gl, kind: MapKind, n: number): InstancedMesh {

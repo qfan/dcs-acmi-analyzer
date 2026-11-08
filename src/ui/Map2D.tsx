@@ -10,6 +10,7 @@ import {
   toWorld,
   type View,
 } from "../map/render.ts";
+import { distanceUnitM, distanceUnitName, labelText } from "../settings/units.ts";
 import type { ViewProps } from "./viewTypes.ts";
 
 /** Top-down 2D canvas map: light enough for any device. */
@@ -24,6 +25,7 @@ export function Map2D({
   onSelect,
   onUserMove,
   focus,
+  settings,
 }: ViewProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -77,9 +79,17 @@ export function Map2D({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const opts: DrawOptions = { trailS, labels, ground, selectedUid: selected };
+    const opts: DrawOptions = {
+      trailS,
+      labels,
+      ground,
+      selectedUid: selected,
+      labelFor: (pilot, name, alt, speed) => labelText(pilot, name, alt, speed, settings),
+      unitM: distanceUnitM(settings.units.distance),
+      unitName: distanceUnitName(settings.units.distance),
+    };
     hitsRef.current = drawMap(ctx, data, view, t, opts, readTheme());
-  }, [data, view, t, trailS, labels, ground, selected]);
+  }, [data, view, t, trailS, labels, ground, selected, settings]);
 
   const zoomAt = useCallback((sx: number, sy: number, factor: number) => {
     setView((v) => {

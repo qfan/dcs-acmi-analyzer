@@ -56,6 +56,9 @@ describe("3D orientation (X east, Y up, Z south)", () => {
     expect(cells(5_000)).toEqual([1_000, 10_000]); // inside a dogfight
     expect(cells(100_000)).toEqual([10_000]); // a whole engagement area
     expect(cells(800_000)).toEqual([50_000]); // the theatre
+    // Nautical miles: 1, 10 and 50 nm cells.
+    expect(gridLevels(5_000, 1852).map((l) => l.cell)).toEqual([1852, 18520]);
+    expect(gridLevels(800_000, 1852).map((l) => l.cell)).toEqual([92600]);
     expect(snapGridCentre(12_345, 10_000)).toBe(10_000);
     expect(snapGridCentre(-26_000, 50_000)).toBe(-50_000);
     const near = fogRange(10_000);

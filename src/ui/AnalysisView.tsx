@@ -1,13 +1,13 @@
 import { Fragment, useMemo, useState } from "react";
 import type { RecordingSummary } from "../acmi/summary.ts";
 import type { Analysis, Kill, PilotStats } from "../analysis/analyze.ts";
+import { settingsStore, useSettings } from "../settings/react.ts";
+import type { Settings } from "../settings/schema.ts";
+import { fmtAlt, fmtDist, fmtShortDist, fmtSpeed } from "../settings/units.ts";
 import {
   type Clock,
   exportBaseName,
   type Filter,
-  fmtAlt,
-  fmtRange,
-  fmtSpeed,
   formatClock,
   formatElapsed,
   type KillRecord,
@@ -33,13 +33,14 @@ interface Props {
   summary: RecordingSummary;
   analysis: Analysis;
   fileName: string;
-  clock: Clock;
-  setClock: (c: Clock) => void;
   /** Present when a map is available. */
   onShowOnMap?: (k: Kill) => void;
 }
 
-export function AnalysisView({ summary, analysis, fileName, clock, setClock, onShowOnMap }: Props) {
+export function AnalysisView({ summary, analysis, fileName, onShowOnMap }: Props) {
+  const { settings } = useSettings();
+  const clock = settings.time.clock;
+  const setClock = (c: Clock) => settingsStore.update({ time: { clock: c } });
   const [filter, setFilter] = useState<Filter>(NO_FILTER);
   const kills = useMemo(() => killRecords(summary, analysis), [summary, analysis]);
   const shots = useMemo(() => shotRecords(summary, analysis), [summary, analysis]);
@@ -294,6 +295,8 @@ function KillDetailsPanel({
   refTime: string | null;
   onShowOnMap?: (k: Kill) => void;
 }) {
+  const { settings } = useSettings();
+  const u: Settings["units"] = settings.units;
   const k = r.kill;
   const d = k.details;
   const tod = timeOfDay(refTime, k.time);
@@ -308,9 +311,9 @@ function KillDetailsPanel({
         {k.cause === "weapon" && d ? (
           <>
             <strong>{partyLabel(r.killer) || "An unknown shooter"}</strong> fired {article(r.weapon)}{" "}
-            <strong>{r.weapon}</strong> at {fmt(d.launchTime)} from {fmtRange(d.launchRangeM)}. It reached{" "}
-            <strong>{partyLabel(r.victim)}</strong> {d.flightTimeS.toFixed(1)} s later, passing within{" "}
-            {Math.round(d.missDistanceM)} m
+            <strong>{r.weapon}</strong> at {fmt(d.launchTime)} from {fmtDist(d.launchRangeM, u.distance)}. It
+            reached <strong>{partyLabel(r.victim)}</strong> {d.flightTimeS.toFixed(1)} s later, passing within{" "}
+            {fmtShortDist(d.missDistanceM, u.altitude)}
             {k.secondsAfterHit !== null && k.secondsAfterHit > 0.5
               ? `, and the target went down ${k.secondsAfterHit.toFixed(1)} s after that`
               : ""}
@@ -337,11 +340,11 @@ function KillDetailsPanel({
           <>
             <dt>Shooter at launch</dt>
             <dd>
-              {fmtAlt(d.shooterAltM)}, {fmtSpeed(d.shooterSpeedMs)}
+              {fmtAlt(d.shooterAltM, u.altitude)}, {fmtSpeed(d.shooterSpeedMs, u.speed)}
             </dd>
             <dt>Target at launch</dt>
             <dd>
-              {fmtAlt(d.victimAltM)}, {fmtSpeed(d.victimSpeedMs)}
+              {fmtAlt(d.victimAltM, u.altitude)}, {fmtSpeed(d.victimSpeedMs, u.speed)}
             </dd>
           </>
         )}
