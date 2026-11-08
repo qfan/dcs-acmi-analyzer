@@ -1,0 +1,7 @@
+# Supply-chain protection.
+# Refuse any package version published less than 24 hours ago (value is in minutes).
+minimumReleaseAge: 1440
+
+# Dependency lifecycle (install/build) scripts are blocked unless listed here.
+# Keep this empty unless a package genuinely needs one.
+allowBuilds: {}

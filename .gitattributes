@@ -1,0 +1,5 @@
+# Normalise text files to LF in the repository and working tree.
+* text=auto eol=lf
+
+# Recordings and fixtures must stay byte-exact (tests check sizes and cut-off line endings).
+*.acmi binary
