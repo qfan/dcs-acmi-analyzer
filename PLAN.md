@@ -162,4 +162,8 @@ and parser warnings with line numbers.
    ✅ Done 2026-11-08: kill log, pilot scoreboard, shots table (gun bursts optional), notices for protected recordings
    and for removals that aren't losses. See §3 for rules and calibration. 44 tests.
 4. **UI polish:** filters (by pilot or coalition), click a kill to see its details, export the log to CSV.
+   ✅ Done 2026-11-08: filter bar (side, pilot, multi-word search; clicking a pilot in the scoreboard filters to them),
+   expandable kill rows (launch range, weapon flight time, miss distance, both aircraft's altitude/speed at launch, in
+   metric and imperial, confidence explained), CSV export of what is shown for kills/shots/pilots (UTF-8 with BOM for
+   Excel; formula-like text neutralised), switch between time since start and in-mission time of day. 51 tests.
 5. **Later:** 2D map + timeline, then 3D.

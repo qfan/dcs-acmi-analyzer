@@ -104,6 +104,27 @@ export interface Kill {
   confidence: Confidence;
   /** For collisions: the other object. */
   otherUid: number | null;
+  /** Engagement geometry for weapon kills (null for other causes). */
+  details: KillDetails | null;
+}
+
+export interface KillDetails {
+  /** When the deciding weapon (or round) was launched. */
+  launchTime: number;
+  /** Seconds from launch to the deciding hit. */
+  flightTimeS: number;
+  /** Distance between shooter and victim at launch. */
+  launchRangeM: number | null;
+  missDistanceM: number;
+  shooterAltM: number | null;
+  shooterSpeedMs: number | null;
+  victimAltM: number | null;
+  victimSpeedMs: number;
+}
+
+/** Scoreboard key: the pilot name, or "Type (Group)" for units without one. Shared with the UI. */
+export function pilotKey(name: string, group: string, pilot: string): string {
+  return pilot || `${name}${group ? ` (${group})` : ""}`;
 }
 
 export interface PilotStats {
@@ -387,6 +408,11 @@ export function analyze(rec: Recording): Analysis {
       // A round can be logged as removed a frame after its victim; that still counts as 0 s.
       const dt = Math.max(0, deathTime - decisive.time);
       const killerObj = killer ? (objs[killer.uid] as AcmiObject) : null;
+      // The victim object alive at launch (it may be an earlier life of a glitch chain).
+      const launch = weapon.createdAt;
+      const victimAtLaunch = lives.find((l) => geo.alive(l, launch)) ?? last;
+      const pk = killerObj ? geo.pos(killerObj, launch) : null;
+      const pv = geo.pos(victimAtLaunch, launch);
       kills.push({
         time: deathTime,
         victimUid: last.uid,
@@ -402,6 +428,16 @@ export function analyze(rec: Recording): Analysis {
         ejected,
         confidence: dt <= 2 && killer?.confidence === "high" ? "high" : dt <= 30 && killer ? "medium" : "low",
         otherUid: null,
+        details: {
+          launchTime: launch,
+          flightTimeS: decisive.time - launch,
+          launchRangeM: pk && pv ? dist(pk, pv) : null,
+          missDistanceM: decisive.missDistanceM,
+          shooterAltM: killerObj ? geo.altAt(killerObj, launch) : null,
+          shooterSpeedMs: killerObj ? geo.speed(killerObj, launch) : null,
+          victimAltM: geo.altAt(victimAtLaunch, launch),
+          victimSpeedMs: geo.speed(victimAtLaunch, launch),
+        },
       });
       continue;
     }
@@ -420,6 +456,7 @@ export function analyze(rec: Recording): Analysis {
       ejected,
       confidence: "low",
       otherUid: null,
+      details: null,
     });
   }
 
@@ -540,7 +577,7 @@ const MAX_TARGET_SPEED_MS = 1200;
 function pilotStats(rec: Recording, shots: Shot[], kills: Kill[]): PilotStats[] {
   const objs = rec.objects;
   const stats = new Map<string, PilotStats>();
-  const keyFor = (o: AcmiObject, pilot: string) => pilot || `${o.name}${o.group ? ` (${o.group})` : ""}`;
+  const keyFor = (o: AcmiObject, pilot: string) => pilotKey(o.name, o.group, pilot);
   const get = (uid: number, pilot: string): PilotStats => {
     const o = objs[uid] as AcmiObject;
     const key = keyFor(o, pilot);

@@ -29,6 +29,19 @@ describe("analysis: built-in 2v1 sample (outcome checked by hand)", async () => 
     expect(a.kills.every((k) => !k.friendly && k.cause === "weapon")).toBe(true);
   });
 
+  it("records engagement details for the AIM-9X kill", () => {
+    const d = a.kills[0]?.details;
+    expect(d?.launchTime).toBe(62.55);
+    expect(d?.flightTimeS).toBeCloseTo(3.13, 2);
+    expect(d?.missDistanceM).toBeLessThan(20);
+    // A heat-seeker shot from inside 3 km; both jets at roughly 6 km altitude.
+    expect(d?.launchRangeM).toBeGreaterThan(300);
+    expect(d?.launchRangeM).toBeLessThan(3000);
+    expect(d?.shooterAltM).toBeGreaterThan(5000);
+    expect(d?.victimSpeedMs).toBeGreaterThan(100);
+    expect(a.kills.every((k) => (k.cause === "weapon") === (k.details !== null))).toBe(true);
+  });
+
   it("attributes every missile to its launcher", () => {
     const missiles = a.shots.filter((s) => !s.isGun).map((s) => [name(r, s.weaponUid), s.shooter?.pilot]);
     expect(missiles).toEqual([

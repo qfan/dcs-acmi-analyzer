@@ -60,7 +60,7 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
         )}
       </section>
 
-      {outcome.analysis && <AnalysisView summary={r} analysis={outcome.analysis} />}
+      {outcome.analysis && <AnalysisView summary={r} analysis={outcome.analysis} fileName={name} />}
       {outcome.analysisError && (
         <section className="card">
           <p className="notice">The kill analysis failed: {outcome.analysisError}</p>
