@@ -13,17 +13,24 @@ import {
 } from "../analysis/analyze.ts";
 import { dist, Geo } from "../analysis/geo.ts";
 import { weaponLabel } from "../ui/records.ts";
+import { speedOfSoundMs } from "./atmosphere.ts";
+import { buildShotTrack, DecoyIndex, measureMissileFlight } from "./flight.ts";
 import {
   type AltitudeRelation,
   type AspectCategory,
+  BVR_RANGE_M,
   type ClassificationThresholds,
   DEFAULT_THRESHOLDS,
+  EXTRACTOR_VERSION,
   type EngagementDomain,
   type EngagementOutcome,
   type FileAnalytics,
   type InitialCondition,
   type MissileEngagement,
+  type MissileFlight,
   type PlatformSnapshot,
+  type RecordingMeta,
+  type ShotTrack,
   type TargetSource,
   type WeaponClass,
 } from "./model.ts";
@@ -41,12 +48,7 @@ const angleDeg = (a: V3, b: V3): number => {
 };
 
 /** Speed of sound (m/s) at altitude h (m MSL) using the International Standard Atmosphere. */
-export function speedOfSoundMs(altM: number | null): number {
-  const h = altM !== null && Number.isFinite(altM) ? Math.max(0, Math.min(30000, altM)) : 0;
-  // Troposphere up to 11 km: T = 288.15 - 0.0065 * h; lower stratosphere 11–20 km: T = 216.65 K
-  const tempK = h <= 11000 ? 288.15 - 0.0065 * h : 216.65;
-  return Math.sqrt(1.4 * 287.05 * tempK);
-}
+export { speedOfSoundMs } from "./atmosphere.ts";
 
 /** Classify target aspect angle (0° = tail-on, 90° = beam, 180° = head-on) into a tactical bucket. */
 export function classifyAspect(aspectDeg: number): AspectCategory {
@@ -357,6 +359,25 @@ export function computeInitialCondition(
   };
 }
 
+/** Parse DCS version ("2.9.15.9599") and patch ("2.9.15") from DataSource header string. */
+export function parseDcsVersion(dataSource: string | undefined): {
+  dcsVersion: string | null;
+  dcsPatch: string | null;
+} {
+  if (!dataSource) return { dcsVersion: null, dcsPatch: null };
+  const m = dataSource.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/);
+  if (!m) {
+    const trimmed = dataSource.trim();
+    return { dcsVersion: trimmed || null, dcsPatch: trimmed || null };
+  }
+  const dcsVersion = m[1]!;
+  const patchMatch = dcsVersion.match(/^(\d+\.\d+\.\d+)/);
+  return {
+    dcsVersion,
+    dcsPatch: patchMatch ? patchMatch[1]! : dcsVersion,
+  };
+}
+
 /**
  * Extract all missile and weapon engagements with full initial conditions from a parsed Recording.
  */
@@ -370,7 +391,10 @@ export function extractFileAnalytics(
   const t0 = performance.now();
   const analysis = existingAnalysis ?? analyze(rec);
   const geo = new Geo(rec);
+  const decoyIndex = new DecoyIndex(rec, geo);
   const objs = rec.objects;
+  const { dcsVersion, dcsPatch } = parseDcsVersion(rec.globals.DataSource);
+  const recordedAt = rec.globals.RecordingTime || rec.referenceTime || null;
 
   // Map remove/re-add glitch chains so we can find the victim life alive at weapon launch time
   const prevLife = new Map<number, number>();
@@ -544,6 +568,23 @@ export function extractFileAnalytics(
       if (ps && pt) fPoleRangeM = dist(ps, pt);
     }
 
+    const targetLives: AcmiObject[] = [];
+    if (targetObjAtLaunch) targetLives.push(targetObjAtLaunch);
+    if (targetObjAtEnd && targetObjAtEnd !== targetObjAtLaunch) targetLives.push(targetObjAtEnd);
+
+    const isAirDefenseOrA2AMissile =
+      !shot.isGun && (domain === "A2A" || domain === "SAM" || domain === "Intercept");
+    const flight: MissileFlight | null = isAirDefenseOrA2AMissile
+      ? measureMissileFlight(geo, w, targetLives, shot.time)
+      : null;
+    if (missDistanceM === null && flight?.cpaM !== null && flight?.cpaM !== undefined) {
+      missDistanceM = flight.cpaM;
+    }
+    const track: ShotTrack | null =
+      isAirDefenseOrA2AMissile && (shooterObj || targetLives.length > 0)
+        ? buildShotTrack(rec, geo, decoyIndex, w, shooterObj, targetLives, shot.time)
+        : null;
+
     const friendlyFire =
       kill?.friendly ??
       Boolean(
@@ -582,6 +623,10 @@ export function extractFileAnalytics(
       target: targetSnap,
       targetSource,
       initial,
+      dcsPatch,
+      recordedAt,
+      flight,
+      track,
     });
   });
 
@@ -594,6 +639,10 @@ export function extractFileAnalytics(
     const launchTime = kill.details?.launchTime ?? w.createdAt;
     const shooterObj = kill.killer ? (objs[kill.killer.uid] as AcmiObject) : null;
     const targetObjAtLaunch = lifeAliveAt(kill.victimUid, launchTime);
+    const targetObjAtEnd = objs[kill.victimUid] as AcmiObject;
+    const targetLives: AcmiObject[] = [targetObjAtLaunch];
+    if (targetObjAtEnd && targetObjAtEnd !== targetObjAtLaunch) targetLives.push(targetObjAtEnd);
+
     const shooterSnap = shooterObj
       ? buildSnapshot(rec, shooterObj, launchTime, kill.killer?.pilot)
       : null;
@@ -602,6 +651,14 @@ export function extractFileAnalytics(
     const domain = engagementDomain(wClass, shooterSnap, targetSnap);
     const initial = shooterObj
       ? computeInitialCondition(rec, shooterObj, targetObjAtLaunch, launchTime)
+      : null;
+    const isAirDefenseOrA2AMissile =
+      !kill.isGun && (domain === "A2A" || domain === "SAM" || domain === "Intercept");
+    const flight: MissileFlight | null = isAirDefenseOrA2AMissile
+      ? measureMissileFlight(geo, w, targetLives, launchTime)
+      : null;
+    const track: ShotTrack | null = isAirDefenseOrA2AMissile
+      ? buildShotTrack(rec, geo, decoyIndex, w, shooterObj, targetLives, launchTime)
       : null;
 
     engagements.push({
@@ -620,7 +677,7 @@ export function extractFileAnalytics(
       endTime: w.removedAt,
       killTime: kill.time,
       flightTimeS: kill.details?.flightTimeS ?? null,
-      missDistanceM: kill.details?.missDistanceM ?? null,
+      missDistanceM: kill.details?.missDistanceM ?? flight?.cpaM ?? null,
       fPoleRangeM: null,
       outcome: "kill",
       isKill: true,
@@ -633,10 +690,30 @@ export function extractFileAnalytics(
       target: targetSnap,
       targetSource: "kill",
       initial,
+      dcsPatch,
+      recordedAt,
+      flight,
+      track,
     });
   });
 
   engagements.sort((a, b) => a.launchTime - b.launchTime);
+
+  const durationS = Math.max(0, rec.timeEnd - rec.timeStart);
+  const a2aMissileShots = engagements.filter((e) => e.domain === "A2A" && !e.isGun).length;
+  const bvrShots = engagements.filter(
+    (e) => e.domain === "A2A" && !e.isGun && (e.initial?.slantRangeM ?? 0) >= BVR_RANGE_M,
+  ).length;
+  const meta: RecordingMeta = {
+    dcsVersion,
+    dcsPatch,
+    recorder: rec.globals.DataRecorder || null,
+    recordedAt,
+    author: rec.globals.Author || null,
+    sessionKey: `${recordedAt ?? fileName}|${missionTitle}|${Math.round(durationS / 10) * 10}`,
+    a2aMissileShots,
+    bvrShots,
+  };
 
   return {
     fileId,
@@ -645,12 +722,14 @@ export function extractFileAnalytics(
     missionTitle,
     theater: rec.globals.Theater || "",
     referenceTime: rec.referenceTime,
-    durationS: Math.max(0, rec.timeEnd - rec.timeStart),
+    durationS,
     aircraftCount: objs.filter(isAircraft).length,
     weaponsReleasedCount: objs.filter(isWeapon).length,
     scrambledObjects: analysis.scrambled.objects,
     protectedHeader: analysis.scrambled.protectedHeader,
     engagements,
     parseMs: performance.now() - t0,
+    meta,
+    extractorVersion: EXTRACTOR_VERSION,
   };
 }

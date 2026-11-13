@@ -1,3 +1,17 @@
+import {
+  analyzeNotchGate,
+  analyzeShotTactics,
+  buildPilotReports,
+  DEFEAT_MODE_ORDER,
+  type DefeatMode,
+  DEFENSE_TYPE_ORDER,
+  deduplicateFiles,
+  type NotchGateAnalysis,
+  type PilotReport,
+  type ShotTacticalMetrics,
+  type TargetDefenseType,
+  wilsonInterval,
+} from "./derive.ts";
 import { classifyAltitudeRelation } from "./extract.ts";
 import {
   ALT_RELATION_ORDER,
@@ -9,7 +23,7 @@ import {
   type EngagementDomain,
   type FileAnalytics,
   type MissileEngagement,
-   type WeaponClass,
+  type WeaponClass,
 } from "./model.ts";
 
 export interface AnalyticsQuery {
@@ -25,6 +39,8 @@ export interface AnalyticsQuery {
   aspects: AspectCategory[];
   /** Altitude relations: empty = all relations. */
   altitudeRelations: AltitudeRelation[];
+  /** Filter by DCS patch version (e.g. ["2.9.15"]); empty = all versions. */
+  dcsPatches: string[];
   /** Shooter side/color: "" = all. */
   shooterSide: string;
   /** Shooter aircraft name: "" = all. */
@@ -49,6 +65,12 @@ export interface AnalyticsQuery {
   confirmedTargetsOnly: boolean;
   /** Minimum attribution confidence. */
   minConfidence: "low" | "medium" | "high";
+  /** Minimum number of BVR missile shots (>10 nm) in a file to include it (0 = include all files). */
+  minFileBvrShots: number;
+  /** Automatically skip duplicate copies of the same recording session (default true). */
+  deduplicateSessions: boolean;
+  /** User-adjustable notch gate half-angle around 90° beam (degrees, default 15°). */
+  notchGateDeg: number;
   /** Dynamic thresholds for Co-Altitude band and High/Low altitude floor. */
   thresholds: ClassificationThresholds;
 }
@@ -60,6 +82,7 @@ export const DEFAULT_QUERY: AnalyticsQuery = {
   weaponNames: [],
   aspects: [],
   altitudeRelations: [],
+  dcsPatches: [],
   shooterSide: "",
   shooterAircraft: "",
   targetAircraft: "",
@@ -74,6 +97,9 @@ export const DEFAULT_QUERY: AnalyticsQuery = {
   excludeFriendlyFire: true,
   confirmedTargetsOnly: false,
   minConfidence: "low",
+  minFileBvrShots: 0,
+  deduplicateSessions: true,
+  notchGateDeg: 15,
   thresholds: { ...DEFAULT_THRESHOLDS },
 };
 
@@ -143,6 +169,25 @@ export interface DatasetFacets {
   shooterAircraft: string[];
   targetAircraft: string[];
   sides: string[];
+  dcsPatches: string[];
+}
+
+export interface DefeatModeSummary {
+  mode: DefeatMode;
+  count: number;
+  share: number;
+  medianRangeM: number | null;
+  medianEndMach: number | null;
+}
+
+export interface DefenseTypeSummary {
+  defense: TargetDefenseType;
+  shots: number;
+  kills: number;
+  survived: number;
+  survivalRate: number | null;
+  survivalCi: { lo: number; hi: number } | null;
+  medianReactionS: number | null;
 }
 
 export interface QueryResult {
@@ -150,12 +195,19 @@ export interface QueryResult {
   engagements: MissileEngagement[];
   /** Subset of matching engagements where `isKill === true`. */
   kills: MissileEngagement[];
+  /** Per-shot derived tactical metrics keyed by engagement.id. */
+  tacticsById: Map<string, ShotTacticalMetrics>;
+  /** File IDs skipped as duplicate session recordings. */
+  duplicateFileIds: Set<string>;
   kpis: {
     totalShots: number;
     shotsWithTarget: number;
     totalHits: number;
     totalKills: number;
     pk: number | null;
+    pkCi: { lo: number; hi: number } | null;
+    diedUnawareCount: number;
+    diedUnawareShare: number | null;
     medianKillRangeM: number | null;
     meanKillRangeM: number | null;
     p25KillRangeM: number | null;
@@ -180,6 +232,10 @@ export interface QueryResult {
   rangeHistogram: RangeBin[];
   weaponBreakdown: WeaponSummary[];
   aircraftBreakdown: AircraftSummary[];
+  defeatBreakdown: DefeatModeSummary[];
+  defenseBreakdown: DefenseTypeSummary[];
+  notchAnalysis: NotchGateAnalysis;
+  pilotReports: PilotReport[];
   facets: DatasetFacets;
 }
 
@@ -212,11 +268,7 @@ export function withThresholds(
   thresholds: ClassificationThresholds,
 ): MissileEngagement {
   if (!e.initial) return e;
-  const altRel = classifyAltitudeRelation(
-    e.shooter?.altM ?? null,
-    e.target?.altM ?? null,
-    thresholds,
-  );
+  const altRel = classifyAltitudeRelation(e.shooter?.altM ?? null, e.target?.altM ?? null, thresholds);
   if (altRel === e.initial.altitudeRelation) return e;
   return {
     ...e,
@@ -263,18 +315,29 @@ export function runAnalyticsQuery(
   binCount = 16,
 ): QueryResult {
   const enabledSet = query.enabledFileIds ? new Set(query.enabledFileIds) : null;
-  const activeFiles = enabledSet ? files.filter((f) => enabledSet.has(f.fileId)) : files;
+  // Apply the user's file selection first, then de-duplicate, so disabling one copy of a
+  // session falls back to another enabled copy instead of hiding both.
+  const selectedFiles = files.filter((f) => {
+    if (enabledSet && !enabledSet.has(f.fileId)) return false;
+    if (query.minFileBvrShots > 0 && (f.meta?.bvrShots ?? 0) < query.minFileBvrShots) return false;
+    return true;
+  });
+  const { unique: activeFiles, duplicateIds } = query.deduplicateSessions
+    ? deduplicateFiles(selectedFiles)
+    : { unique: selectedFiles, duplicateIds: new Set<string>() };
 
   // Collect facet options from active files (respecting only domain and gun toggles so dropdowns stay useful)
   const facetWeapons = new Set<string>();
   const facetShooters = new Set<string>();
   const facetTargets = new Set<string>();
   const facetSides = new Set<string>();
+  const facetPatches = new Set<string>();
 
   const matching: MissileEngagement[] = [];
   const minConfRank = CONF_RANK[query.minConfidence];
 
   for (const f of activeFiles) {
+    if (f.meta?.dcsPatch) facetPatches.add(f.meta.dcsPatch);
     for (const rawEng of f.engagements) {
       if (!query.includeGuns && rawEng.isGun) continue;
       if (query.excludeFriendlyFire && rawEng.friendlyFire) continue;
@@ -285,6 +348,12 @@ export function runAnalyticsQuery(
       if (rawEng.target?.name) facetTargets.add(rawEng.target.name);
       if (rawEng.shooter?.side) facetSides.add(rawEng.shooter.side);
       if (rawEng.target?.side) facetSides.add(rawEng.target.side);
+      if (rawEng.dcsPatch) facetPatches.add(rawEng.dcsPatch);
+
+      if (query.dcsPatches.length > 0) {
+        const patch = rawEng.dcsPatch ?? f.meta?.dcsPatch ?? "Unknown";
+        if (!query.dcsPatches.includes(patch)) continue;
+      }
 
       const e = withThresholds(rawEng, query.thresholds);
 
@@ -314,11 +383,19 @@ export function runAnalyticsQuery(
         if (!e.initial || e.initial.slantRangeM > query.maxRangeM) continue;
       }
       if (query.minShooterAltM !== null) {
-        if (e.shooter?.altM === null || e.shooter?.altM === undefined || e.shooter.altM < query.minShooterAltM)
+        if (
+          e.shooter?.altM === null ||
+          e.shooter?.altM === undefined ||
+          e.shooter.altM < query.minShooterAltM
+        )
           continue;
       }
       if (query.maxShooterAltM !== null) {
-        if (e.shooter?.altM === null || e.shooter?.altM === undefined || e.shooter.altM > query.maxShooterAltM)
+        if (
+          e.shooter?.altM === null ||
+          e.shooter?.altM === undefined ||
+          e.shooter.altM > query.maxShooterAltM
+        )
           continue;
       }
       if (query.minTargetAltM !== null) {
@@ -355,10 +432,7 @@ export function runAnalyticsQuery(
     .sort((a, b) => a - b);
 
   // Build 5 x 4 Matrix: ASPECT_ORDER x ALT_RELATION_ORDER
-  const cellData = new Map<
-    string,
-    { shots: number; hits: number; kills: number; killRanges: number[] }
-  >();
+  const cellData = new Map<string, { shots: number; hits: number; kills: number; killRanges: number[] }>();
   for (const asp of ASPECT_ORDER) {
     for (const alt of ALT_RELATION_ORDER) {
       cellData.set(`${asp}|${alt}`, { shots: 0, hits: 0, kills: 0, killRanges: [] });
@@ -585,15 +659,72 @@ export function runAnalyticsQuery(
       b.lossesAsTarget - a.lossesAsTarget,
   );
 
+  // Per-shot tactical & defeat analysis
+  const tacticsById = new Map<string, ShotTacticalMetrics>();
+  let diedUnawareCount = 0;
+  for (const e of matching) {
+    const tac = analyzeShotTactics(e, query.notchGateDeg);
+    tacticsById.set(e.id, tac);
+    if (tac.diedUnaware) diedUnawareCount++;
+  }
+
+  // Defeat Mode Breakdown
+  const defeatBreakdown: DefeatModeSummary[] = DEFEAT_MODE_ORDER.map((mode) => {
+    const sub = matching.filter((e) => tacticsById.get(e.id)?.defeatMode === mode);
+    const ranges = sub
+      .map((e) => e.initial?.slantRangeM)
+      .filter((v): v is number => v !== undefined && Number.isFinite(v))
+      .sort((a, b) => a - b);
+    const endMachs = sub
+      .map((e) => e.flight?.endMach)
+      .filter((v): v is number => v !== undefined && v !== null && Number.isFinite(v))
+      .sort((a, b) => a - b);
+    return {
+      mode,
+      count: sub.length,
+      share: matching.length > 0 ? sub.length / matching.length : 0,
+      medianRangeM: percentile(ranges, 0.5),
+      medianEndMach: percentile(endMachs, 0.5),
+    };
+  });
+
+  // Target Defense Type Breakdown
+  const defenseBreakdown: DefenseTypeSummary[] = DEFENSE_TYPE_ORDER.map((defense) => {
+    const sub = shotsWithGeom.filter((e) => tacticsById.get(e.id)?.defenseType === defense);
+    const kCount = sub.filter((e) => e.isKill).length;
+    const survived = sub.length - kCount;
+    const reacts = sub
+      .map((e) => tacticsById.get(e.id)?.reactionTimeS)
+      .filter((v): v is number => v !== undefined && v !== null && Number.isFinite(v))
+      .sort((a, b) => a - b);
+    return {
+      defense,
+      shots: sub.length,
+      kills: kCount,
+      survived,
+      survivalRate: sub.length > 0 ? survived / sub.length : null,
+      survivalCi: wilsonInterval(survived, sub.length),
+      medianReactionS: percentile(reacts, 0.5),
+    };
+  });
+
+  const notchAnalysis = analyzeNotchGate(matching, tacticsById, query.notchGateDeg);
+  const pilotReports = buildPilotReports(matching, tacticsById);
+
   return {
     engagements: matching,
     kills,
+    tacticsById,
+    duplicateFileIds: duplicateIds,
     kpis: {
       totalShots: matching.length,
       shotsWithTarget: shotsWithGeom.length,
       totalHits: hits.length,
       totalKills: kills.length,
       pk: matching.length > 0 ? kills.length / matching.length : null,
+      pkCi: wilsonInterval(kills.length, matching.length),
+      diedUnawareCount,
+      diedUnawareShare: kills.length > 0 ? diedUnawareCount / kills.length : null,
       medianKillRangeM: percentile(killRanges, 0.5),
       meanKillRangeM: mean(killRanges),
       p25KillRangeM: percentile(killRanges, 0.25),
@@ -612,11 +743,16 @@ export function runAnalyticsQuery(
     rangeHistogram,
     weaponBreakdown,
     aircraftBreakdown,
+    defeatBreakdown,
+    defenseBreakdown,
+    notchAnalysis,
+    pilotReports,
     facets: {
       weapons: [...facetWeapons].sort(),
       shooterAircraft: [...facetShooters].sort(),
       targetAircraft: [...facetTargets].sort(),
       sides: [...facetSides].sort(),
+      dcsPatches: [...facetPatches].sort(),
     },
   };
 }

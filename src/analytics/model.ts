@@ -133,7 +133,99 @@ export interface MissileEngagement {
   targetSource: TargetSource;
   /** Launch-time relative geometry between shooter and target (null if shooter or target unknown). */
   initial: InitialCondition | null;
+  /** DCS patch of the recording (e.g. "2.9.15"), copied from the file for cohort splits. */
+  dcsPatch: string | null;
+  /** Real-world recording start (ISO), copied from the file for date cohorts. */
+  recordedAt: string | null;
+  /** Missile flyout facts measured from the raw track (null for guns / bombs / unknown targets). */
+  flight: MissileFlight | null;
+  /** Resampled shooter / target / missile paths for post-launch analyses (A2A & SAM missiles only). */
+  track: ShotTrack | null;
 }
+
+/**
+ * Bump whenever extraction output changes meaning or shape: cached results with an older
+ * version are ignored and the file is re-parsed.
+ */
+export const EXTRACTOR_VERSION = 2;
+
+/** Launch range above which a shot counts as BVR (10 nm). */
+export const BVR_RANGE_M = 10 * 1852;
+
+/** Per-recording metadata used for cohorts (DCS patch, date), de-duplication and session filters. */
+export interface RecordingMeta {
+  /** Full DCS build from `DataSource`, e.g. "2.9.15.9599". */
+  dcsVersion: string | null;
+  /** Major.minor.patch, e.g. "2.9.15": the usual cohort key for "what changed in this update". */
+  dcsPatch: string | null;
+  /** Recorder, e.g. "DCS2ACMI 1.9.4.200". */
+  recorder: string | null;
+  /** Real-world recording start (ISO 8601) from `RecordingTime`. */
+  recordedAt: string | null;
+  author: string | null;
+  /** Identifies the same session recorded twice (copies): recording time + title + rounded duration. */
+  sessionKey: string;
+  /** Air-to-air missile launches (no guns). */
+  a2aMissileShots: number;
+  /** Air-to-air missile launches with launch range > `BVR_RANGE_M`: the "is this a BVR session" score. */
+  bvrShots: number;
+}
+
+/** Missile flyout facts measured on the raw (not resampled) track. Speeds are true airspeed estimates. */
+export interface MissileFlight {
+  /** Launch to disappearance (s). */
+  tofS: number;
+  maxSpeedMs: number;
+  maxMach: number;
+  /** Time after launch of peak speed ≈ motor burnout (s). */
+  maxSpeedAtS: number;
+  /** Highest altitude reached (m MSL) and gain over launch altitude (m): loft indicator. */
+  apexAltM: number;
+  apexGainM: number;
+  /** Ground-track + vertical distance flown (m). */
+  distanceFlownM: number;
+  /** Speed / Mach at the last sample before disappearing (m/s). */
+  endSpeedMs: number;
+  endMach: number;
+  /** Closest approach to the target (m), when (s after launch), missile speed and |v_missile − v_target| there. */
+  cpaM: number | null;
+  cpaAtS: number | null;
+  cpaMissileSpeedMs: number | null;
+  cpaRelSpeedMs: number | null;
+}
+
+/**
+ * Shooter, target and missile resampled every `dt` seconds from launch. Positions are local
+ * East/North metres from the shooter's launch position plus altitude MSL, interleaved per sample as
+ * `TRACK_CHANNELS`. Unknown values are NaN (e.g. missile gone, target dead).
+ */
+export interface ShotTrack {
+  dt: number;
+  n: number;
+  data: Float32Array;
+  /** Seconds after launch at which the target / shooter released chaff and flares. */
+  targetChaffS: number[];
+  targetFlareS: number[];
+  shooterChaffS: number[];
+  shooterFlareS: number[];
+}
+
+export const TRACK_CHANNELS = [
+  "mE",
+  "mN",
+  "mAlt",
+  "mSpeed",
+  "tE",
+  "tN",
+  "tAlt",
+  "sE",
+  "sN",
+  "sAlt",
+] as const;
+export const TRACK_STRIDE = TRACK_CHANNELS.length;
+export const TRACK_DT_S = 0.5;
+/** Tracks are cut this long after launch at most. */
+export const TRACK_MAX_S = 180;
 
 export interface FileAnalytics {
   fileId: string;
@@ -149,18 +241,20 @@ export interface FileAnalytics {
   protectedHeader: boolean;
   engagements: MissileEngagement[];
   parseMs: number;
+  meta: RecordingMeta;
+  extractorVersion: number;
 }
 
 export interface ClassificationThresholds {
   /** Max |targetAlt - shooterAlt| in metres to still count as Co-Altitude (default: 1000 m ≈ 3,280 ft). */
   coAltBandM: number;
-  /** Altitude MSL in metres separating Co-Altitude High from Co-Altitude Low (default: 4572 m = 15,000 ft). */
+  /** Altitude MSL in metres separating Co-Altitude High from Co-Altitude Low (default: 9144 m = 30,000 ft; Ultra-High = 12192 m = 40,000 ft). */
   highAltFloorM: number;
 }
 
 export const DEFAULT_THRESHOLDS: ClassificationThresholds = {
   coAltBandM: 1000,
-  highAltFloorM: 4572,
+  highAltFloorM: 9144,
 };
 
 export const ASPECT_ORDER: AspectCategory[] = [

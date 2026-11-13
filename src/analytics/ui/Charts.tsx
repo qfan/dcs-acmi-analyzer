@@ -723,7 +723,8 @@ export function AltitudeScatterPlot({
   );
 
   const maxAltM = Math.max(
-    12000,
+    15240,
+    thresholds.highAltFloorM * 1.15,
     ...pts.map((e) => Math.max(e.shooter?.altM ?? 0, e.target?.altM ?? 0) * 1.1),
   );
 

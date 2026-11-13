@@ -1,8 +1,11 @@
+main.analytics-main,
 .analytics-main {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 16px;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 14px 20px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -222,7 +225,7 @@
   cursor: pointer;
   border: 1px solid var(--border);
   transition: background-color 0.12s ease;
-  min-width: 145px;
+  min-width: 105px;
 }
 .matrix-cell:hover {
   outline: 2px solid var(--accent);
@@ -363,3 +366,68 @@
   margin: 0 0 8px;
   font-size: 13.5px;
 }
+
+.patch-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.patch-alert-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  font-size: 13px;
+}
+
+.patch-alert-item.severity-major {
+  border-color: color-mix(in srgb, #f59e0b 65%, var(--border));
+  background: color-mix(in srgb, #f59e0b 10%, var(--card));
+}
+
+.notch-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.notch-kpi-box {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.badge.warn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #f59e0b;
+  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+}
+
+.timeline-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.timeline-table th,
+.timeline-table td {
+  padding: 6px 10px;
+  overflow-wrap: break-word;
+}
+
+.timeline-table th:first-child,
+.timeline-table td:first-child {
+  width: 22%;
+}
+
+

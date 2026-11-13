@@ -4,6 +4,14 @@ import { distanceUnitM, distanceUnitName, fmtAlt, fmtDist } from "../../settings
 import { SettingsPanel } from "../../ui/SettingsPanel.tsx";
 import { formatDuration } from "../../ui/Summary.tsx";
 import {
+  anonymizeDataset,
+  engagementsToCsv,
+  namespaceFileIds,
+  parseDatasetBundle,
+  serializeDatasetBundle,
+  triggerDownload,
+} from "../export.ts";
+import {
   ALT_RELATION_LABELS,
   type AltitudeRelation,
   ASPECT_SHORT_LABELS,
@@ -15,17 +23,16 @@ import {
   WEAPON_CLASS_ORDER,
   type WeaponClass,
 } from "../model.ts";
-import {
-  type AnalyticsQuery,
-  DEFAULT_QUERY,
-  runAnalyticsQuery,
-} from "../query.ts";
-import {
-  ANALYTICS_SAMPLES,
-  fetchAnalyticsSample,
-  shouldAutoLoadSamples,
-} from "../samples.ts";
+import { type AnalyticsQuery, DEFAULT_QUERY, runAnalyticsQuery } from "../query.ts";
+import { ANALYTICS_SAMPLES, fetchAnalyticsSample, shouldAutoLoadSamples } from "../samples.ts";
 import { type BatchFileJob, extractFilesInPool } from "../worker/client.ts";
+import {
+  BvrTimelineCard,
+  DefeatAndDefenseCard,
+  NotchAnalyzerCard,
+  PatchComparisonCard,
+  PilotReportCard,
+} from "./BvrPanels.tsx";
 import {
   AltitudeScatterPlot,
   ConditionMatrix,
@@ -35,9 +42,12 @@ import {
 } from "./Charts.tsx";
 import { EngagementTable } from "./EngagementTable.tsx";
 
+const RECORDING_FILE_RE = /\.(acmi|zip|txt)$/i;
+
 interface LoadingBatch {
   totalFiles: number;
   doneFiles: number;
+  workerCount: number;
   progressByFile: Record<string, number>;
 }
 
@@ -67,61 +77,126 @@ export function AnalyticsApp() {
 
   const cancelPoolRef = useRef<(() => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const settingsDialogRef = useRef<HTMLDialogElement>(null);
   const nextIdSeq = useRef(1);
 
   const ingestJobs = useCallback((jobs: BatchFileJob[]) => {
     if (jobs.length === 0) return;
-    setBatch({
-      totalFiles: jobs.length,
-      doneFiles: 0,
-      progressByFile: {},
-    });
+
+    const progressMap: Record<string, number> = {};
+    let doneCount = 0;
+    let workerCount = 1;
+    let progressTimer: ReturnType<typeof setTimeout> | null = null;
+    let filesFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const pendingCompleted: FileAnalytics[] = [];
+
+    const flushProgress = () => {
+      progressTimer = null;
+      setBatch((b) =>
+        b
+          ? {
+              totalFiles: jobs.length,
+              doneFiles: doneCount,
+              workerCount,
+              progressByFile: { ...progressMap },
+            }
+          : null,
+      );
+    };
+
+    const scheduleProgressFlush = () => {
+      if (progressTimer === null) {
+        progressTimer = setTimeout(flushProgress, 120);
+      }
+    };
+
+    const flushCompletedFiles = () => {
+      filesFlushTimer = null;
+      if (pendingCompleted.length === 0) return;
+      const batchToCommit = pendingCompleted.splice(0, pendingCompleted.length);
+      const newIds = new Set(batchToCommit.map((f) => f.fileId));
+      setFiles((prev) => [...prev.filter((f) => !newIds.has(f.fileId)), ...batchToCommit]);
+    };
+
+    const scheduleFilesFlush = () => {
+      if (filesFlushTimer === null) {
+        filesFlushTimer = setTimeout(flushCompletedFiles, 350);
+      }
+    };
 
     const run = extractFilesInPool(jobs, {
       onFileProgress: (fileId, fraction) => {
-        setBatch((b) =>
-          b
-            ? {
-                ...b,
-                progressByFile: { ...b.progressByFile, [fileId]: fraction },
-              }
-            : null,
-        );
+        progressMap[fileId] = fraction;
+        scheduleProgressFlush();
       },
       onFileDone: (analytics) => {
-        setFiles((prev) => {
-          // Avoid duplicate fileId if re-added
-          const filtered = prev.filter((f) => f.fileId !== analytics.fileId);
-          return [...filtered, analytics];
-        });
-        setBatch((b) =>
-          b
-            ? {
-                ...b,
-                doneFiles: b.doneFiles + 1,
-                progressByFile: { ...b.progressByFile, [analytics.fileId]: 1 },
-              }
-            : null,
-        );
+        doneCount++;
+        progressMap[analytics.fileId] = 1;
+        pendingCompleted.push(analytics);
+        scheduleProgressFlush();
+        scheduleFilesFlush();
       },
       onFileError: (fileId, fileName, message) => {
+        doneCount++;
         setErrors((prev) => [...prev, { fileId, fileName, message }]);
-        setBatch((b) => (b ? { ...b, doneFiles: b.doneFiles + 1 } : null));
+        scheduleProgressFlush();
       },
     });
 
-    cancelPoolRef.current = run.cancel;
+    workerCount = run.workerCount;
+    setBatch({
+      totalFiles: jobs.length,
+      doneFiles: 0,
+      workerCount: run.workerCount,
+      progressByFile: {},
+    });
+
+    cancelPoolRef.current = () => {
+      if (progressTimer !== null) clearTimeout(progressTimer);
+      if (filesFlushTimer !== null) clearTimeout(filesFlushTimer);
+      run.cancel();
+    };
     void run.promise.finally(() => {
+      if (progressTimer !== null) clearTimeout(progressTimer);
+      if (filesFlushTimer !== null) clearTimeout(filesFlushTimer);
+      flushCompletedFiles();
       setBatch(null);
-      if (cancelPoolRef.current === run.cancel) cancelPoolRef.current = null;
+      if (cancelPoolRef.current) cancelPoolRef.current = null;
     });
   }, []);
 
   const addFileList = useCallback(
     (fileList: FileList | File[]) => {
       const arr = Array.from(fileList);
-      const jobs: BatchFileJob[] = arr.map((f) => ({
+      const jsonBundles = arr.filter((f) => f.name.toLowerCase().endsWith(".json"));
+      for (const jf of jsonBundles) {
+        void jf
+          .text()
+          .then((txt) => {
+            const loaded = namespaceFileIds(parseDatasetBundle(txt), `json:${jf.name}`);
+            setFiles((prev) => {
+              const existing = new Set(loaded.map((x) => x.fileId));
+              return [...prev.filter((p) => !existing.has(p.fileId)), ...loaded];
+            });
+          })
+          .catch((err) => {
+            setErrors((prev) => [
+              ...prev,
+              {
+                fileId: jf.name,
+                fileName: jf.name,
+                message: err instanceof Error ? err.message : String(err),
+              },
+            ]);
+          });
+      }
+
+      // Recordings: .acmi (incl. .zip.acmi / .txt.acmi), bare .zip and .txt, matching the file
+      // picker's `accept`; the parser detects the container from the bytes. Other files (e.g. from
+      // "Add Folder…") are ignored.
+      const acmiFiles = arr.filter((f) => RECORDING_FILE_RE.test(f.name));
+      const jobs: BatchFileJob[] = acmiFiles.map((f) => ({
         fileId: `file-${nextIdSeq.current++}-${f.name}`,
         fileName: f.name,
         file: f,
@@ -136,6 +211,7 @@ export function AnalyticsApp() {
     setBatch({
       totalFiles: ANALYTICS_SAMPLES.length,
       doneFiles: 0,
+      workerCount: 1,
       progressByFile: {},
     });
     try {
@@ -160,13 +236,35 @@ export function AnalyticsApp() {
     }
   }, [ingestJobs]);
 
-  // Auto-load the built-in multi-file sample pack in dev mode (or ?sample=default)
+  const loadBvrSamplePack = useCallback(async () => {
+    try {
+      const resp = await fetch(`${import.meta.env.BASE_URL}samples/bvr-sample-pack.json`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} loading BVR sample pack`);
+      const text = await resp.text();
+      const loaded = namespaceFileIds(parseDatasetBundle(text), "sample");
+      setFiles((prev) => {
+        const existing = new Set(loaded.map((x) => x.fileId));
+        return [...prev.filter((p) => !existing.has(p.fileId)), ...loaded];
+      });
+    } catch (err) {
+      setErrors((prev) => [
+        ...prev,
+        {
+          fileId: "bvr-sample-pack",
+          fileName: "BVR Sample Pack",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      ]);
+    }
+  }, []);
+
+  // Auto-load the redacted 11-sortie BVR sample pack by default (or ?sample=default)
   useEffect(() => {
     if (shouldAutoLoadSamples(window.location.search)) {
-      void loadBuiltInSamples();
+      void loadBvrSamplePack();
     }
     return () => cancelPoolRef.current?.();
-  }, [loadBuiltInSamples]);
+  }, [loadBvrSamplePack]);
 
   // Accept multi-file drops anywhere in the window
   useEffect(() => {
@@ -207,21 +305,33 @@ export function AnalyticsApp() {
   }, [addFileList]);
 
   const binStepM = binStepUnits * distUnitM;
-  const result = useMemo(
-    () => runAnalyticsQuery(files, query, binStepM, 18),
-    [files, query, binStepM],
-  );
+  const result = useMemo(() => runAnalyticsQuery(files, query, binStepM, 18), [files, query, binStepM]);
 
   const toggleFileEnabled = (fileId: string) => {
     const allIds = files.map((f) => f.fileId);
     const current = query.enabledFileIds ?? allIds;
-    const next = current.includes(fileId)
-      ? current.filter((id) => id !== fileId)
-      : [...current, fileId];
+    const next = current.includes(fileId) ? current.filter((id) => id !== fileId) : [...current, fileId];
     setQuery({
       ...query,
       enabledFileIds: next.length === allIds.length ? null : next,
     });
+  };
+
+  /**
+   * Anonymize the loaded files in place. Redacted files get IDs unique to this redaction so they
+   * cannot collide with a later-loaded bundle (e.g. the sample pack's `bvr-sortie-NN`), and the
+   * current file selection is carried over to the new IDs.
+   */
+  const redactFiles = () => {
+    const redacted = anonymizeDataset(files, { idPrefix: `redacted-${nextIdSeq.current++}:sortie-` });
+    const idMap = new Map(files.map((f, i) => [f.fileId, redacted[i]?.fileId ?? f.fileId]));
+    setFiles(redacted);
+    if (query.enabledFileIds) {
+      setQuery({
+        ...query,
+        enabledFileIds: query.enabledFileIds.map((id) => idMap.get(id) ?? id),
+      });
+    }
   };
 
   const removeFile = (fileId: string) => {
@@ -277,6 +387,12 @@ export function AnalyticsApp() {
     setQuery({ ...query, weaponNames: next });
   };
 
+  const togglePatch = (patch: string) => {
+    const exists = query.dcsPatches.includes(patch);
+    const next = exists ? query.dcsPatches.filter((p) => p !== patch) : [...query.dcsPatches, patch];
+    setQuery({ ...query, dcsPatches: next });
+  };
+
   const toggleBinRange = (minM: number, maxM: number) => {
     const same =
       query.minRangeM !== null &&
@@ -293,6 +409,7 @@ export function AnalyticsApp() {
   const hasActiveFilters =
     query.aspects.length > 0 ||
     query.altitudeRelations.length > 0 ||
+    query.dcsPatches.length > 0 ||
     query.weaponClasses.length > 0 ||
     query.weaponNames.length > 0 ||
     query.shooterSide !== "" ||
@@ -301,6 +418,7 @@ export function AnalyticsApp() {
     query.searchText.trim() !== "" ||
     query.minRangeM !== null ||
     query.maxRangeM !== null ||
+    query.minFileBvrShots > 0 ||
     query.includeGuns ||
     !query.excludeFriendlyFire ||
     query.confirmedTargetsOnly ||
@@ -315,19 +433,78 @@ export function AnalyticsApp() {
       <header className="topbar">
         <div className="brand-group">
           <h1>ACMI Missile & Engagement Analytics</h1>
-          <span className="badge info">Multi-File Query Tool</span>
+          <span className="badge info">Multi-File BVR & Patch Query Tool</span>
         </div>
         <div className="actions">
           <button type="button" onClick={() => fileInputRef.current?.click()}>
             + Add ACMI files…
           </button>
-          <button type="button" className="secondary" onClick={() => void loadBuiltInSamples()}>
-            Load sample pack ({ANALYTICS_SAMPLES.length})
+          <button
+            type="button"
+            className="secondary"
+            title="Select an entire folder of .acmi recordings"
+            onClick={() => folderInputRef.current?.click()}
+          >
+            + Add Folder…
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Load built-in anonymized pack of 11 multiplayer BVR sorties (497 A2A missiles across DCS 2.9.6–2.9.14)"
+            onClick={() => void loadBvrSamplePack()}
+          >
+            Load BVR Sample Pack (11 sorties)
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            title="Parse 6 small built-in ACM/BVR raw .acmi files via Web Workers"
+            onClick={() => void loadBuiltInSamples()}
+          >
+            Load Mini ACMI Pack ({ANALYTICS_SAMPLES.length})
           </button>
           {files.length > 0 && (
-            <button type="button" className="secondary" onClick={clearAllFiles}>
-              Clear all
-            </button>
+            <>
+              <button
+                type="button"
+                className="secondary"
+                title="Replace all player names and mission titles with anonymized tactical callsigns (Viper 1-1, Hornet 2-1, etc.)"
+                onClick={redactFiles}
+              >
+                Redact Pilot Names
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                title="Export matching engagements to CSV for Excel/Python"
+                onClick={() =>
+                  triggerDownload(
+                    `acmi-engagements-${new Date().toISOString().slice(0, 10)}.csv`,
+                    engagementsToCsv(result.engagements, result.tacticsById),
+                    "text/csv;charset=utf-8",
+                  )
+                }
+              >
+                Export CSV ({result.engagements.length})
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                title="Save pre-extracted dataset bundle (.json) for instant reload"
+                onClick={() =>
+                  triggerDownload(
+                    `acmi-dataset-${new Date().toISOString().slice(0, 10)}.json`,
+                    serializeDatasetBundle(files),
+                    "application/json;charset=utf-8",
+                  )
+                }
+              >
+                Save Dataset JSON
+              </button>
+              <button type="button" className="secondary" onClick={clearAllFiles}>
+                Clear all
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -343,7 +520,21 @@ export function AnalyticsApp() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".acmi,.zip,.txt"
+            accept=".acmi,.zip,.txt,.json"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                addFileList(e.target.files);
+              }
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            // @ts-expect-error webkitdirectory is standard in modern browsers
+            webkitdirectory=""
             multiple
             hidden
             onChange={(e) => {
@@ -362,7 +553,8 @@ export function AnalyticsApp() {
             <div className="card-head">
               <span>
                 Parsing & extracting initial conditions: <strong>{batch.doneFiles}</strong> of{" "}
-                <strong>{batch.totalFiles}</strong> recordings…
+                <strong>{batch.totalFiles}</strong> recordings ({batch.workerCount} parallel worker
+                {batch.workerCount === 1 ? "" : "s"})…
               </span>
               <span className="muted small">{Math.round(batchFraction * 100)}%</span>
             </div>
@@ -395,9 +587,12 @@ export function AnalyticsApp() {
               Analyze missile kills, launch ranges, target aspects (Head-on, Beam, Tail-on), and altitude
               relations (Co-Alt High, Co-Alt Low, High→Low, Low→High) across a set of recordings.
             </p>
-            <div style={{ marginTop: 18 }}>
-              <button type="button" onClick={() => void loadBuiltInSamples()}>
-                Load built-in sample pack ({ANALYTICS_SAMPLES.length} recordings)
+            <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "center" }}>
+              <button type="button" onClick={() => void loadBvrSamplePack()}>
+                Load BVR Sample Pack (11 sorties · 497 missiles)
+              </button>
+              <button type="button" className="secondary" onClick={() => void loadBuiltInSamples()}>
+                Load Mini ACMI Pack ({ANALYTICS_SAMPLES.length} recordings)
               </button>
             </div>
           </div>
@@ -408,6 +603,7 @@ export function AnalyticsApp() {
               <DatasetCard
                 files={files}
                 enabledFileIds={query.enabledFileIds}
+                duplicateFileIds={result.duplicateFileIds}
                 onToggleFile={toggleFileEnabled}
                 onRemoveFile={removeFile}
                 onEnableAll={() => setQuery({ ...query, enabledFileIds: null })}
@@ -483,7 +679,35 @@ export function AnalyticsApp() {
                 />
               </div>
 
-              {/* 7. Weapon Breakdown Table */}
+              {/* 7. DCS Patch & Cohort Comparison */}
+              <PatchComparisonCard
+                engagements={result.engagements}
+                tacticsById={result.tacticsById}
+                selectedPatches={query.dcsPatches}
+                distanceUnit={units.distance}
+                onTogglePatch={togglePatch}
+              />
+
+              {/* 8. Missile Defeat Modes & Target Defense Survival */}
+              <DefeatAndDefenseCard
+                defeatBreakdown={result.defeatBreakdown}
+                defenseBreakdown={result.defenseBreakdown}
+                diedUnawareCount={result.kpis.diedUnawareCount}
+                totalKills={result.kpis.totalKills}
+                distanceUnit={units.distance}
+              />
+
+              {/* 9. Empirical Notch Gate & Logistic Regression Seeker Analyzer */}
+              <NotchAnalyzerCard
+                notch={result.notchAnalysis}
+                notchGateDeg={query.notchGateDeg}
+                onChangeNotchGateDeg={(deg) => setQuery({ ...query, notchGateDeg: deg })}
+              />
+
+              {/* 10. Mil-Sim BVR Timeline & MAR Statistical Validator / Auto-Optimizer */}
+              <BvrTimelineCard engagements={result.engagements} tacticsById={result.tacticsById} />
+
+              {/* 11. Weapon Breakdown Table */}
               <WeaponBreakdownCard
                 weapons={result.weaponBreakdown}
                 selectedWeapons={query.weaponNames}
@@ -491,7 +715,19 @@ export function AnalyticsApp() {
                 onToggleWeapon={toggleWeapon}
               />
 
-              {/* 8. Drill-down Matching Engagements Table */}
+              {/* 11. Pilot BVR Report Card */}
+              <PilotReportCard
+                pilots={result.pilotReports}
+                distanceUnit={units.distance}
+                onSelectPilot={(pilot) =>
+                  setQuery({
+                    ...query,
+                    searchText: query.searchText === pilot ? "" : pilot,
+                  })
+                }
+              />
+
+              {/* 12. Drill-down Matching Engagements Table */}
               <EngagementTable
                 engagements={result.engagements}
                 kills={result.kills}
@@ -520,12 +756,14 @@ export function AnalyticsApp() {
 function DatasetCard({
   files,
   enabledFileIds,
+  duplicateFileIds,
   onToggleFile,
   onRemoveFile,
   onEnableAll,
 }: {
   files: FileAnalytics[];
   enabledFileIds: string[] | null;
+  duplicateFileIds: Set<string>;
   onToggleFile: (id: string) => void;
   onRemoveFile: (id: string) => void;
   onEnableAll: () => void;
@@ -540,8 +778,9 @@ function DatasetCard({
       <div className="card-head">
         <div>
           <h3>
-            Loaded Recordings ({enabledCount} of {files.length} active · {totalKills} total kills,{" "}
-            {totalEng} weapon events)
+            Loaded Recordings ({enabledCount} of {files.length} active · {totalKills} total kills, {totalEng}{" "}
+            weapon events
+            {duplicateFileIds.size > 0 ? ` · ${duplicateFileIds.size} skipped as duplicate session` : ""})
           </h3>
         </div>
         <div className="head-actions">
@@ -550,11 +789,7 @@ function DatasetCard({
               Enable all ({files.length})
             </button>
           )}
-          <button
-            type="button"
-            className="link small"
-            onClick={() => setExpanded(!expanded)}
-          >
+          <button type="button" className="link small" onClick={() => setExpanded(!expanded)}>
             {expanded ? "▴ Hide file list" : "▾ Show file list"}
           </button>
         </div>
@@ -564,18 +799,26 @@ function DatasetCard({
         <div className="file-chips">
           {files.map((f) => {
             const checked = enabledFileIds === null || enabledFileIds.includes(f.fileId);
+            const isDuplicate = duplicateFileIds.has(f.fileId);
             const a2aKills = f.engagements.filter((e) => e.isKill && !e.isGun).length;
             return (
-              <div key={f.fileId} className={`file-chip${checked ? " active" : " muted-chip"}`}>
-                <label className="file-chip-label" title={f.fileName}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => onToggleFile(f.fileId)}
-                  />
+              <div
+                key={f.fileId}
+                className={`file-chip${checked && !isDuplicate ? " active" : " muted-chip"}`}
+              >
+                <label
+                  className="file-chip-label"
+                  title={
+                    isDuplicate
+                      ? `${f.fileName}: skipped, another loaded file records the same session`
+                      : f.fileName
+                  }
+                >
+                  <input type="checkbox" checked={checked} onChange={() => onToggleFile(f.fileId)} />
                   <span className="file-chip-title">{f.missionTitle}</span>
                   <span className="muted small">
                     ({a2aKills} missile kill{a2aKills === 1 ? "" : "s"} · {formatDuration(f.durationS)})
+                    {isDuplicate ? " · duplicate, skipped" : ""}
                   </span>
                 </label>
                 <button
@@ -712,6 +955,24 @@ function QueryFilterCard({
         </label>
 
         <label>
+          <span>DCS Patch</span>
+          <select
+            value={query.dcsPatches[0] ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              setQuery({ ...query, dcsPatches: v ? [v] : [] });
+            }}
+          >
+            <option value="">All Patches ({facets.dcsPatches.length})</option>
+            {facets.dcsPatches.map((p) => (
+              <option key={p} value={p}>
+                DCS {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
           <span>Launcher Side</span>
           <select
             value={query.shooterSide}
@@ -777,32 +1038,16 @@ function QueryFilterCard({
       <div className="query-subbar">
         <div className="preset-group">
           <span className="muted small">Range presets:</span>
-          <button
-            type="button"
-            className="secondary small-btn"
-            onClick={() => applyRangePreset(null, null)}
-          >
+          <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(null, null)}>
             All
           </button>
-          <button
-            type="button"
-            className="secondary small-btn"
-            onClick={() => applyRangePreset(0, 10)}
-          >
+          <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(0, 10)}>
             WVR (&le;{fmtDist(10000, altitudeUnit.startsWith("ft") ? "nm" : "km")})
           </button>
-          <button
-            type="button"
-            className="secondary small-btn"
-            onClick={() => applyRangePreset(10, 35)}
-          >
+          <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(10, 35)}>
             Med BVR (10–35 km)
           </button>
-          <button
-            type="button"
-            className="secondary small-btn"
-            onClick={() => applyRangePreset(35, null)}
-          >
+          <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(35, null)}>
             Long BVR (&ge;35 km)
           </button>
         </div>
@@ -837,15 +1082,43 @@ function QueryFilterCard({
                 })
               }
             >
-              <option value={3048}>{fmtAlt(3048, altitudeUnit)}</option>
-              <option value={4572}>{fmtAlt(4572, altitudeUnit)} (default)</option>
+              <option value={4572}>{fmtAlt(4572, altitudeUnit)}</option>
               <option value={6096}>{fmtAlt(6096, altitudeUnit)}</option>
               <option value={7620}>{fmtAlt(7620, altitudeUnit)}</option>
+              <option value={9144}>{fmtAlt(9144, altitudeUnit)} (High default)</option>
+              <option value={10668}>{fmtAlt(10668, altitudeUnit)}</option>
+              <option value={12192}>{fmtAlt(12192, altitudeUnit)} (Ultra-High)</option>
+            </select>
+          </label>
+          <label
+            className="small muted"
+            title="Exclude pure dogfight recordings with fewer than N BVR missile shots (>10 nm)"
+          >
+            Min BVR/file:{" "}
+            <select
+              value={query.minFileBvrShots}
+              onChange={(e) => setQuery({ ...query, minFileBvrShots: Number(e.target.value) })}
+            >
+              <option value={0}>Any (0+)</option>
+              <option value={1}>&ge;1 BVR shot</option>
+              <option value={3}>&ge;3 BVR shots</option>
+              <option value={5}>&ge;5 BVR shots</option>
             </select>
           </label>
         </div>
 
         <div className="checks-inline">
+          <label
+            className="toggle"
+            title="Automatically ignore duplicate copies of the same recording session"
+          >
+            <input
+              type="checkbox"
+              checked={query.deduplicateSessions}
+              onChange={(e) => setQuery({ ...query, deduplicateSessions: e.target.checked })}
+            />{" "}
+            De-dup copies
+          </label>
           <label className="toggle">
             <input
               type="checkbox"
@@ -882,9 +1155,7 @@ function QueryFilterCard({
               key={a}
               type="button"
               className="filter-chip"
-              onClick={() =>
-                setQuery({ ...query, aspects: query.aspects.filter((x) => x !== a) })
-              }
+              onClick={() => setQuery({ ...query, aspects: query.aspects.filter((x) => x !== a) })}
             >
               Aspect: {ASPECT_SHORT_LABELS[a]} ×
             </button>

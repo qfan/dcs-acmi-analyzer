@@ -4,11 +4,11 @@ import { extractFileAnalytics } from "../extract.ts";
 import type { AnalyticsWorkerRequest, AnalyticsWorkerResponse } from "./protocol.ts";
 
 const ctx = self as unknown as {
-  postMessage(msg: AnalyticsWorkerResponse): void;
+  postMessage(msg: AnalyticsWorkerResponse, transfer?: Transferable[]): void;
   onmessage: ((e: MessageEvent<AnalyticsWorkerRequest>) => void) | null;
 };
 
-const PROGRESS_STEP = 1 << 20; // report roughly every 1 MB
+const PROGRESS_STEP = 2 << 20; // report roughly every 2 MB to minimize IPC chatter during large batches
 
 ctx.onmessage = async (e) => {
   const req = e.data;
@@ -28,7 +28,13 @@ ctx.onmessage = async (e) => {
       }
     });
     const analytics = extractFileAnalytics(rec, req.fileName, total, undefined, req.fileId);
-    ctx.postMessage({ kind: "done", fileId: req.fileId, analytics });
+    const transfer: Transferable[] = [];
+    for (const eng of analytics.engagements) {
+      if (eng.track?.data.buffer) {
+        transfer.push(eng.track.data.buffer);
+      }
+    }
+    ctx.postMessage({ kind: "done", fileId: req.fileId, analytics }, transfer);
   } catch (err) {
     ctx.postMessage({
       kind: "error",
