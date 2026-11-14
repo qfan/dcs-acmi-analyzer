@@ -3,6 +3,7 @@ import { parseAcmi } from "../src/acmi/parser.ts";
 import {
   analyzeNotchGate,
   analyzeShotTactics,
+  analyzeSuddenReactions,
   compareCohorts,
   holmAdjust,
   type ShotTacticalMetrics,
@@ -22,6 +23,7 @@ import {
   parseDcsVersion,
 } from "../src/analytics/extract.ts";
 import {
+  A2A_MISSILE_CLASSES,
   DEFAULT_THRESHOLDS,
   type FileAnalytics,
   type MissileEngagement,
@@ -30,6 +32,7 @@ import {
 import { DEFAULT_QUERY, runAnalyticsQuery } from "../src/analytics/query.ts";
 import { ANALYTICS_SAMPLES } from "../src/analytics/samples.ts";
 import { DEFAULT_MILSIM_TIMELINE, evaluateBvrTimeline } from "../src/analytics/timeline.ts";
+import { NM_M } from "../src/settings/units.ts";
 import { fileChunks, sample } from "./helpers.ts";
 
 const DEG_M = 111_319.5;
@@ -409,5 +412,248 @@ describe("analytics: tactical statistics", () => {
     expect(adj[0]).toBeCloseTo(0.03, 10);
     expect(adj[1]).toBeCloseTo(0.06, 10);
     expect(adj[2]).toBeCloseTo(0.06, 10);
+  });
+});
+
+describe("analytics: sudden reaction detection & distribution", () => {
+  /** Builds a synthetic engagement whose target flies 250 m/s steadily then turns at turnAfterS. */
+  const makeReactionShot = (opts: {
+    id: string;
+    fileId?: string;
+    dcsPatch?: string;
+    weaponName?: string;
+    launchTimeS?: number;
+    durationS?: number;
+    turnAfterS: number | null;
+    turnDegPerS?: number;
+    chaffAtS?: number[];
+    isKill?: boolean;
+    targetUid?: string;
+    initialMtRangeM?: number;
+  }): MissileEngagement => {
+    const dt = 0.5;
+    const durationS = opts.durationS ?? 22;
+    const n = Math.floor(durationS / dt) + 1;
+    const data = new Float32Array(n * TRACK_STRIDE);
+    const speed = 250;
+    const mSpeed = 1000;
+    const omega = ((opts.turnDegPerS ?? 12) * Math.PI) / 180;
+    const initialMt = opts.initialMtRangeM ?? 26_020; // at t=10s (mN=10000, tN=28520) -> M->T = 18,520m = 10.0nm
+
+    let tE = 0;
+    let tN = initialMt;
+    let heading = 0; // north
+
+    for (let i = 0; i < n; i++) {
+      const t = i * dt;
+      if (i > 0) {
+        if (opts.turnAfterS != null && t > opts.turnAfterS) {
+          heading += omega * dt;
+        }
+        tE += speed * Math.sin(heading) * dt;
+        tN += speed * Math.cos(heading) * dt;
+      }
+      const b = i * TRACK_STRIDE;
+      data[b] = 0;
+      data[b + 1] = mSpeed * t;
+      data[b + 2] = 8000;
+      data[b + 3] = mSpeed;
+      data[b + 4] = tE;
+      data[b + 5] = tN;
+      data[b + 6] = 8000;
+      data[b + 7] = 0;
+      data[b + 8] = 0;
+      data[b + 9] = 8000;
+    }
+
+    const launchTime = opts.launchTimeS ?? 100;
+    const isKill = opts.isKill ?? false;
+    return {
+      id: opts.id,
+      fileId: opts.fileId ?? "file-a",
+      dcsPatch: opts.dcsPatch ?? "2.9.20",
+      launchTime,
+      endTime: launchTime + durationS,
+      isGun: false,
+      isKill,
+      outcome: isKill ? "kill" : "miss",
+      weaponId: `w:${opts.id}`,
+      weaponName: opts.weaponName ?? "AIM-120C",
+      weaponClass: "A2A-ARH",
+      domain: "A2A",
+      shooter: { uid: "shooter-1", name: "Eagle-1", pilot: "Viper", type: "F-16C", coalition: "Allies" },
+      target: {
+        uid: opts.targetUid ?? "tgt-1",
+        name: "Flanker-1",
+        pilot: "Bandit",
+        type: "Su-27",
+        coalition: "Enemies",
+      },
+      missDistanceM: isKill ? 0 : 120,
+      initial: null,
+      track: {
+        dt,
+        n,
+        data,
+        targetChaffS: opts.chaffAtS ?? [],
+        targetFlareS: [],
+        shooterChaffS: [],
+        shooterFlareS: [],
+      },
+      flight: {
+        tofS: durationS,
+        cpaAtS: durationS,
+      },
+    } as unknown as MissileEngagement;
+  };
+
+  it("detects sudden late high-G break reactions near 10 nm M->T with and without chaff", () => {
+    const breakNoChaff = makeReactionShot({
+      id: "sudden-no-chaff",
+      turnAfterS: 10,
+      isKill: true,
+    });
+    const breakWithChaff = makeReactionShot({
+      id: "sudden-chaff",
+      turnAfterS: 10,
+      chaffAtS: [10.5, 11.0],
+      isKill: false,
+    });
+
+    const tac1 = analyzeShotTactics(breakNoChaff);
+    const tac2 = analyzeShotTactics(breakWithChaff);
+
+    expect(tac1.suddenReactionState).toBe("sudden");
+    expect(tac1.suddenReactionTrigger).toBe("maneuver");
+    expect(tac1.suddenReactionWithChaff).toBe(false);
+    expect(tac1.suddenReactionMissileRangeM).not.toBeNull();
+    expect(tac1.suddenReactionMissileRangeM!).toBeGreaterThan(8.5 * NM_M);
+    expect(tac1.suddenReactionMissileRangeM!).toBeLessThan(11.5 * NM_M);
+    expect(tac1.suddenReactionPeakG).toBeGreaterThan(4.5);
+
+    expect(tac2.suddenReactionState).toBe("sudden");
+    expect(tac2.suddenReactionTrigger).toBe("both");
+    expect(tac2.suddenReactionWithChaff).toBe(true);
+  });
+
+  it("distinguishes early reactions and fully non-maneuvering shots", () => {
+    const early = makeReactionShot({
+      id: "early-turn",
+      turnAfterS: 1,
+      isKill: false,
+    });
+    const straight = makeReactionShot({
+      id: "straight-unaware",
+      turnAfterS: null,
+      isKill: true,
+    });
+
+    const tacEarly = analyzeShotTactics(early);
+    const tacStraight = analyzeShotTactics(straight);
+
+    expect(tacEarly.suddenReactionState).toBe("early");
+    expect(tacStraight.suddenReactionState).toBe("none");
+    expect(tacStraight.suddenReactionMissileRangeM).toBeNull();
+  });
+
+  it("deduplicates overlapping shots on the same target and aggregates bins, weapons, and patches", () => {
+    const lead = makeReactionShot({
+      id: "salvo-lead",
+      fileId: "f1",
+      dcsPatch: "2.9.20",
+      weaponName: "AIM-120C",
+      launchTimeS: 100,
+      turnAfterS: 10,
+      chaffAtS: [10.5],
+      isKill: false,
+      targetUid: "tgt-salvo",
+    });
+    // Trailing shot launched 4 s later whose reaction occurs during lead's flight
+    const trail = makeReactionShot({
+      id: "salvo-trail",
+      fileId: "f1",
+      dcsPatch: "2.9.20",
+      weaponName: "AIM-120C",
+      launchTimeS: 104,
+      turnAfterS: 6,
+      chaffAtS: [6.5],
+      isKill: false,
+      targetUid: "tgt-salvo",
+    });
+    const otherWeapon = makeReactionShot({
+      id: "sd10-shot",
+      fileId: "f2",
+      dcsPatch: "2.9.19",
+      weaponName: "SD-10",
+      launchTimeS: 200,
+      turnAfterS: 11,
+      isKill: true,
+      targetUid: "tgt-other",
+    });
+    const unaware = makeReactionShot({
+      id: "unaware-shot",
+      fileId: "f2",
+      dcsPatch: "2.9.19",
+      weaponName: "SD-10",
+      launchTimeS: 300,
+      turnAfterS: null,
+      isKill: true,
+      targetUid: "tgt-unaware",
+    });
+
+    const all = [lead, trail, otherWeapon, unaware];
+    const tacticsById = new Map(all.map((e) => [e.id, analyzeShotTactics(e)]));
+    const summary = analyzeSuddenReactions(all, tacticsById, NM_M, 24 * NM_M);
+
+    expect(summary.totalAnalyzed).toBe(4);
+    expect(summary.suddenCount).toBe(2);
+    expect(summary.overlapExcludedCount).toBe(1);
+    expect(summary.noReactionCount).toBe(1);
+    expect(summary.earlyCount).toBe(0);
+    expect(summary.withChaffShots).toBe(1);
+    expect(summary.withoutChaffShots).toBe(1);
+    expect(summary.suddenSurvived).toBe(1);
+    expect(summary.suddenKills).toBe(1);
+    expect(summary.suddenSurvivalRate).toBeCloseTo(0.5, 5);
+    expect(summary.byWeapon.map((w) => w.weaponName).sort()).toEqual(["AIM-120C", "SD-10"]);
+    expect(summary.byWeapon.every((w) => w.shots === 2)).toBe(true);
+    expect(summary.byPatch.map((p) => p.dcsPatch)).toEqual(["2.9.19", "2.9.20"]);
+    expect(summary.rangeBins.reduce((acc, b) => acc + b.count, 0)).toBe(2);
+  });
+
+  it("populates suddenReactionAnalysis and usage-ranked weapon facets across sample files", async () => {
+    const files: FileAnalytics[] = await Promise.all(
+      ANALYTICS_SAMPLES.map(async (s) => {
+        const fileName = s.file.replace(/^samples\//, "");
+        const rec = await parseAcmi(fileChunks(sample(fileName)));
+        return extractFileAnalytics(rec, s.originalName, 0, undefined, s.id);
+      }),
+    );
+
+    const q = runAnalyticsQuery(files, { ...DEFAULT_QUERY });
+    const sr = q.suddenReactionAnalysis;
+    expect(sr.totalAnalyzed).toBeGreaterThan(0);
+    expect(sr.suddenCount + sr.earlyCount + sr.noReactionCount + sr.overlapExcludedCount).toBe(
+      sr.totalAnalyzed,
+    );
+    expect(sr.rangeBins.reduce((acc, b) => acc + b.count, 0)).toBe(sr.suddenCount);
+
+    // Weapon facets are ranked by usage descending
+    expect(q.facets.weaponCounts.length).toBeGreaterThan(1);
+    for (let i = 1; i < q.facets.weaponCounts.length; i++) {
+      expect(q.facets.weaponCounts[i - 1]?.count).toBeGreaterThanOrEqual(
+        q.facets.weaponCounts[i]?.count ?? 0,
+      );
+    }
+    expect(q.facets.weapons).toEqual(q.facets.weaponCounts.map((w) => w.name));
+
+    // Selecting all A2A missiles covers only A2A missile classes
+    const qA2a = runAnalyticsQuery(files, {
+      ...DEFAULT_QUERY,
+      domains: [],
+      weaponClasses: [...A2A_MISSILE_CLASSES],
+    });
+    expect(qA2a.engagements.length).toBeGreaterThan(0);
+    expect(qA2a.engagements.every((e) => A2A_MISSILE_CLASSES.includes(e.weaponClass))).toBe(true);
   });
 });

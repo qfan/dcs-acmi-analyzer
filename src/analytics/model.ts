@@ -396,6 +396,9 @@ export const WEAPON_CLASS_ORDER: WeaponClass[] = [
   "Gun",
 ];
 
+/** Weapon classes representing air-to-air missiles (excluding guns, SAMs, and A2G ordnance). */
+export const A2A_MISSILE_CLASSES: readonly WeaponClass[] = ["A2A-ARH", "A2A-SARH", "A2A-IR", "A2A-Other"];
+
 export const WEAPON_CLASS_LABELS: Record<WeaponClass, string> = {
   "A2A-ARH": "Fox-3 (Active Radar)",
   "A2A-SARH": "Fox-1 (Semi-Active Radar)",

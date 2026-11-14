@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DistanceUnit } from "../../settings/schema.ts";
-import { fmtDist } from "../../settings/units.ts";
+import { distanceUnitM, distanceUnitName, fmtDist } from "../../settings/units.ts";
 import {
+  analyzeSuddenReactions,
   type CohortSplitMode,
   compareCohorts,
   DEFEAT_MODE_COLORS,
@@ -10,6 +11,7 @@ import {
   type NotchGateAnalysis,
   type PilotReport,
   type ShotTacticalMetrics,
+  type SuddenReactionRangeBin,
 } from "../derive.ts";
 import {
   ALTITUDE_BAND_ORDER,
@@ -18,7 +20,12 @@ import {
   type FittedMissile,
   tierAltitudeScales,
 } from "../missileReach.ts";
-import type { MissileEngagement } from "../model.ts";
+import {
+  A2A_MISSILE_CLASSES,
+  type MissileEngagement,
+  WEAPON_CLASS_LABELS,
+  type WeaponClass,
+} from "../model.ts";
 import type { DefeatModeSummary, DefenseTypeSummary } from "../query.ts";
 import {
   BVR_TIMELINE_ROWS,
@@ -1483,6 +1490,677 @@ export function BvrTimelineCard({
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function fmtPctRate(rate: number | null): string {
+  return rate == null ? "—" : `${(rate * 100).toFixed(0)}%`;
+}
+
+function formatReactionBinLabel(bin: SuddenReactionRangeBin, unitM: number, unitLabel: string): string {
+  const lo = Math.round(bin.minM / unitM);
+  const hi = Math.round(bin.maxM / unitM);
+  return bin.isOverflow ? `${lo}+${unitLabel}` : `${lo}-${hi}${unitLabel}`;
+}
+
+function selectVisibleReactionBins(bins: SuddenReactionRangeBin[]): SuddenReactionRangeBin[] {
+  if (bins.length <= 8) return bins;
+  const regular = bins.filter((b) => !b.isOverflow);
+  const overflow = bins.find((b) => b.isOverflow);
+  let lastNonEmpty = -1;
+  for (let i = 0; i < regular.length; i++) {
+    const reg = regular[i];
+    if (reg && reg.count > 0) lastNonEmpty = i;
+  }
+  const keepRegular = Math.min(regular.length, Math.max(8, lastNonEmpty + 2));
+  const out = regular.slice(0, keepRegular);
+  if (overflow && overflow.count > 0) out.push(overflow);
+  return out;
+}
+
+type ReactionWeaponScope = "a2a-all" | "all" | "A2A-ARH" | "A2A-IR" | "A2A-SARH" | `model:${string}`;
+
+function formatScopeCounts(engagements: MissileEngagement[]) {
+  let all = 0;
+  let a2aAll = 0;
+  let arh = 0;
+  let ir = 0;
+  let sarh = 0;
+  let hasNonA2a = false;
+  for (const e of engagements) {
+    if (e.isGun || e.domain === "A2G") continue;
+    all++;
+    if (A2A_MISSILE_CLASSES.includes(e.weaponClass)) {
+      a2aAll++;
+      if (e.weaponClass === "A2A-ARH") arh++;
+      else if (e.weaponClass === "A2A-IR") ir++;
+      else if (e.weaponClass === "A2A-SARH") sarh++;
+    } else {
+      hasNonA2a = true;
+    }
+  }
+  return { all, a2aAll, arh, ir, sarh, hasNonA2a };
+}
+
+function matchesReactionScope(e: MissileEngagement, scope: ReactionWeaponScope): boolean {
+  if (e.isGun || e.domain === "A2G") return false;
+  if (scope === "all") return true;
+  if (scope === "a2a-all") return A2A_MISSILE_CLASSES.includes(e.weaponClass);
+  if (scope.startsWith("model:")) return e.weaponName === scope.slice(6);
+  return e.weaponClass === (scope as WeaponClass);
+}
+
+/**
+ * Multi-weapon distribution panel showing when targets suddenly transition
+ * from steady/unaware flight into high-G evasive maneuvers or countermeasures
+ * (e.g. active radar pitbull RWR warning), with M→T range histogram and breakdown.
+ */
+export function SuddenReactionCard({
+  engagements,
+  tacticsById,
+  distanceUnit,
+  selectedPatches,
+  onTogglePatch,
+}: {
+  engagements: MissileEngagement[];
+  tacticsById: Map<string, ShotTacticalMetrics>;
+  distanceUnit: DistanceUnit;
+  selectedPatches: string[];
+  onTogglePatch?: (patch: string) => void;
+}) {
+  const unitName = distanceUnitName(distanceUnit);
+  const unitM = distanceUnitM(distanceUnit);
+  const defaultBin = unitName === "nm" ? 1 : 2;
+  const binOptions = unitName === "nm" ? [1, 2, 5] : [2, 5, 10];
+  const [binStepUnits, setBinStepUnits] = useState<number>(defaultBin);
+  const [stackMode, setStackMode] = useState<"outcome" | "chaff">("outcome");
+  const [weaponScope, setWeaponScope] = useState<ReactionWeaponScope>("a2a-all");
+
+  const activeBinUnits = binOptions.includes(binStepUnits) ? binStepUnits : defaultBin;
+  const maxUnits = unitName === "nm" ? 24 : 40;
+
+  const scopeCounts = useMemo(() => formatScopeCounts(engagements), [engagements]);
+
+  const baseAnalysis = useMemo(
+    () => analyzeSuddenReactions(engagements, tacticsById, activeBinUnits * unitM, maxUnits * unitM),
+    [engagements, tacticsById, activeBinUnits, unitM, maxUnits],
+  );
+
+  // Fall back cleanly if user changed global filters (e.g. to SAM-only or a different weapon)
+  const effectiveScope: ReactionWeaponScope = useMemo(() => {
+    if (weaponScope.startsWith("model:")) {
+      const targetName = weaponScope.slice(6);
+      if (baseAnalysis.byWeapon.some((w) => w.weaponName === targetName)) return weaponScope;
+      return scopeCounts.a2aAll > 0 ? "a2a-all" : "all";
+    }
+    if (weaponScope === "a2a-all" && scopeCounts.a2aAll === 0 && scopeCounts.all > 0) {
+      return "all";
+    }
+    return weaponScope;
+  }, [weaponScope, baseAnalysis.byWeapon, scopeCounts.a2aAll, scopeCounts.all]);
+
+  const scopedEngagements = useMemo(
+    () =>
+      effectiveScope === "all"
+        ? engagements
+        : engagements.filter((e) => matchesReactionScope(e, effectiveScope)),
+    [engagements, effectiveScope],
+  );
+
+  const analysis = useMemo(
+    () =>
+      effectiveScope === "all"
+        ? baseAnalysis
+        : analyzeSuddenReactions(scopedEngagements, tacticsById, activeBinUnits * unitM, maxUnits * unitM),
+    [effectiveScope, baseAnalysis, scopedEngagements, tacticsById, activeBinUnits, unitM, maxUnits],
+  );
+
+  const selectedModelName = effectiveScope.startsWith("model:") ? effectiveScope.slice(6) : null;
+  const weaponRows = selectedModelName ? baseAnalysis.byWeapon : analysis.byWeapon;
+  const visibleBins = useMemo(() => selectVisibleReactionBins(analysis.rangeBins), [analysis.rangeBins]);
+
+  const noReactionSurvRate =
+    analysis.noReactionCount > 0 ? analysis.noReactionSurvived / analysis.noReactionCount : null;
+
+  const W = 760;
+  const H = 220;
+  const margin = { top: 20, right: 16, bottom: 38, left: 40 };
+  const plotW = W - margin.left - margin.right;
+  const plotH = H - margin.top - margin.bottom;
+  const maxCount = Math.max(1, ...visibleBins.map((b) => b.count));
+  const yTicks = [0, Math.round(maxCount / 2), maxCount];
+  const bandW = visibleBins.length > 0 ? plotW / visibleBins.length : plotW;
+  const barW = Math.max(8, bandW - Math.max(4, bandW * 0.24));
+
+  // Locate horizontal pixel coordinate for the median M→T onset range marker
+  let medianX: number | null = null;
+  if (analysis.medianMissileRangeM != null && visibleBins.length > 0) {
+    const medM = analysis.medianMissileRangeM;
+    for (let i = 0; i < visibleBins.length; i++) {
+      const b = visibleBins[i];
+      if (!b) continue;
+      if (!b.isOverflow && medM >= b.minM && medM <= b.maxM) {
+        const frac = (medM - b.minM) / Math.max(1, b.maxM - b.minM);
+        medianX = margin.left + i * bandW + frac * bandW;
+        break;
+      }
+      if (b.isOverflow && medM >= b.minM) {
+        medianX = margin.left + i * bandW + bandW * 0.5;
+        break;
+      }
+    }
+  }
+
+  const showPatches = analysis.byPatch.length >= 2;
+  const resetScope = scopeCounts.a2aAll > 0 ? "a2a-all" : "all";
+
+  return (
+    <section className="card analytics-card">
+      <div className="card-head">
+        <div>
+          <h3>Sudden Defensive Reaction Distribution (&ldquo;When Do Targets React?&rdquo;)</h3>
+          <span className="muted" style={{ fontSize: 11 }}>
+            Tracks targets flying steady for &ge; 4 s after launch before abruptly initiating &ge; 3.8 G /
+            &ge; 8 &deg;/s break turns or decoys — measured at missile-to-target (M&rarr;T) range
+          </span>
+        </div>
+        <div className="chart-controls">
+          <div className="mode-switch">
+            <button
+              type="button"
+              className={stackMode === "outcome" ? "active" : ""}
+              onClick={() => setStackMode("outcome")}
+            >
+              Outcome
+            </button>
+            <button
+              type="button"
+              className={stackMode === "chaff" ? "active" : ""}
+              onClick={() => setStackMode("chaff")}
+            >
+              Chaff
+            </button>
+          </div>
+          <div className="mode-switch" title="Histogram bin width">
+            {binOptions.map((step) => (
+              <button
+                key={step}
+                type="button"
+                className={activeBinUnits === step ? "active" : ""}
+                onClick={() => setBinStepUnits(step)}
+              >
+                {step}
+                {unitName}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div
+        className="chart-controls"
+        style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}
+      >
+        <div className="mode-switch">
+          {scopeCounts.a2aAll > 0 && (
+            <button
+              type="button"
+              className={effectiveScope === "a2a-all" ? "active" : ""}
+              onClick={() => setWeaponScope("a2a-all")}
+            >
+              All A2A Missiles ({scopeCounts.a2aAll})
+            </button>
+          )}
+          <button
+            type="button"
+            className={effectiveScope === "A2A-ARH" ? "active" : ""}
+            onClick={() => setWeaponScope("A2A-ARH")}
+            disabled={scopeCounts.arh === 0}
+          >
+            All Fox-3 ({scopeCounts.arh})
+          </button>
+          <button
+            type="button"
+            className={effectiveScope === "A2A-IR" ? "active" : ""}
+            onClick={() => setWeaponScope("A2A-IR")}
+            disabled={scopeCounts.ir === 0}
+          >
+            All Fox-2 ({scopeCounts.ir})
+          </button>
+          <button
+            type="button"
+            className={effectiveScope === "A2A-SARH" ? "active" : ""}
+            onClick={() => setWeaponScope("A2A-SARH")}
+            disabled={scopeCounts.sarh === 0}
+          >
+            All Fox-1 ({scopeCounts.sarh})
+          </button>
+          {(scopeCounts.hasNonA2a || scopeCounts.a2aAll === 0) && (
+            <button
+              type="button"
+              className={effectiveScope === "all" ? "active" : ""}
+              onClick={() => setWeaponScope("all")}
+            >
+              All Weapons ({scopeCounts.all})
+            </button>
+          )}
+        </div>
+
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <span className="muted">Model (by usage):</span>
+          <select
+            aria-label="Specific weapon model ranked by usage"
+            value={selectedModelName ? `model:${selectedModelName}` : ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              setWeaponScope(v ? (v as ReactionWeaponScope) : resetScope);
+            }}
+            style={{
+              background: "var(--bg)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "4px 8px",
+              fontSize: 12,
+            }}
+          >
+            <option value="">All Models in Scope ({baseAnalysis.byWeapon.length})</option>
+            {baseAnalysis.byWeapon.map((w) => (
+              <option key={w.weaponName} value={`model:${w.weaponName}`}>
+                {w.weaponName} — {w.shots} shots ({w.suddenCount} sudden)
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="notch-kpis">
+        <div className="notch-kpi-box">
+          <div className="notch-kpi-label">Sudden Late Reactions</div>
+          <div className="notch-kpi-val">
+            {analysis.suddenCount}
+            <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>
+              {" "}
+              / {analysis.totalAnalyzed} tracked
+            </span>
+          </div>
+          <div className="notch-kpi-sub">
+            {analysis.earlyCount} early &middot; {analysis.noReactionCount} unaware
+            {analysis.overlapExcludedCount > 0 ? ` · ${analysis.overlapExcludedCount} salvo-deduped` : ""}
+          </div>
+        </div>
+
+        <div className="notch-kpi-box">
+          <div className="notch-kpi-label">Median M&rarr;T Onset Range</div>
+          <div className="notch-kpi-val" style={{ color: "#38bdf8" }}>
+            {analysis.medianMissileRangeM != null ? fmtDist(analysis.medianMissileRangeM, distanceUnit) : "—"}
+          </div>
+          <div className="notch-kpi-sub">
+            {analysis.p25MissileRangeM != null && analysis.p75MissileRangeM != null
+              ? `IQR ${fmtDist(analysis.p25MissileRangeM, distanceUnit)}–${fmtDist(
+                  analysis.p75MissileRangeM,
+                  distanceUnit,
+                )}`
+              : "No sudden reactions"}
+            {analysis.medianMissileRangeCi
+              ? ` · 95% CI ${fmtDist(analysis.medianMissileRangeCi.lo, distanceUnit)}–${fmtDist(
+                  analysis.medianMissileRangeCi.hi,
+                  distanceUnit,
+                )}`
+              : ""}
+          </div>
+        </div>
+
+        <div className="notch-kpi-box">
+          <div className="notch-kpi-label">Time Left &amp; Peak G</div>
+          <div className="notch-kpi-val">
+            {analysis.medianTtiS != null ? `${analysis.medianTtiS.toFixed(1)}s` : "—"}
+            <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>
+              {" "}
+              TTI
+            </span>
+          </div>
+          <div className="notch-kpi-sub">
+            Median peak load:{" "}
+            <strong>{analysis.medianPeakG != null ? `${analysis.medianPeakG.toFixed(1)} G` : "—"}</strong>
+            {analysis.p10MissileRangeM != null && analysis.p90MissileRangeM != null
+              ? ` · P10–P90 ${fmtDist(analysis.p10MissileRangeM, distanceUnit)}–${fmtDist(
+                  analysis.p90MissileRangeM,
+                  distanceUnit,
+                )}`
+              : ""}
+          </div>
+        </div>
+
+        <div className="notch-kpi-box">
+          <div className="notch-kpi-label">Sudden Defense Survival</div>
+          <div className="notch-kpi-val" style={{ color: "#34d399" }}>
+            {fmtPctRate(analysis.suddenSurvivalRate)}
+            <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>
+              {" "}
+              ({analysis.suddenSurvived}/{analysis.suddenCount})
+            </span>
+          </div>
+          <div className="notch-kpi-sub">
+            Chaff {fmtPctRate(analysis.withChaffSurvivalRate)} ({analysis.withChaffSurvived}/
+            {analysis.withChaffShots}) vs No chaff {fmtPctRate(analysis.withoutChaffSurvivalRate)} (
+            {analysis.withoutChaffSurvived}/{analysis.withoutChaffShots})
+            {analysis.noReactionCount > 0 ? ` · Unaware ${fmtPctRate(noReactionSurvRate)}` : ""}
+          </div>
+        </div>
+      </div>
+
+      {analysis.suddenCount === 0 ? (
+        <div className="muted" style={{ padding: "12px 0" }}>
+          No clean sudden late defensive reactions matched the current filters ({analysis.earlyCount} reacted
+          early, {analysis.noReactionCount} stayed non-maneuvering).
+        </div>
+      ) : (
+        <>
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            className="analytics-svg"
+            role="img"
+            aria-label="Missile-to-target range distribution at sudden reaction onset"
+          >
+            {yTicks.map((t) => {
+              const y = margin.top + plotH - (t / maxCount) * plotH;
+              return (
+                <g key={t}>
+                  <line
+                    x1={margin.left}
+                    y1={y}
+                    x2={W - margin.right}
+                    y2={y}
+                    stroke="#2a303a"
+                    strokeDasharray="2 3"
+                  />
+                  <text x={margin.left - 6} y={y + 3} fill="#8b949e" fontSize={10} textAnchor="end">
+                    {t}
+                  </text>
+                </g>
+              );
+            })}
+
+            {visibleBins.map((b, idx) => {
+              const xCenter = margin.left + idx * bandW + bandW * 0.5;
+              const x = xCenter - barW * 0.5;
+              const topCount = stackMode === "outcome" ? b.kills : b.withoutChaff;
+              const botCount = stackMode === "outcome" ? b.survived : b.withChaff;
+              const topColor = stackMode === "outcome" ? "#f87171" : "#f59e0b";
+              const botColor = stackMode === "outcome" ? "#34d399" : "#60a5fa";
+
+              const botH = (botCount / maxCount) * plotH;
+              const topH = (topCount / maxCount) * plotH;
+              const botY = margin.top + plotH - botH;
+              const topY = botY - topH;
+
+              const label = formatReactionBinLabel(b, unitM, unitName);
+              const tip = `${label}: ${b.count} shots (${b.survived} survived, ${b.kills} killed; ${b.withChaff} w/ chaff, ${b.withoutChaff} no chaff${
+                b.medianPeakG != null ? `; med ${b.medianPeakG.toFixed(1)}G` : ""
+              })`;
+
+              return (
+                <g key={b.index}>
+                  <title>{tip}</title>
+                  {botH > 0 && (
+                    <rect
+                      x={x}
+                      y={botY}
+                      width={barW}
+                      height={botH}
+                      rx={topH === 0 ? 2 : 0}
+                      fill={botColor}
+                      fillOpacity={0.85}
+                    />
+                  )}
+                  {topH > 0 && (
+                    <rect
+                      x={x}
+                      y={topY}
+                      width={barW}
+                      height={topH}
+                      rx={2}
+                      fill={topColor}
+                      fillOpacity={0.85}
+                    />
+                  )}
+                  {b.count > 0 && (
+                    <text
+                      x={xCenter}
+                      y={Math.max(margin.top + 10, topY - 4)}
+                      fill="#c9d1d9"
+                      fontSize={9.5}
+                      textAnchor="middle"
+                    >
+                      {b.count}
+                    </text>
+                  )}
+                  <text x={xCenter} y={H - 12} fill="#9aa4b2" fontSize={9.5} textAnchor="middle">
+                    {b.isOverflow
+                      ? `${Math.round(b.minM / unitM)}+`
+                      : `${Math.round(b.minM / unitM)}–${Math.round(b.maxM / unitM)}`}
+                  </text>
+                </g>
+              );
+            })}
+
+            {medianX != null && analysis.medianMissileRangeM != null && (
+              <g>
+                <line
+                  x1={medianX}
+                  y1={margin.top}
+                  x2={medianX}
+                  y2={margin.top + plotH}
+                  stroke="#38bdf8"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                />
+                <text
+                  x={Math.min(W - margin.right - 4, Math.max(margin.left + 4, medianX + 4))}
+                  y={margin.top + 10}
+                  fill="#38bdf8"
+                  fontSize={10}
+                  textAnchor={medianX > W - 110 ? "end" : "start"}
+                >
+                  Med {fmtDist(analysis.medianMissileRangeM, distanceUnit)}
+                </text>
+              </g>
+            )}
+
+            <text x={margin.left + plotW * 0.5} y={H - 1} fill="#8b949e" fontSize={9.5} textAnchor="middle">
+              Missile-to-Target Slant Range at Sudden Reaction Onset ({unitName})
+            </text>
+          </svg>
+
+          <div className="legend-row">
+            {stackMode === "outcome" ? (
+              <>
+                <span className="legend-item">
+                  <span className="legend-swatch" style={{ background: "#34d399" }} />
+                  Survived ({analysis.suddenSurvived})
+                </span>
+                <span className="legend-item">
+                  <span className="legend-swatch" style={{ background: "#f87171" }} />
+                  Killed ({analysis.suddenKills})
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="legend-item">
+                  <span className="legend-swatch" style={{ background: "#60a5fa" }} />
+                  With chaff ({analysis.withChaffShots})
+                </span>
+                <span className="legend-item">
+                  <span className="legend-swatch" style={{ background: "#f59e0b" }} />
+                  Maneuver / no chaff ({analysis.withoutChaffShots})
+                </span>
+              </>
+            )}
+            <span className="legend-item">
+              <span className="legend-swatch" style={{ background: "#38bdf8" }} />
+              Median M&rarr;T range
+            </span>
+          </div>
+        </>
+      )}
+
+      {weaponRows.length > 0 && (
+        <div className={showPatches ? "charts-two-col" : undefined} style={{ marginTop: 12 }}>
+          <div className="table-wrap">
+            <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+              By Weapon Ranked by Usage ({weaponRows.length} models &middot; click model to focus)
+            </div>
+            <table className="records">
+              <thead>
+                <tr>
+                  <th>Weapon</th>
+                  <th>Class</th>
+                  <th>Shots</th>
+                  <th>Sudden</th>
+                  <th>Early</th>
+                  <th>None</th>
+                  <th>Med M&rarr;T</th>
+                  <th>IQR</th>
+                  <th>Med TTI</th>
+                  <th>Med G</th>
+                  <th>Sudden Surv</th>
+                  <th>Unaware Surv</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weaponRows.map((w) => {
+                  const selected = selectedModelName === w.weaponName;
+                  return (
+                    <tr key={w.weaponName} className={selected ? "selected-row" : undefined}>
+                      <td>
+                        <button
+                          type="button"
+                          className="quality-toggle"
+                          style={
+                            selected
+                              ? {
+                                  borderColor: "var(--accent)",
+                                  color: "var(--accent)",
+                                  fontWeight: 600,
+                                }
+                              : { fontWeight: 600 }
+                          }
+                          onClick={() =>
+                            setWeaponScope(
+                              selected ? resetScope : (`model:${w.weaponName}` as ReactionWeaponScope),
+                            )
+                          }
+                          title={selected ? "Return to family scope" : "Focus this weapon model"}
+                        >
+                          {w.weaponName}
+                        </button>
+                      </td>
+                      <td className="muted">{WEAPON_CLASS_LABELS[w.weaponClass]}</td>
+                      <td>{w.shots}</td>
+                      <td>
+                        <strong>{w.suddenCount}</strong>
+                      </td>
+                      <td className="muted">{w.earlyCount}</td>
+                      <td className="muted">{w.noReactionCount}</td>
+                      <td>
+                        {w.medianMissileRangeM != null ? fmtDist(w.medianMissileRangeM, distanceUnit) : "—"}
+                      </td>
+                      <td className="muted">
+                        {w.p25MissileRangeM != null && w.p75MissileRangeM != null
+                          ? `${fmtDist(w.p25MissileRangeM, distanceUnit)}–${fmtDist(
+                              w.p75MissileRangeM,
+                              distanceUnit,
+                            )}`
+                          : "—"}
+                      </td>
+                      <td>{w.medianTtiS != null ? `${w.medianTtiS.toFixed(1)}s` : "—"}</td>
+                      <td>{w.medianPeakG != null ? `${w.medianPeakG.toFixed(1)}G` : "—"}</td>
+                      <td>{fmtPctRate(w.suddenSurvivalRate)}</td>
+                      <td className="muted">{fmtPctRate(w.noReactionSurvivalRate)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {showPatches && (
+            <div className="table-wrap">
+              <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                By DCS Version (pitbull / seeker reaction range drift)
+              </div>
+              <table className="records">
+                <thead>
+                  <tr>
+                    <th>DCS Patch</th>
+                    <th>Sudden n</th>
+                    <th>Med M&rarr;T</th>
+                    <th>IQR</th>
+                    <th>Med TTI</th>
+                    <th>Survival</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysis.byPatch.map((p) => {
+                    const selected = selectedPatches.includes(p.dcsPatch);
+                    const canFilter = onTogglePatch && p.dcsPatch !== "Unknown Version";
+                    return (
+                      <tr key={p.dcsPatch} className={selected ? "selected-row" : undefined}>
+                        <td>
+                          {canFilter ? (
+                            <button
+                              type="button"
+                              className="quality-toggle"
+                              style={
+                                selected
+                                  ? {
+                                      borderColor: "var(--accent)",
+                                      color: "var(--accent)",
+                                      fontWeight: 600,
+                                    }
+                                  : { fontWeight: 600 }
+                              }
+                              onClick={() => onTogglePatch(p.dcsPatch)}
+                              title="Toggle DCS patch filter"
+                            >
+                              {p.dcsPatch}
+                            </button>
+                          ) : (
+                            <strong>{p.dcsPatch}</strong>
+                          )}
+                        </td>
+                        <td>
+                          <strong>{p.suddenCount}</strong>
+                        </td>
+                        <td>
+                          {p.medianMissileRangeM != null ? fmtDist(p.medianMissileRangeM, distanceUnit) : "—"}
+                        </td>
+                        <td className="muted">
+                          {p.p25MissileRangeM != null && p.p75MissileRangeM != null
+                            ? `${fmtDist(p.p25MissileRangeM, distanceUnit)}–${fmtDist(
+                                p.p75MissileRangeM,
+                                distanceUnit,
+                              )}`
+                            : "—"}
+                        </td>
+                        <td>{p.medianTtiS != null ? `${p.medianTtiS.toFixed(1)}s` : "—"}</td>
+                        <td>
+                          {fmtPctRate(p.suddenSurvivalRate)}{" "}
+                          <span className="muted">
+                            ({p.survived}/{p.suddenCount})
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

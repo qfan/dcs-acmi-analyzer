@@ -1,5 +1,11 @@
 import { speedOfSoundMs } from "./atmosphere.ts";
-import { BVR_RANGE_M, type FileAnalytics, type MissileEngagement, TRACK_STRIDE } from "./model.ts";
+import {
+  BVR_RANGE_M,
+  type FileAnalytics,
+  type MissileEngagement,
+  TRACK_STRIDE,
+  type WeaponClass,
+} from "./model.ts";
 import { mean, percentile } from "./query.ts";
 
 const DEG = Math.PI / 180;
@@ -62,6 +68,12 @@ export const DEFENSE_TYPE_LABELS: Record<TargetDefenseType, string> = {
   maneuver: "Crank / Dive / Break Turn",
 };
 
+const G0 = 9.80665;
+const NM_M = 1852;
+
+export type SuddenReactionState = "sudden" | "early" | "none" | "untracked";
+export type SuddenReactionTrigger = "maneuver" | "chaff" | "flare" | "both";
+
 export interface ShotTacticalMetrics {
   engagementId: string;
   defeatMode: DefeatMode;
@@ -94,6 +106,232 @@ export interface ShotTacticalMetrics {
   maxShooterCrankDeg: number | null;
   targetChaffCount: number;
   targetFlareCount: number;
+  /**
+   * Sudden defensive onset classification:
+   * - `sudden`: steady midcourse (>=3 s at <2.8 G, <5°/s, no decoy) followed by a sharp break or decoy
+   * - `early`: already maneuvering or releasing decoys shortly after launch
+   * - `none`: stayed steady without defensive break or decoy up to CPA
+   * - `untracked`: insufficient track samples to judge
+   */
+  suddenReactionState: SuddenReactionState;
+  /** Seconds after launch when a sudden defensive onset began (null unless `sudden`). */
+  suddenReactionTimeS: number | null;
+  /** Missile-to-target 3D slant range (m) at sudden defensive onset. */
+  suddenReactionMissileRangeM: number | null;
+  /** Shooter-to-target 3D slant range (m) at sudden defensive onset. */
+  suddenReactionShooterRangeM: number | null;
+  /** Remaining time from sudden defensive onset until CPA/impact (s). */
+  suddenReactionTtiS: number | null;
+  /** What initiated the sudden reaction (high-G maneuver, decoy, or both). */
+  suddenReactionTrigger: SuddenReactionTrigger | null;
+  /** Peak 1 s-smoothed target G-load after sudden onset (or overall max G if not sudden). */
+  suddenReactionPeakG: number | null;
+  /** Whether target released chaff at or after sudden onset. */
+  suddenReactionWithChaff: boolean;
+}
+
+interface SuddenDetection {
+  state: SuddenReactionState;
+  timeS: number | null;
+  missileRangeM: number | null;
+  shooterRangeM: number | null;
+  ttiS: number | null;
+  trigger: SuddenReactionTrigger | null;
+  peakG: number | null;
+  withChaff: boolean;
+}
+
+/**
+ * Detect whether a target flew steady after launch before suddenly initiating a high-G defensive
+ * turn and/or countermeasure release (e.g. upon receiving an active-radar pitbull warning).
+ *
+ * Uses 1 s centered differences on the 0.5 s track to suppress 1 m integer quantization noise, and
+ * walks back up to 2 s along the pull ramp so the ramp-up itself does not disqualify steadiness.
+ */
+function detectSuddenReaction(e: MissileEngagement, effectiveEndS: number): SuddenDetection {
+  const untracked: SuddenDetection = {
+    state: "untracked",
+    timeS: null,
+    missileRangeM: null,
+    shooterRangeM: null,
+    ttiS: null,
+    trigger: null,
+    peakG: null,
+    withChaff: false,
+  };
+  const tr = e.track;
+  if (!tr || tr.n < 8) return untracked;
+  const dt = tr.dt;
+  const d = tr.data;
+  const tofSteps = Math.min(tr.n, Math.max(2, Math.ceil(effectiveEndS / dt)));
+  if (tofSteps < 8) return untracked;
+
+  const vx = new Float64Array(tofSteps).fill(Number.NaN);
+  const vy = new Float64Array(tofSteps).fill(Number.NaN);
+  const vz = new Float64Array(tofSteps).fill(Number.NaN);
+  const hdg = new Float64Array(tofSteps).fill(Number.NaN);
+
+  for (let k = 1; k < tofSteps - 1; k++) {
+    const bp = (k - 1) * TRACK_STRIDE;
+    const bn = (k + 1) * TRACK_STRIDE;
+    const pe = d[bp + 4] as number;
+    const pn = d[bp + 5] as number;
+    const pa = d[bp + 6] as number;
+    const ne = d[bn + 4] as number;
+    const nn = d[bn + 5] as number;
+    const na = d[bn + 6] as number;
+    if (!Number.isFinite(pe + pn + pa + ne + nn + na)) continue;
+    vx[k] = (ne - pe) / (2 * dt);
+    vy[k] = (nn - pn) / (2 * dt);
+    vz[k] = (na - pa) / (2 * dt);
+    if (Math.hypot(vx[k]!, vy[k]!) > 25) hdg[k] = Math.atan2(vx[k]!, vy[k]!);
+  }
+
+  const steps: {
+    tRel: number;
+    mtRangeM: number;
+    stRangeM: number | null;
+    turnDegS: number;
+    gLoad: number;
+  }[] = [];
+
+  for (let k = 2; k < tofSteps - 2; k++) {
+    const b = k * TRACK_STRIDE;
+    const mE = d[b] as number;
+    const mN = d[b + 1] as number;
+    const mAlt = d[b + 2] as number;
+    const tE = d[b + 4] as number;
+    const tN = d[b + 5] as number;
+    const tAlt = d[b + 6] as number;
+    const sE = d[b + 7] as number;
+    const sN = d[b + 8] as number;
+    const sAlt = d[b + 9] as number;
+    if (!Number.isFinite(mE + mN + mAlt + tE + tN + tAlt)) continue;
+    if (!Number.isFinite(vx[k - 1]! + vx[k + 1]! + hdg[k - 1]! + hdg[k + 1]!)) continue;
+
+    const span = 2 * dt;
+    const ax = (vx[k + 1]! - vx[k - 1]!) / span;
+    const ay = (vy[k + 1]! - vy[k - 1]!) / span;
+    const az = (vz[k + 1]! - vz[k - 1]!) / span + G0;
+    const gLoad = Math.hypot(ax, ay, az) / G0;
+
+    let dHdg = Math.abs(hdg[k + 1]! - hdg[k - 1]!);
+    if (dHdg > Math.PI) dHdg = 2 * Math.PI - dHdg;
+    const turnDegS = dHdg / DEG / span;
+    if (gLoad > 15 || turnDegS > 50) continue;
+
+    const mtRangeM = Math.hypot(tE - mE, tN - mN, tAlt - mAlt);
+    const stRangeM = Number.isFinite(sE + sN)
+      ? Math.hypot(tE - sE, tN - sN, Number.isFinite(sAlt + tAlt) ? tAlt - sAlt : 0)
+      : null;
+
+    steps.push({ tRel: k * dt, mtRangeM, stRangeM, turnDegS, gLoad });
+  }
+
+  if (steps.length < 8) return untracked;
+
+  const isIr = e.weaponClass === "A2A-IR";
+  const chaffTimes = tr.targetChaffS.filter((t) => t >= 0.5);
+  const flareTimes = tr.targetFlareS.filter((t) => t >= 0.5);
+  const relevantCm = isIr ? [...chaffTimes, ...flareTimes] : chaffTimes;
+  const firstChaff = chaffTimes.length > 0 ? Math.min(...chaffTimes) : null;
+  const firstFlare = flareTimes.length > 0 ? Math.min(...flareTimes) : null;
+  const firstCm = relevantCm.length > 0 ? Math.min(...relevantCm) : null;
+
+  // Sustained defensive break: G >= 3.8 or turn >= 8.0 deg/s followed by >= 3.0 G or >= 6.0 deg/s
+  let spikeIdx: number | null = null;
+  for (let i = 0; i < steps.length - 1; i++) {
+    const s = steps[i]!;
+    const s1 = steps[i + 1]!;
+    if ((s.gLoad >= 3.8 || s.turnDegS >= 8.0) && (s1.gLoad >= 3.0 || s1.turnDegS >= 6.0)) {
+      spikeIdx = i;
+      break;
+    }
+  }
+
+  // Walk back up to 2 s (4 steps) along the initiation ramp so ramp samples are not counted in pre-onset
+  let kinOnsetIdx = spikeIdx;
+  if (spikeIdx !== null) {
+    const minBack = Math.max(0, spikeIdx - 4);
+    while (kinOnsetIdx !== null && kinOnsetIdx > minBack) {
+      const prev = steps[kinOnsetIdx - 1]!;
+      if (prev.gLoad >= 2.6 || prev.turnDegS >= 4.5) kinOnsetIdx--;
+      else break;
+    }
+  }
+
+  const kinOnsetS = kinOnsetIdx !== null ? steps[kinOnsetIdx]!.tRel : null;
+  let onsetIdx = kinOnsetIdx;
+  let onsetTimeS = kinOnsetS;
+  let trigger: SuddenReactionTrigger | null = kinOnsetIdx !== null ? "maneuver" : null;
+
+  if (firstCm !== null) {
+    const cmKind: SuddenReactionTrigger = isIr && firstFlare === firstCm ? "flare" : "chaff";
+    if (onsetTimeS === null || firstCm < onsetTimeS - 1.5) {
+      const cIdx = steps.findIndex((s) => s.tRel >= firstCm);
+      if (cIdx >= 0) {
+        onsetIdx = cIdx;
+        onsetTimeS = firstCm;
+        trigger = kinOnsetIdx !== null ? "both" : cmKind;
+      }
+    } else if (Math.abs(firstCm - onsetTimeS) <= 2.5) {
+      trigger = "both";
+    }
+  }
+
+  if (onsetIdx === null || onsetTimeS === null) {
+    let maxG = 0;
+    for (const s of steps) if (s.gLoad > maxG) maxG = s.gLoad;
+    return {
+      state: "none",
+      timeS: null,
+      missileRangeM: null,
+      shooterRangeM: null,
+      ttiS: null,
+      trigger: null,
+      peakG: maxG,
+      withChaff: false,
+    };
+  }
+
+  const pre = steps.slice(0, onsetIdx);
+  let preMaxG = 0;
+  let preMaxTurn = 0;
+  for (const s of pre) {
+    if (s.gLoad > preMaxG) preMaxG = s.gLoad;
+    if (s.turnDegS > preMaxTurn) preMaxTurn = s.turnDegS;
+  }
+
+  const post = steps.slice(onsetIdx);
+  let postMaxG = 0;
+  for (const s of post) if (s.gLoad > postMaxG) postMaxG = s.gLoad;
+
+  const isSteadyBefore = onsetTimeS >= 4.0 && pre.length >= 4 && preMaxG < 2.8 && preMaxTurn < 5.0;
+  if (!isSteadyBefore) {
+    return {
+      state: "early",
+      timeS: null,
+      missileRangeM: null,
+      shooterRangeM: null,
+      ttiS: null,
+      trigger: null,
+      peakG: postMaxG,
+      withChaff: firstChaff !== null,
+    };
+  }
+
+  const onsetStep = steps[onsetIdx]!;
+  const withChaff = tr.targetChaffS.some((t) => t >= onsetTimeS - 0.5);
+  return {
+    state: "sudden",
+    timeS: onsetTimeS,
+    missileRangeM: onsetStep.mtRangeM,
+    shooterRangeM: onsetStep.stRangeM,
+    ttiS: Math.max(0, effectiveEndS - onsetTimeS),
+    trigger,
+    peakG: postMaxG,
+    withChaff,
+  };
 }
 
 /**
@@ -370,6 +608,11 @@ export function analyzeShotTactics(e: MissileEngagement, notchGateDeg = 15): Sho
   }
 
   const diedUnaware = e.isKill && reactionTimeS === null && targetChaffCount === 0 && targetFlareCount === 0;
+  const effectiveEndS =
+    fl?.cpaAtS !== null && fl?.cpaAtS !== undefined && fl.cpaAtS > 1
+      ? fl.cpaAtS
+      : (fl?.tofS ?? (tr ? tr.n * tr.dt : 0));
+  const sudden = detectSuddenReaction(e, effectiveEndS);
 
   return {
     engagementId: e.id,
@@ -392,6 +635,14 @@ export function analyzeShotTactics(e: MissileEngagement, notchGateDeg = 15): Sho
     maxShooterCrankDeg,
     targetChaffCount,
     targetFlareCount,
+    suddenReactionState: sudden.state,
+    suddenReactionTimeS: sudden.timeS,
+    suddenReactionMissileRangeM: sudden.missileRangeM,
+    suddenReactionShooterRangeM: sudden.shooterRangeM,
+    suddenReactionTtiS: sudden.ttiS,
+    suddenReactionTrigger: sudden.trigger,
+    suddenReactionPeakG: sudden.peakG,
+    suddenReactionWithChaff: sudden.withChaff,
   };
 }
 
@@ -1234,6 +1485,406 @@ export function deduplicateFiles(files: FileAnalytics[]): {
     }
   }
   return { unique, duplicateIds };
+}
+
+export interface SuddenReactionRangeBin {
+  index: number;
+  minM: number;
+  maxM: number;
+  isOverflow: boolean;
+  count: number;
+  survived: number;
+  kills: number;
+  withChaff: number;
+  withoutChaff: number;
+  survivalRate: number | null;
+  medianPeakG: number | null;
+}
+
+export interface SuddenReactionWeaponSummary {
+  weaponName: string;
+  weaponClass: WeaponClass;
+  shots: number;
+  totalAnalyzed: number;
+  earlyCount: number;
+  suddenCount: number;
+  overlapCount: number;
+  noReactionCount: number;
+  medianMissileRangeM: number | null;
+  p25MissileRangeM: number | null;
+  p75MissileRangeM: number | null;
+  medianTtiS: number | null;
+  medianPeakG: number | null;
+  suddenSurvivalRate: number | null;
+  noReactionSurvivalRate: number | null;
+}
+
+export interface SuddenReactionPatchSummary {
+  dcsPatch: string;
+  suddenCount: number;
+  survived: number;
+  kills: number;
+  suddenSurvivalRate: number | null;
+  medianMissileRangeM: number | null;
+  medianMissileRangeCi: { lo: number; hi: number } | null;
+  p25MissileRangeM: number | null;
+  p75MissileRangeM: number | null;
+  medianTtiS: number | null;
+}
+
+export interface SuddenReactionAnalysis {
+  binStepM: number;
+  totalAnalyzed: number;
+  earlyCount: number;
+  suddenCount: number;
+  overlapExcludedCount: number;
+  noReactionCount: number;
+  noReactionKills: number;
+  noReactionSurvived: number;
+  suddenSurvived: number;
+  suddenKills: number;
+  suddenSurvivalRate: number | null;
+  suddenSurvivalCi: { lo: number; hi: number } | null;
+  withChaffShots: number;
+  withChaffSurvived: number;
+  withChaffSurvivalRate: number | null;
+  withoutChaffShots: number;
+  withoutChaffSurvived: number;
+  withoutChaffSurvivalRate: number | null;
+  medianMissileRangeM: number | null;
+  medianMissileRangeCi: { lo: number; hi: number } | null;
+  p10MissileRangeM: number | null;
+  p25MissileRangeM: number | null;
+  p75MissileRangeM: number | null;
+  p90MissileRangeM: number | null;
+  medianTtiS: number | null;
+  medianPeakG: number | null;
+  rangeBins: SuddenReactionRangeBin[];
+  byWeapon: SuddenReactionWeaponSummary[];
+  byPatch: SuddenReactionPatchSummary[];
+}
+
+function compareDottedVersions(a: string, b: string): number {
+  if (a.startsWith("Unknown")) return 1;
+  if (b.startsWith("Unknown")) return -1;
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  if (pa.length >= 2 && pb.length >= 2 && pa.every(Number.isFinite) && pb.every(Number.isFinite)) {
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  }
+  return a.localeCompare(b);
+}
+
+/**
+ * Aggregate sudden defensive reaction onset (missile-to-target slant range, TTI, peak G, chaff,
+ * and survival) across engagements, deduplicating overlapping multi-missile salvos on the same target.
+ */
+export function analyzeSuddenReactions(
+  engagements: MissileEngagement[],
+  tacticsById: Map<string, ShotTacticalMetrics>,
+  binStepM = NM_M,
+  maxRangeM = 24 * NM_M,
+): SuddenReactionAnalysis {
+  const safeStepM = Math.max(500, binStepM);
+  const snappedMaxM = Math.max(safeStepM * 4, Math.ceil(maxRangeM / safeStepM) * safeStepM);
+  const regularBins = Math.round(snappedMaxM / safeStepM);
+
+  // Index active target windows per file so trailing salvo missiles do not double-count one break
+  const targetWindows = new Map<string, { id: string; launchT: number; endT: number }[]>();
+  for (const e of engagements) {
+    if (e.isGun || e.domain === "A2G" || !e.target?.uid) continue;
+    const key = `${e.fileId}:${e.target.uid}`;
+    const arr = targetWindows.get(key) ?? [];
+    const endS = e.flight?.cpaAtS ?? e.flight?.tofS ?? 60;
+    arr.push({ id: e.id, launchT: e.launchTime, endT: e.launchTime + endS });
+    targetWindows.set(key, arr);
+  }
+
+  interface CleanSuddenSample {
+    e: MissileEngagement;
+    tac: ShotTacticalMetrics;
+    mtRangeM: number;
+    ttiS: number | null;
+    peakG: number | null;
+    withChaff: boolean;
+  }
+
+  let totalAnalyzed = 0;
+  let earlyCount = 0;
+  let overlapExcludedCount = 0;
+  let noReactionCount = 0;
+  let noReactionKills = 0;
+  let noReactionSurvived = 0;
+  const cleanSamples: CleanSuddenSample[] = [];
+
+  interface WeaponAcc {
+    weaponClass: WeaponClass;
+    shots: number;
+    totalAnalyzed: number;
+    earlyCount: number;
+    suddenCount: number;
+    overlapCount: number;
+    noReactionCount: number;
+    noReactionSurvived: number;
+    suddenSurvived: number;
+    ranges: number[];
+    ttis: number[];
+    peakGs: number[];
+  }
+  const weaponAcc = new Map<string, WeaponAcc>();
+  const getW = (e: MissileEngagement): WeaponAcc => {
+    let w = weaponAcc.get(e.weaponName);
+    if (!w) {
+      w = {
+        weaponClass: e.weaponClass,
+        shots: 0,
+        totalAnalyzed: 0,
+        earlyCount: 0,
+        suddenCount: 0,
+        overlapCount: 0,
+        noReactionCount: 0,
+        noReactionSurvived: 0,
+        suddenSurvived: 0,
+        ranges: [],
+        ttis: [],
+        peakGs: [],
+      };
+      weaponAcc.set(e.weaponName, w);
+    }
+    return w;
+  };
+
+  for (const e of engagements) {
+    if (e.isGun || e.domain === "A2G") continue;
+    const w = getW(e);
+    w.shots++;
+    const tac = tacticsById.get(e.id);
+    if (!tac || tac.suddenReactionState === "untracked") continue;
+
+    totalAnalyzed++;
+    w.totalAnalyzed++;
+
+    if (tac.suddenReactionState === "early") {
+      earlyCount++;
+      w.earlyCount++;
+      continue;
+    }
+    if (tac.suddenReactionState === "none") {
+      noReactionCount++;
+      w.noReactionCount++;
+      if (e.isKill) noReactionKills++;
+      else {
+        noReactionSurvived++;
+        w.noReactionSurvived++;
+      }
+      continue;
+    }
+
+    // State === "sudden": check whether an earlier missile on the same target was still active at onset
+    let isOverlap = false;
+    if (e.target?.uid && tac.suddenReactionTimeS !== null) {
+      const absOnset = e.launchTime + tac.suddenReactionTimeS;
+      const peers = targetWindows.get(`${e.fileId}:${e.target.uid}`) ?? [];
+      for (const p of peers) {
+        if (p.id !== e.id && p.launchT < e.launchTime && absOnset >= p.launchT && absOnset <= p.endT + 1) {
+          isOverlap = true;
+          break;
+        }
+      }
+    }
+    if (isOverlap) {
+      overlapExcludedCount++;
+      w.overlapCount++;
+      continue;
+    }
+
+    if (tac.suddenReactionMissileRangeM === null || !Number.isFinite(tac.suddenReactionMissileRangeM)) {
+      continue;
+    }
+
+    w.suddenCount++;
+    if (!e.isKill) w.suddenSurvived++;
+    w.ranges.push(tac.suddenReactionMissileRangeM);
+    if (tac.suddenReactionTtiS !== null) w.ttis.push(tac.suddenReactionTtiS);
+    if (tac.suddenReactionPeakG !== null) w.peakGs.push(tac.suddenReactionPeakG);
+
+    cleanSamples.push({
+      e,
+      tac,
+      mtRangeM: tac.suddenReactionMissileRangeM,
+      ttiS: tac.suddenReactionTtiS,
+      peakG: tac.suddenReactionPeakG,
+      withChaff: tac.suddenReactionWithChaff,
+    });
+  }
+
+  // Overall KPIs
+  let suddenSurvived = 0;
+  let suddenKills = 0;
+  let withChaffShots = 0;
+  let withChaffSurvived = 0;
+  let withoutChaffShots = 0;
+  let withoutChaffSurvived = 0;
+  const allRanges: number[] = [];
+  const allTtis: number[] = [];
+  const allPeakGs: number[] = [];
+
+  for (const s of cleanSamples) {
+    if (s.e.isKill) suddenKills++;
+    else suddenSurvived++;
+    if (s.withChaff) {
+      withChaffShots++;
+      if (!s.e.isKill) withChaffSurvived++;
+    } else {
+      withoutChaffShots++;
+      if (!s.e.isKill) withoutChaffSurvived++;
+    }
+    allRanges.push(s.mtRangeM);
+    if (s.ttiS !== null) allTtis.push(s.ttiS);
+    if (s.peakG !== null) allPeakGs.push(s.peakG);
+  }
+  allRanges.sort((a, b) => a - b);
+  allTtis.sort((a, b) => a - b);
+  allPeakGs.sort((a, b) => a - b);
+
+  // Histogram bins (0 .. snappedMaxM + overflow)
+  const binAcc = Array.from({ length: regularBins + 1 }, () => ({
+    count: 0,
+    survived: 0,
+    kills: 0,
+    withChaff: 0,
+    withoutChaff: 0,
+    peakGs: [] as number[],
+  }));
+  for (const s of cleanSamples) {
+    const idx = s.mtRangeM >= snappedMaxM ? regularBins : Math.max(0, Math.floor(s.mtRangeM / safeStepM));
+    const b = binAcc[idx]!;
+    b.count++;
+    if (s.e.isKill) b.kills++;
+    else b.survived++;
+    if (s.withChaff) b.withChaff++;
+    else b.withoutChaff++;
+    if (s.peakG !== null) b.peakGs.push(s.peakG);
+  }
+
+  const rangeBins: SuddenReactionRangeBin[] = binAcc
+    .map((b, index) => {
+      b.peakGs.sort((x, y) => x - y);
+      const isOverflow = index === regularBins;
+      return {
+        index,
+        minM: index * safeStepM,
+        maxM: isOverflow ? Number.POSITIVE_INFINITY : (index + 1) * safeStepM,
+        isOverflow,
+        count: b.count,
+        survived: b.survived,
+        kills: b.kills,
+        withChaff: b.withChaff,
+        withoutChaff: b.withoutChaff,
+        survivalRate: b.count > 0 ? b.survived / b.count : null,
+        medianPeakG: percentile(b.peakGs, 0.5),
+      };
+    })
+    .filter((b) => !b.isOverflow || b.count > 0);
+
+  const byWeapon: SuddenReactionWeaponSummary[] = [...weaponAcc.entries()]
+    .map(([weaponName, w]) => {
+      w.ranges.sort((a, b) => a - b);
+      w.ttis.sort((a, b) => a - b);
+      w.peakGs.sort((a, b) => a - b);
+      return {
+        weaponName,
+        weaponClass: w.weaponClass,
+        shots: w.shots,
+        totalAnalyzed: w.totalAnalyzed,
+        earlyCount: w.earlyCount,
+        suddenCount: w.suddenCount,
+        overlapCount: w.overlapCount,
+        noReactionCount: w.noReactionCount,
+        medianMissileRangeM: percentile(w.ranges, 0.5),
+        p25MissileRangeM: percentile(w.ranges, 0.25),
+        p75MissileRangeM: percentile(w.ranges, 0.75),
+        medianTtiS: percentile(w.ttis, 0.5),
+        medianPeakG: percentile(w.peakGs, 0.5),
+        suddenSurvivalRate: w.suddenCount > 0 ? w.suddenSurvived / w.suddenCount : null,
+        noReactionSurvivalRate: w.noReactionCount > 0 ? w.noReactionSurvived / w.noReactionCount : null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.shots - a.shots || b.suddenCount - a.suddenCount || a.weaponName.localeCompare(b.weaponName),
+    );
+
+  // Per-DCS-patch breakdown
+  const patchAcc = new Map<string, { survived: number; kills: number; ranges: number[]; ttis: number[] }>();
+  for (const s of cleanSamples) {
+    const key = s.e.dcsPatch || "Unknown Version";
+    let p = patchAcc.get(key);
+    if (!p) {
+      p = { survived: 0, kills: 0, ranges: [], ttis: [] };
+      patchAcc.set(key, p);
+    }
+    if (s.e.isKill) p.kills++;
+    else p.survived++;
+    p.ranges.push(s.mtRangeM);
+    if (s.ttiS !== null) p.ttis.push(s.ttiS);
+  }
+  const byPatch: SuddenReactionPatchSummary[] = [...patchAcc.entries()]
+    .sort((a, b) => compareDottedVersions(a[0], b[0]))
+    .map(([dcsPatch, p]) => {
+      p.ranges.sort((a, b) => a - b);
+      p.ttis.sort((a, b) => a - b);
+      const n = p.survived + p.kills;
+      return {
+        dcsPatch,
+        suddenCount: n,
+        survived: p.survived,
+        kills: p.kills,
+        suddenSurvivalRate: n > 0 ? p.survived / n : null,
+        medianMissileRangeM: percentile(p.ranges, 0.5),
+        medianMissileRangeCi: medianConfidenceInterval(p.ranges),
+        p25MissileRangeM: percentile(p.ranges, 0.25),
+        p75MissileRangeM: percentile(p.ranges, 0.75),
+        medianTtiS: percentile(p.ttis, 0.5),
+      };
+    });
+
+  const suddenCount = cleanSamples.length;
+  return {
+    binStepM: safeStepM,
+    totalAnalyzed,
+    earlyCount,
+    suddenCount,
+    overlapExcludedCount,
+    noReactionCount,
+    noReactionKills,
+    noReactionSurvived,
+    suddenSurvived,
+    suddenKills,
+    suddenSurvivalRate: suddenCount > 0 ? suddenSurvived / suddenCount : null,
+    suddenSurvivalCi: wilsonInterval(suddenSurvived, suddenCount),
+    withChaffShots,
+    withChaffSurvived,
+    withChaffSurvivalRate: withChaffShots > 0 ? withChaffSurvived / withChaffShots : null,
+    withoutChaffShots,
+    withoutChaffSurvived,
+    withoutChaffSurvivalRate: withoutChaffShots > 0 ? withoutChaffSurvived / withoutChaffShots : null,
+    medianMissileRangeM: percentile(allRanges, 0.5),
+    medianMissileRangeCi: medianConfidenceInterval(allRanges),
+    p10MissileRangeM: percentile(allRanges, 0.1),
+    p25MissileRangeM: percentile(allRanges, 0.25),
+    p75MissileRangeM: percentile(allRanges, 0.75),
+    p90MissileRangeM: percentile(allRanges, 0.9),
+    medianTtiS: percentile(allTtis, 0.5),
+    medianPeakG: percentile(allPeakGs, 0.5),
+    rangeBins,
+    byWeapon,
+    byPatch,
+  };
 }
 
 export { mean };

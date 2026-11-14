@@ -1,6 +1,7 @@
 import {
   analyzeNotchGate,
   analyzeShotTactics,
+  analyzeSuddenReactions,
   buildPilotReports,
   DEFEAT_MODE_ORDER,
   DEFENSE_TYPE_ORDER,
@@ -9,6 +10,7 @@ import {
   type NotchGateAnalysis,
   type PilotReport,
   type ShotTacticalMetrics,
+  type SuddenReactionAnalysis,
   type TargetDefenseType,
   wilsonInterval,
 } from "./derive.ts";
@@ -172,8 +174,15 @@ export interface AircraftSummary {
   lossesAsTarget: number;
 }
 
+export interface WeaponFacetCount {
+  name: string;
+  weaponClass: WeaponClass;
+  count: number;
+}
+
 export interface DatasetFacets {
   weapons: string[];
+  weaponCounts: WeaponFacetCount[];
   shooterAircraft: string[];
   targetAircraft: string[];
   sides: string[];
@@ -247,6 +256,7 @@ export interface QueryResult {
   defeatBreakdown: DefeatModeSummary[];
   defenseBreakdown: DefenseTypeSummary[];
   notchAnalysis: NotchGateAnalysis;
+  suddenReactionAnalysis: SuddenReactionAnalysis;
   pilotReports: PilotReport[];
   facets: DatasetFacets;
 }
@@ -352,7 +362,7 @@ export function runAnalyticsQuery(
     : { unique: selectedFiles, duplicateIds: new Set<string>() };
 
   // Collect facet options from active files (respecting only domain and gun toggles so dropdowns stay useful)
-  const facetWeapons = new Set<string>();
+  const facetWeapons = new Map<string, WeaponFacetCount>();
   const facetShooters = new Set<string>();
   const facetTargets = new Set<string>();
   const facetSides = new Set<string>();
@@ -369,7 +379,14 @@ export function runAnalyticsQuery(
       if (query.excludeFriendlyFire && rawEng.friendlyFire) continue;
       if (query.domains.length > 0 && !query.domains.includes(rawEng.domain)) continue;
 
-      facetWeapons.add(rawEng.weaponName);
+      const wf = facetWeapons.get(rawEng.weaponName);
+      if (wf) wf.count++;
+      else
+        facetWeapons.set(rawEng.weaponName, {
+          name: rawEng.weaponName,
+          weaponClass: rawEng.weaponClass,
+          count: 1,
+        });
       if (rawEng.shooter?.name) facetShooters.add(rawEng.shooter.name);
       if (rawEng.target?.name) facetTargets.add(rawEng.target.name);
       if (rawEng.shooter?.side) facetSides.add(rawEng.shooter.side);
@@ -739,7 +756,12 @@ export function runAnalyticsQuery(
   });
 
   const notchAnalysis = analyzeNotchGate(matching, tacticsById, query.notchGateDeg);
+  const suddenReactionAnalysis = analyzeSuddenReactions(matching, tacticsById);
   const pilotReports = buildPilotReports(matching, tacticsById);
+
+  const sortedWeaponCounts = [...facetWeapons.values()].sort(
+    (a, b) => b.count - a.count || a.name.localeCompare(b.name),
+  );
 
   return {
     engagements: matching,
@@ -778,9 +800,11 @@ export function runAnalyticsQuery(
     defeatBreakdown,
     defenseBreakdown,
     notchAnalysis,
+    suddenReactionAnalysis,
     pilotReports,
     facets: {
-      weapons: [...facetWeapons].sort(),
+      weapons: sortedWeaponCounts.map((w) => w.name),
+      weaponCounts: sortedWeaponCounts,
       shooterAircraft: [...facetShooters].sort(),
       targetAircraft: [...facetTargets].sort(),
       sides: [...facetSides].sort(),

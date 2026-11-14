@@ -62,6 +62,11 @@ export function engagementsToCsv(
     "time_in_notch_s",
     "target_chaff",
     "target_flare",
+    "sudden_reaction_state",
+    "sudden_reaction_s",
+    "sudden_reaction_mt_nm",
+    "sudden_reaction_peak_g",
+    "sudden_reaction_trigger",
     "ufo_shooter_samples",
     "ufo_target_samples",
   ];
@@ -120,6 +125,17 @@ export function engagementsToCsv(
       tac ? tac.timeInNotchS.toFixed(1) : "",
       tac?.targetChaffCount ?? "",
       tac?.targetFlareCount ?? "",
+      tac?.suddenReactionState ?? "",
+      tac?.suddenReactionTimeS !== null && tac?.suddenReactionTimeS !== undefined
+        ? tac.suddenReactionTimeS.toFixed(1)
+        : "",
+      tac?.suddenReactionMissileRangeM !== null && tac?.suddenReactionMissileRangeM !== undefined
+        ? (tac.suddenReactionMissileRangeM / NM).toFixed(2)
+        : "",
+      tac?.suddenReactionPeakG !== null && tac?.suddenReactionPeakG !== undefined
+        ? tac.suddenReactionPeakG.toFixed(1)
+        : "",
+      tac?.suddenReactionTrigger ?? "",
       e.ufo?.shooter ?? "",
       e.ufo?.target ?? "",
     ];

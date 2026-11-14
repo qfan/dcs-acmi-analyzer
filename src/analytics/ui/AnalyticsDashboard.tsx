@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useSettings } from "../../settings/react.ts";
 import { distanceUnitM, distanceUnitName, fmtAlt, fmtDist } from "../../settings/units.ts";
 import {
+  A2A_MISSILE_CLASSES,
   ALT_RELATION_LABELS,
   type AltitudeRelation,
   ASPECT_SHORT_LABELS,
@@ -22,6 +23,7 @@ import {
   NotchAnalyzerCard,
   PatchComparisonCard,
   PilotReportCard,
+  SuddenReactionCard,
 } from "./BvrPanels.tsx";
 import {
   AltitudeScatterPlot,
@@ -268,6 +270,14 @@ export function AnalyticsPanels({ dash, singleFile = false, onShowOnMap }: Analy
         onChangeNotchGateDeg={(deg) => setQuery({ ...query, notchGateDeg: deg })}
       />
 
+      <SuddenReactionCard
+        engagements={result.engagements}
+        tacticsById={result.tacticsById}
+        distanceUnit={units.distance}
+        selectedPatches={query.dcsPatches}
+        onTogglePatch={singleFile ? undefined : togglePatch}
+      />
+
       {!singleFile && <MissileModelsCard fitted={missileFit.fitted} busy={missileFit.busy} />}
 
       {!singleFile && (
@@ -346,6 +356,11 @@ function QueryFilterCard({
     });
   };
 
+  const isAllA2aMissiles =
+    query.weaponClasses.length === A2A_MISSILE_CLASSES.length &&
+    A2A_MISSILE_CLASSES.every((c) => query.weaponClasses.includes(c));
+  const weaponFamilyValue = isAllA2aMissiles ? "A2A-MISSILES" : (query.weaponClasses[0] ?? "");
+
   return (
     <section className="card analytics-card query-panel" aria-label="Query filters">
       <div className="query-grid">
@@ -362,13 +377,18 @@ function QueryFilterCard({
         <label>
           <span>Weapon Family</span>
           <select
-            value={query.weaponClasses[0] ?? ""}
+            value={weaponFamilyValue}
             onChange={(e) => {
-              const v = e.target.value as WeaponClass | "";
-              setQuery({ ...query, weaponClasses: v ? [v] : [] });
+              const v = e.target.value;
+              if (v === "A2A-MISSILES") {
+                setQuery({ ...query, weaponClasses: [...A2A_MISSILE_CLASSES] });
+              } else {
+                setQuery({ ...query, weaponClasses: v ? [v as WeaponClass] : [] });
+              }
             }}
           >
             <option value="">All Weapon Families</option>
+            <option value="A2A-MISSILES">All A2A Missiles (Fox-1/2/3)</option>
             {WEAPON_CLASS_ORDER.map((wc) => (
               <option key={wc} value={wc}>
                 {WEAPON_CLASS_LABELS[wc]}
@@ -386,10 +406,10 @@ function QueryFilterCard({
               setQuery({ ...query, weaponNames: v ? [v] : [] });
             }}
           >
-            <option value="">All Weapons ({facets.weapons.length})</option>
-            {facets.weapons.map((w) => (
-              <option key={w} value={w}>
-                {w}
+            <option value="">All Weapons ({facets.weaponCounts.length})</option>
+            {facets.weaponCounts.map((w) => (
+              <option key={w.name} value={w.name}>
+                {w.name} ({w.count})
               </option>
             ))}
           </select>
