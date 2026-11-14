@@ -1,6 +1,14 @@
 {
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/*.acmi", "!**/*.md", "!pnpm-lock.yaml"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/*.acmi",
+      "!**/*.md",
+      "!pnpm-lock.yaml",
+      "!public/samples/bvr-sample-pack.json"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

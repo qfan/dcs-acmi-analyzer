@@ -466,8 +466,8 @@ export function AnalyticsApp() {
               </button>
             </div>
             <ul className="warnings">
-              {errors.map((er, i) => (
-                <li key={`${er.fileId}:${i}`}>
+              {errors.map((er) => (
+                <li key={`${er.fileId}:${er.fileName}:${er.message}`}>
                   <strong>{er.fileName}</strong>: {er.message}
                 </li>
               ))}

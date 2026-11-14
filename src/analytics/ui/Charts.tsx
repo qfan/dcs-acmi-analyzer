@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import type { AltitudeUnit, DistanceUnit } from "../../settings/schema.ts";
 import { distanceUnitM, distanceUnitName, fmtAlt, fmtDist } from "../../settings/units.ts";
 import {
@@ -14,6 +15,13 @@ import {
   WEAPON_CLASS_LABELS,
 } from "../model.ts";
 import type { ConditionCell, QueryResult, RangeBin, WeaponSummary } from "../query.ts";
+
+const activateOnKey = (fn: () => void) => (ev: KeyboardEvent) => {
+  if (ev.key === "Enter" || ev.key === " ") {
+    ev.preventDefault();
+    fn();
+  }
+};
 
 interface MatrixProps {
   matrix: ConditionCell[][];
@@ -91,11 +99,7 @@ export function ConditionMatrix({
           >
             Shots
           </button>
-          <button
-            type="button"
-            className={metric === "pk" ? "on" : ""}
-            onClick={() => onSetMetric("pk")}
-          >
+          <button type="button" className={metric === "pk" ? "on" : ""} onClick={() => onSetMetric("pk")}>
             Pk %
           </button>
         </fieldset>
@@ -157,48 +161,53 @@ export function ConditionMatrix({
                               }
                             : undefined
                         }
-                        onClick={() => onToggleCell(cell.aspect, cell.altitudeRelation)}
                       >
-                        <div className="cell-main">
-                          {metric === "kills" && (
-                            <>
-                              <span className="cell-big">{cell.kills}</span>
-                              <span className="cell-unit">
-                                kill{cell.kills === 1 ? "" : "s"}
-                                {cell.kills > 0 ? ` (${Math.round(cell.killShare * 100)}%)` : ""}
-                              </span>
-                            </>
-                          )}
-                          {metric === "shots" && (
-                            <>
-                              <span className="cell-big">{cell.shots}</span>
-                              <span className="cell-unit">
-                                shot{cell.shots === 1 ? "" : "s"} ({cell.kills} kill
-                                {cell.kills === 1 ? "" : "s"})
-                              </span>
-                            </>
-                          )}
-                          {metric === "pk" && (
-                            <>
-                              <span className="cell-big">
-                                {cell.pk !== null ? `${Math.round(cell.pk * 100)}%` : "–"}
-                              </span>
-                              <span className="cell-unit">
-                                {cell.kills}/{cell.shots} kills
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        {cell.shots > 0 && (
-                          <div className="cell-sub muted small">
-                            <span>
-                              {cell.kills}/{cell.shots} ({Math.round((cell.pk ?? 0) * 100)}% Pk)
-                            </span>
-                            {cell.medianKillRangeM !== null && (
-                              <span> · med {fmtDist(cell.medianKillRangeM, distanceUnit)}</span>
+                        <button
+                          type="button"
+                          className="matrix-cell-btn"
+                          onClick={() => onToggleCell(cell.aspect, cell.altitudeRelation)}
+                        >
+                          <div className="cell-main">
+                            {metric === "kills" && (
+                              <>
+                                <span className="cell-big">{cell.kills}</span>
+                                <span className="cell-unit">
+                                  kill{cell.kills === 1 ? "" : "s"}
+                                  {cell.kills > 0 ? ` (${Math.round(cell.killShare * 100)}%)` : ""}
+                                </span>
+                              </>
+                            )}
+                            {metric === "shots" && (
+                              <>
+                                <span className="cell-big">{cell.shots}</span>
+                                <span className="cell-unit">
+                                  shot{cell.shots === 1 ? "" : "s"} ({cell.kills} kill
+                                  {cell.kills === 1 ? "" : "s"})
+                                </span>
+                              </>
+                            )}
+                            {metric === "pk" && (
+                              <>
+                                <span className="cell-big">
+                                  {cell.pk !== null ? `${Math.round(cell.pk * 100)}%` : "–"}
+                                </span>
+                                <span className="cell-unit">
+                                  {cell.kills}/{cell.shots} kills
+                                </span>
+                              </>
                             )}
                           </div>
-                        )}
+                          {cell.shots > 0 && (
+                            <div className="cell-sub muted small">
+                              <span>
+                                {cell.kills}/{cell.shots} ({Math.round((cell.pk ?? 0) * 100)}% Pk)
+                              </span>
+                              {cell.medianKillRangeM !== null && (
+                                <span> · med {fmtDist(cell.medianKillRangeM, distanceUnit)}</span>
+                              )}
+                            </div>
+                          )}
+                        </button>
                       </td>
                     );
                   })}
@@ -210,7 +219,8 @@ export function ConditionMatrix({
                           <span className="muted small">({Math.round(rowSum.killShare * 100)}%)</span>
                         </div>
                         <div className="muted small">
-                          {rowSum.shots} shots · {rowSum.pk !== null ? `${Math.round(rowSum.pk * 100)}% Pk` : "–"}
+                          {rowSum.shots} shots ·{" "}
+                          {rowSum.pk !== null ? `${Math.round(rowSum.pk * 100)}% Pk` : "–"}
                         </div>
                       </>
                     )}
@@ -241,7 +251,8 @@ export function ConditionMatrix({
                   <strong>{totalKills}</strong> kills
                 </div>
                 <div className="muted small">
-                  {totalShots} shots · {totalShots > 0 ? `${Math.round((totalKills / totalShots) * 100)}% Pk` : "–"}
+                  {totalShots} shots ·{" "}
+                  {totalShots > 0 ? `${Math.round((totalKills / totalShots) * 100)}% Pk` : "–"}
                 </div>
               </td>
             </tr>
@@ -325,10 +336,7 @@ export function RangeDistributionChart({
           </label>
           <label className="small muted">
             Bin size:{" "}
-            <select
-              value={binStepUnits}
-              onChange={(e) => onChangeBinStepUnits(Number(e.target.value))}
-            >
+            <select value={binStepUnits} onChange={(e) => onChangeBinStepUnits(Number(e.target.value))}>
               {stepOptions.map((s) => (
                 <option key={s} value={s}>
                   {s} {unitName}
@@ -390,10 +398,14 @@ export function RangeDistributionChart({
           const hiLabel = Math.round(b.maxM / unitM);
 
           return (
+            // biome-ignore lint/a11y/useSemanticElements: SVG <g> cannot be replaced with HTML <button>
             <g
               key={b.index}
+              role="button"
+              tabIndex={0}
               className="hist-bar-group"
               onClick={() => onSelectBinRange(b.minM, b.maxM)}
+              onKeyDown={activateOnKey(() => onSelectBinRange(b.minM, b.maxM))}
               style={{ cursor: "pointer" }}
             >
               <title>
@@ -457,26 +469,14 @@ export function RangeDistributionChart({
                   {Math.round(b.pk * 100)}%
                 </text>
               )}
-              <text
-                x={cx}
-                y={padT + plotH + 16}
-                textAnchor="middle"
-                fontSize="10.5"
-                fill="var(--muted)"
-              >
+              <text x={cx} y={padT + plotH + 16} textAnchor="middle" fontSize="10.5" fill="var(--muted)">
                 {loLabel}–{hiLabel}
               </text>
             </g>
           );
         })}
 
-        <text
-          x={padL + plotW / 2}
-          y={height - 6}
-          textAnchor="middle"
-          fontSize="11.5"
-          fill="var(--muted)"
-        >
+        <text x={padL + plotW / 2} y={height - 6} textAnchor="middle" fontSize="11.5" fill="var(--muted)">
           Initial Slant Range ({unitName})
         </text>
       </svg>
@@ -539,10 +539,7 @@ export function PolarAspectRangePlot({
   const unitM = distanceUnitM(distanceUnit);
   const withGeom = engagements.filter((e) => e.initial !== null && (showMisses || e.isKill));
 
-  const maxRangeM = Math.max(
-    10 * unitM,
-    ...withGeom.map((e) => e.initial!.slantRangeM),
-  );
+  const maxRangeM = Math.max(10 * unitM, ...withGeom.map((e) => e.initial!.slantRangeM));
   // Snap outer ring to a clean multiple of 5 or 10 units
   const maxUnits = Math.ceil(maxRangeM / unitM / 5) * 5;
   const outerM = maxUnits * unitM;
@@ -646,9 +643,13 @@ export function PolarAspectRangePlot({
           const isSelected = e.id === selectedId;
 
           return (
+            // biome-ignore lint/a11y/useSemanticElements: SVG <g> cannot be replaced with HTML <button>
             <g
               key={e.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectEngagement(e.id)}
+              onKeyDown={activateOnKey(() => onSelectEngagement(e.id))}
               onDoubleClick={onShowOnMap ? () => onShowOnMap(e) : undefined}
               style={DOT_STYLE}
             >
@@ -656,34 +657,12 @@ export function PolarAspectRangePlot({
                 {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — ${ASPECT_SHORT_LABELS[ic.aspectCategory]} (${Math.round(ic.aspectDeg)}°), ${ALT_RELATION_LABELS[ic.altitudeRelation]}, Range ${fmtDist(ic.slantRangeM, distanceUnit)}${onShowOnMap ? DBLCLICK_HINT : ""}`}
               </title>
               {isSelected && (
-                <circle
-                  cx={px}
-                  cy={py}
-                  r={9}
-                  fill="none"
-                  stroke="var(--text)"
-                  strokeWidth={2}
-                />
+                <circle cx={px} cy={py} r={9} fill="none" stroke="var(--text)" strokeWidth={2} />
               )}
               {e.isKill ? (
-                <circle
-                  cx={px}
-                  cy={py}
-                  r={5.5}
-                  fill={color}
-                  stroke="var(--surface)"
-                  strokeWidth={1.5}
-                />
+                <circle cx={px} cy={py} r={5.5} fill={color} stroke="var(--surface)" strokeWidth={1.5} />
               ) : (
-                <circle
-                  cx={px}
-                  cy={py}
-                  r={4}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={1.8}
-                  opacity={0.75}
-                />
+                <circle cx={px} cy={py} r={4} fill="none" stroke={color} strokeWidth={1.8} opacity={0.75} />
               )}
             </g>
           );
@@ -863,40 +842,32 @@ export function AltitudeScatterPlot({
           const color = ALT_RELATION_COLORS[ic.altitudeRelation];
           const isSelected = e.id === selectedId;
           return (
+            // biome-ignore lint/a11y/useSemanticElements: SVG <g> cannot be replaced with HTML <button>
             <g
               key={e.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectEngagement(e.id)}
+              onKeyDown={activateOnKey(() => onSelectEngagement(e.id))}
               onDoubleClick={onShowOnMap ? () => onShowOnMap(e) : undefined}
               style={DOT_STYLE}
             >
               <title>
                 {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — Shooter ${fmtAlt(e.shooter!.altM, altitudeUnit)} → Target ${fmtAlt(e.target!.altM, altitudeUnit)} (${ALT_RELATION_LABELS[ic.altitudeRelation]}), Range ${fmtDist(ic.slantRangeM, distanceUnit)}${onShowOnMap ? DBLCLICK_HINT : ""}`}
               </title>
-              {isSelected && <circle cx={sx} cy={sy} r={9} fill="none" stroke="var(--text)" strokeWidth={2} />}
+              {isSelected && (
+                <circle cx={sx} cy={sy} r={9} fill="none" stroke="var(--text)" strokeWidth={2} />
+              )}
               {e.isKill ? (
                 <circle cx={sx} cy={sy} r={5.5} fill={color} stroke="var(--surface)" strokeWidth={1.5} />
               ) : (
-                <circle
-                  cx={sx}
-                  cy={sy}
-                  r={4}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={1.8}
-                  opacity={0.75}
-                />
+                <circle cx={sx} cy={sy} r={4} fill="none" stroke={color} strokeWidth={1.8} opacity={0.75} />
               )}
             </g>
           );
         })}
 
-        <text
-          x={padL + plotW / 2}
-          y={height - 6}
-          textAnchor="middle"
-          fontSize="11"
-          fill="var(--muted)"
-        >
+        <text x={padL + plotW / 2} y={height - 6} textAnchor="middle" fontSize="11" fill="var(--muted)">
           Shooter Altitude at Launch ({altUnitLabel})
         </text>
         <text

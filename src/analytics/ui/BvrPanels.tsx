@@ -193,7 +193,7 @@ export function PatchComparisonCard({
 
       {visibleAlerts.length > 0 && (
         <div className="patch-alerts">
-          {visibleAlerts.map((a, idx) => {
+          {visibleAlerts.map((a) => {
             const sigColor = a.chanceProb < 0.05 ? "#10b981" : a.chanceProb < 0.15 ? "#eab308" : "#94a3b8";
             const sigBg =
               a.chanceProb < 0.05
@@ -203,7 +203,7 @@ export function PatchComparisonCard({
                   : "rgba(148, 163, 184, 0.14)";
             return (
               <div
-                key={idx}
+                key={`${a.fromCohort}:${a.toCohort}:${a.summary}`}
                 className={`patch-alert-item severity-${a.severity}`}
                 style={{
                   opacity: a.chanceProb >= 0.25 ? 0.78 : 1,
@@ -958,10 +958,12 @@ export function BvrTimelineCard({
   const [altFilter, setAltFilter] = useState<AltitudeFilter>("all");
   const highAltOnly = altFilter === "hi18";
   const band: AltitudeBand | null = altFilter === "all" || altFilter === "hi18" ? null : altFilter;
+  const hasUsableModels = Boolean(fitted?.some((f) => f.model.quality === "good"));
   const bandScales = useMemo(
     () => (band && fitted ? tierAltitudeScales(fitted, band) : null),
     [band, fitted],
   );
+  const hasScaledGates = Boolean(bandScales && Object.values(bandScales).some(Boolean));
   /** The chart, with its kinematic gates scaled to the chosen altitude band by the fitted missile reach. */
   const priorTable = useMemo(
     () => (bandScales ? scaleTimelineTable(DEFAULT_MILSIM_TIMELINE, bandScales) : DEFAULT_MILSIM_TIMELINE),
@@ -1011,8 +1013,11 @@ export function BvrTimelineCard({
         roundUpNm: kneeboardRoundUp,
         planLanes: kneeboardLanes,
         sourceLabel:
-          (isBaseline ? (band ? "Chart scaled by fitted reach" : "Chart baseline") : "Custom / ACMI-fitted") +
-          bandPart,
+          (isBaseline
+            ? band && hasScaledGates
+              ? "Chart scaled by fitted reach"
+              : "Chart baseline"
+            : "Custom / ACMI-fitted") + bandPart,
       },
       canvas,
     );
@@ -1027,6 +1032,7 @@ export function BvrTimelineCard({
     kneeboardLanes,
     priorTable,
     band,
+    hasScaledGates,
   ]);
 
   const saveKneeboard = () => {
@@ -1243,8 +1249,13 @@ export function BvrTimelineCard({
               <option value="all">All altitudes (chart as printed)</option>
               <option value="hi18">Shooter or target &ge;18,000 ft (chart as printed)</option>
               {ALTITUDE_BAND_ORDER.map((b) => (
-                <option key={b} value={b} disabled={!fitted}>
-                  {ALTITUDE_BANDS[b].label}, gates scaled{fitted ? "" : " (fitting…)"}
+                <option key={b} value={b} disabled={!hasUsableModels}>
+                  {ALTITUDE_BANDS[b].label}
+                  {hasUsableModels
+                    ? ", gates scaled"
+                    : fitted
+                      ? " (needs 25+ good radar shots)"
+                      : " (fitting…)"}
                 </option>
               ))}
             </select>
@@ -1277,14 +1288,21 @@ export function BvrTimelineCard({
 
       {band && bandScales && (
         <p className="small muted" style={{ margin: "0 0 10px" }}>
-          <strong>{ALTITUDE_BANDS[band].label}:</strong> gates scaled from the chart's 35,000 ft by fitted
-          reach at {ALTITUDE_BANDS[band].refFt.toLocaleString()} ft —{" "}
-          {THREAT_TIER_ORDER.map((tier) => {
-            const sc = bandScales[tier];
-            if (!sc) return `${tier}: no fitted missile`;
-            return `${tier}: head-on ×${sc.hot.toFixed(2)}, no-escape ×${sc.cold.toFixed(2)} (${sc.borrowed ? "borrowed from all fitted missiles" : sc.weapons.join(", ")})`;
-          }).join(" · ")}
-          . Auto-Fit then blends in the outcomes of shots launched in this band.
+          <strong>{ALTITUDE_BANDS[band].label}:</strong>{" "}
+          {hasScaledGates ? (
+            <>
+              gates scaled from the chart&apos;s 35,000 ft by fitted reach at{" "}
+              {ALTITUDE_BANDS[band].refFt.toLocaleString()} ft —{" "}
+              {THREAT_TIER_ORDER.map((tier) => {
+                const sc = bandScales[tier];
+                if (!sc) return `${tier}: no fitted missile`;
+                return `${tier}: head-on ×${sc.hot.toFixed(2)}, no-escape ×${sc.cold.toFixed(2)} (${sc.borrowed ? "borrowed from all fitted missiles" : sc.weapons.join(", ")})`;
+              }).join(" · ")}
+              . Auto-Fit then blends in the outcomes of shots launched in this band.
+            </>
+          ) : (
+            "no good fitted missile yet (needs 25+ tracked radar shots) — filtering shots only, chart baseline unchanged."
+          )}
         </p>
       )}
 

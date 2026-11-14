@@ -104,7 +104,7 @@ export interface MissileModel {
   reachMach: number;
   /** Median arrival Mach of kills. */
   killMachMedian: number | null;
-  /** Longest flight time of any kill (s), caps the reach simulation. */
+  /** Longest flight time of any kill (s); extends the sim horizon past defaultMaxTofS if kills occur later. */
   maxKillTofS: number | null;
   replay: ReplayError;
   /** DCS patches (major.minor) and shot counts behind the model. */
@@ -416,6 +416,27 @@ function fitOne(weapon: string, engagements: MissileEngagement[]): MissileModel 
       if (p.t > 1 && p.t < s.peakAtS - 1) boostThr.push(p.at + dragAccel(cd, ci, p));
       else if (p.t > s.peakAtS + 1 && p.t < motorEndS - 0.5) sustainThr.push(p.at + dragAccel(cd, ci, p));
     }
+  // Short-burn missiles (peakAtS <= ~3 s) have too few interior central-difference samples before peak
+  // speed; estimate average boost thrust from launch-to-peak speed gain plus midpoint drag and climb.
+  if (boostThr.length < 5) {
+    for (const s of shots) {
+      const tr = s.e.track;
+      if (!tr || !(s.peakAtS > 0)) continue;
+      const v0 = Number.isFinite(tr.data[3]) ? tr.data[3]! : s.e.shooter?.speedMs;
+      const vPeak = s.e.flight?.maxSpeedMs;
+      if (v0 == null || vPeak == null || !Number.isFinite(v0 + vPeak)) continue;
+      const h0 = Number.isFinite(tr.data[2]) ? tr.data[2]! : (s.e.shooter?.altM ?? 0);
+      const peakIdx = Math.min(tr.n - 1, Math.max(0, Math.round(s.peakAtS / tr.dt)));
+      const h1Raw = tr.data[peakIdx * TRACK_STRIDE + 2];
+      const h1 = h1Raw !== undefined && Number.isFinite(h1Raw) ? h1Raw : h0;
+      const vm = Math.max(1, 0.5 * (v0 + vPeak));
+      const hm = 0.5 * (h0 + h1);
+      const rho = airDensity(hm);
+      const drag = Math.max(0, cd[machBand(vm / speedOfSoundMs(hm))]!) * rho * vm * vm;
+      const grav = G * ((h1 - h0) / Math.max(1, vm * s.peakAtS));
+      boostThr.push((vPeak - v0) / s.peakAtS + drag + grav);
+    }
+  }
 
   // Replay each coast along its real path with the fitted model and compare end speed.
   const errs: number[] = [];
@@ -493,7 +514,7 @@ function fitOne(weapon: string, engagements: MissileEngagement[]): MissileModel 
     kills: engagements.filter((e) => e.isKill).length,
     coastSamples: coast.y.length,
     boostS,
-    boostAccel: median(boostThr),
+    boostAccel: boostThr.length > 0 ? Math.max(0, median(boostThr)) : 0,
     motorEndS,
     sustainAccel: sustainThr.length > 30 ? Math.max(0, median(sustainThr)) : 0,
     peakMach: median(shots.map((s) => s.e.flight?.maxMach ?? 0)),
@@ -507,9 +528,9 @@ function fitOne(weapon: string, engagements: MissileEngagement[]): MissileModel 
     maxKillTofS: killTof.length ? Math.max(...killTof) : null,
     replay: {
       n: errs.length,
-      medianMach: median(errs),
-      p90Mach: quantile(errs, 0.9),
-      flatDragMedianMach: median(errsFlat),
+      medianMach: errs.length ? median(errs) : 0,
+      p90Mach: errs.length ? quantile(errs, 0.9) : 0,
+      flatDragMedianMach: errsFlat.length ? median(errsFlat) : 0,
     },
     patches,
     quality: suspect ? "suspect" : "good",

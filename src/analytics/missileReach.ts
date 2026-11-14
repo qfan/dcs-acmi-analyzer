@@ -35,7 +35,7 @@ export const SIM_RULES = {
   loftDiveLookDownDeg: 40,
   /** A hit is a pass this close (m). */
   hitM: 25,
-  /** Without kill data, flights are capped at this (s). */
+  /** Minimum flight-time horizon (s); extended up to 180 s if kills occur later. */
   defaultMaxTofS: 120,
   /** Reach search upper bound (nm) and bisection steps. */
   maxRangeNm: 140,
@@ -77,7 +77,7 @@ export function loftGainM(m: MissileModel, rangeNm: number): number {
 
 export function simulateFlyout(m: MissileModel, s: FlyoutScenario): FlyoutResult {
   const dt = SIM_RULES.dtS;
-  const tMax = Math.min(180, (m.maxKillTofS ?? SIM_RULES.defaultMaxTofS) * 1.1);
+  const tMax = Math.min(180, Math.max(SIM_RULES.defaultMaxTofS, (m.maxKillTofS ?? 0) * 1.1));
   const needMach = s.needMach ?? m.reachMach;
   let x = 0;
   let h = s.altM;

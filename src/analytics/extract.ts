@@ -15,16 +15,15 @@ import { dist, Geo } from "../analysis/geo.ts";
 import { weaponLabel } from "../ui/records.ts";
 import { speedOfSoundMs } from "./atmosphere.ts";
 import { buildShotTrack, DecoyIndex, measureMissileFlight } from "./flight.ts";
-import { assessFileQuality, engagementUfo, scanAircraftMotion } from "./quality.ts";
 import {
   type AltitudeRelation,
   type AspectCategory,
   BVR_RANGE_M,
   type ClassificationThresholds,
   DEFAULT_THRESHOLDS,
-  EXTRACTOR_VERSION,
   type EngagementDomain,
   type EngagementOutcome,
+  EXTRACTOR_VERSION,
   type FileAnalytics,
   type InitialCondition,
   type MissileEngagement,
@@ -35,6 +34,7 @@ import {
   type TargetSource,
   type WeaponClass,
 } from "./model.ts";
+import { assessFileQuality, engagementUfo, scanAircraftMotion } from "./quality.ts";
 
 const EARTH_R = 6371008.8;
 const DEG = Math.PI / 180;
@@ -129,9 +129,7 @@ export function classifyWeapon(
 
   // Semi-Active Radar Homing (Fox-1)
   if (
-    /AIM[_-]?7|[RP][_-]?27(ER|PE|R|P)|[RP][_-]?(23|24|40)[RP]|[RP][_-]?33|SUPER[_-]?530|530D|SPARROW/i.test(
-      n,
-    )
+    /AIM[_-]?7|[RP][_-]?27(ER|PE|R|P)|[RP][_-]?(23|24|40)[RP]|[RP][_-]?33|SUPER[_-]?530|530D|SPARROW/i.test(n)
   ) {
     return "A2A-SARH";
   }
@@ -532,9 +530,7 @@ export function extractFileAnalytics(
       }
     }
 
-    const shooterSnap = shooterObj
-      ? buildSnapshot(rec, shooterObj, shot.time, shooterInfo?.pilot)
-      : null;
+    const shooterSnap = shooterObj ? buildSnapshot(rec, shooterObj, shot.time, shooterInfo?.pilot) : null;
     const targetSnap = targetObjAtLaunch
       ? buildSnapshot(rec, targetObjAtLaunch, shot.time, kill?.victimPilot)
       : null;
@@ -558,8 +554,7 @@ export function extractFileAnalytics(
     const hitOrEndTime = kill?.details
       ? kill.details.launchTime + kill.details.flightTimeS
       : (shot.hits[0]?.time ?? shot.endTime);
-    const flightTimeS =
-      hitOrEndTime !== null && hitOrEndTime >= shot.time ? hitOrEndTime - shot.time : null;
+    const flightTimeS = hitOrEndTime !== null && hitOrEndTime >= shot.time ? hitOrEndTime - shot.time : null;
 
     // Terminal F-pole distance between shooter and target at impact time
     let fPoleRangeM: number | null = null;
@@ -644,9 +639,7 @@ export function extractFileAnalytics(
     const targetLives: AcmiObject[] = [targetObjAtLaunch];
     if (targetObjAtEnd && targetObjAtEnd !== targetObjAtLaunch) targetLives.push(targetObjAtEnd);
 
-    const shooterSnap = shooterObj
-      ? buildSnapshot(rec, shooterObj, launchTime, kill.killer?.pilot)
-      : null;
+    const shooterSnap = shooterObj ? buildSnapshot(rec, shooterObj, launchTime, kill.killer?.pilot) : null;
     const targetSnap = buildSnapshot(rec, targetObjAtLaunch, launchTime, kill.victimPilot);
     const wClass = classifyWeapon(w, shooterObj, targetObjAtLaunch);
     const domain = engagementDomain(wClass, shooterSnap, targetSnap);

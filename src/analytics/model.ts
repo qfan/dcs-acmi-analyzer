@@ -8,29 +8,11 @@ import type { Confidence } from "../analysis/analyze.ts";
  * without retaining heavy time-series buffers in the main thread.
  */
 
-export type AspectCategory =
-  | "head-on"
-  | "forward-quarter"
-  | "beam"
-  | "rear-quarter"
-  | "tail-on"
-  | "unknown";
+export type AspectCategory = "head-on" | "forward-quarter" | "beam" | "rear-quarter" | "tail-on" | "unknown";
 
-export type AltitudeRelation =
-  | "co-alt-high"
-  | "co-alt-low"
-  | "high-to-low"
-  | "low-to-high"
-  | "unknown";
+export type AltitudeRelation = "co-alt-high" | "co-alt-low" | "high-to-low" | "low-to-high" | "unknown";
 
-export type WeaponClass =
-  | "A2A-ARH"
-  | "A2A-SARH"
-  | "A2A-IR"
-  | "A2A-Other"
-  | "SAM"
-  | "A2G"
-  | "Gun";
+export type WeaponClass = "A2A-ARH" | "A2A-SARH" | "A2A-IR" | "A2A-Other" | "SAM" | "A2G" | "Gun";
 
 export type EngagementDomain = "A2A" | "SAM" | "A2G" | "Intercept" | "Other";
 
@@ -317,18 +299,7 @@ export interface ShotTrack {
   shooterFlareS: number[];
 }
 
-export const TRACK_CHANNELS = [
-  "mE",
-  "mN",
-  "mAlt",
-  "mSpeed",
-  "tE",
-  "tN",
-  "tAlt",
-  "sE",
-  "sN",
-  "sAlt",
-] as const;
+export const TRACK_CHANNELS = ["mE", "mN", "mAlt", "mSpeed", "tE", "tN", "tAlt", "sE", "sN", "sAlt"] as const;
 export const TRACK_STRIDE = TRACK_CHANNELS.length;
 export const TRACK_DT_S = 0.5;
 /** Tracks are cut this long after launch at most. */

@@ -49,10 +49,7 @@ export async function getCachedAnalytics(cacheKey: string): Promise<FileAnalytic
   });
 }
 
-export async function putCachedAnalytics(
-  cacheKey: string,
-  analytics: FileAnalytics,
-): Promise<void> {
+export async function putCachedAnalytics(cacheKey: string, analytics: FileAnalytics): Promise<void> {
   const db = await openCacheDb();
   if (!db) return;
   return new Promise((resolve) => {

@@ -172,6 +172,40 @@ describe("missile flyout fit", () => {
       expect(r.dangerousColdNm).toBeLessThanOrEqual(r.coldNm);
     }
   });
+
+  it("does not truncate reach ladders when observed kills only occurred at short TOF", () => {
+    const base = shots(40, 23);
+    const withShortKills = base.map((e, i) =>
+      i < 5
+        ? ({
+            ...e,
+            isKill: true,
+            flight: { ...e.flight!, tofS: 15, cpaMissileSpeedMs: 320 },
+          } as unknown as MissileEngagement)
+        : e,
+    );
+    const [fittedShortKills] = fitMissileModels(withShortKills);
+    expect(fittedShortKills!.maxKillTofS).toBe(15);
+    const ladder = reachLadder(fittedShortKills!);
+    expect(ladder).toEqual(reachLadder({ ...fittedShortKills!, maxKillTofS: null }));
+    const rung35k = ladder.find((r) => r.altFt === 35000)!;
+    expect(rung35k.hotDirectNm).toBeGreaterThan(30);
+    expect(rung35k.coldNm).toBeGreaterThan(15);
+  });
+
+  it("recovers finite positive boost acceleration and non-zero reach for short-burn missiles", () => {
+    const shortBurn = { ...TRUTH, boostS: 2.5, boostAccel: 400 };
+    const [sb] = fitMissileModels(shots(40, 29, shortBurn));
+    expect(sb).toBeDefined();
+    expect(sb!.boostS).toBeCloseTo(2.5, 0);
+    expect(Number.isFinite(sb!.boostAccel)).toBe(true);
+    expect(sb!.boostAccel).toBeGreaterThan(250);
+    const ladder = reachLadder(sb!);
+    for (const r of ladder) {
+      expect(r.hotDirectNm).toBeGreaterThan(0);
+      expect(r.coldNm).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe("altitude-scaled BVR timeline", () => {

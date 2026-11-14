@@ -2,13 +2,7 @@ import type { AcmiObject, Recording } from "../acmi/model.ts";
 import { indexAt } from "../acmi/tracks.ts";
 import { dist, type Geo } from "../analysis/geo.ts";
 import { speedOfSoundMs } from "./atmosphere.ts";
-import {
-  type MissileFlight,
-  type ShotTrack,
-  TRACK_DT_S,
-  TRACK_MAX_S,
-  TRACK_STRIDE,
-} from "./model.ts";
+import { type MissileFlight, type ShotTrack, TRACK_DT_S, TRACK_MAX_S, TRACK_STRIDE } from "./model.ts";
 
 /**
  * Post-launch measurements for a single missile shot:
@@ -69,7 +63,12 @@ export class DecoyIndex {
   }
 
   /** Releases in [t0, t1] by `owner`: times relative to `tRef`, split into chaff and flares. */
-  releasesBy(owner: AcmiObject | null, t0: number, t1: number, tRef: number): { chaff: number[]; flare: number[] } {
+  releasesBy(
+    owner: AcmiObject | null,
+    t0: number,
+    t1: number,
+    tRef: number,
+  ): { chaff: number[]; flare: number[] } {
     const out = { chaff: [] as number[], flare: [] as number[] };
     if (!owner) return out;
     let lo = 0;

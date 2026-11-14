@@ -1,5 +1,5 @@
-import { BVR_RANGE_M, type FileAnalytics, type MissileEngagement, TRACK_STRIDE } from "./model.ts";
 import { speedOfSoundMs } from "./atmosphere.ts";
+import { BVR_RANGE_M, type FileAnalytics, type MissileEngagement, TRACK_STRIDE } from "./model.ts";
 import { mean, percentile } from "./query.ts";
 
 const DEG = Math.PI / 180;
