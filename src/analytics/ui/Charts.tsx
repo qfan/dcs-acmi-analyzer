@@ -505,6 +505,10 @@ export function RangeDistributionChart({
   );
 }
 
+/** Double-clicking a dot would otherwise select nearby axis labels. */
+const DOT_STYLE = { cursor: "pointer", userSelect: "none" } as const;
+const DBLCLICK_HINT = "\nDouble-click: show on map";
+
 interface PolarPlotProps {
   engagements: MissileEngagement[];
   distanceUnit: DistanceUnit;
@@ -512,6 +516,8 @@ interface PolarPlotProps {
   onToggleShowMisses: (v: boolean) => void;
   selectedId: string | null;
   onSelectEngagement: (id: string) => void;
+  /** Single-file viewer: double-click a dot to jump the map to that launch. */
+  onShowOnMap?: (e: MissileEngagement) => void;
 }
 
 /**
@@ -527,6 +533,7 @@ export function PolarAspectRangePlot({
   onToggleShowMisses,
   selectedId,
   onSelectEngagement,
+  onShowOnMap,
 }: PolarPlotProps) {
   const unitName = distanceUnitName(distanceUnit);
   const unitM = distanceUnitM(distanceUnit);
@@ -552,6 +559,7 @@ export function PolarAspectRangePlot({
           <h3>Target Aspect vs. Initial Range (Polar Plot)</h3>
           <p className="muted small matrix-sub">
             180° Head-on (top) → 90° Beam → 0° Tail-on (bottom). Radius = launch range.
+            {onShowOnMap && " Double-click a dot to jump the map to that launch."}
           </p>
         </div>
         <label className="toggle">
@@ -641,10 +649,11 @@ export function PolarAspectRangePlot({
             <g
               key={e.id}
               onClick={() => onSelectEngagement(e.id)}
-              style={{ cursor: "pointer" }}
+              onDoubleClick={onShowOnMap ? () => onShowOnMap(e) : undefined}
+              style={DOT_STYLE}
             >
               <title>
-                {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — ${ASPECT_SHORT_LABELS[ic.aspectCategory]} (${Math.round(ic.aspectDeg)}°), ${ALT_RELATION_LABELS[ic.altitudeRelation]}, Range ${fmtDist(ic.slantRangeM, distanceUnit)}`}
+                {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — ${ASPECT_SHORT_LABELS[ic.aspectCategory]} (${Math.round(ic.aspectDeg)}°), ${ALT_RELATION_LABELS[ic.altitudeRelation]}, Range ${fmtDist(ic.slantRangeM, distanceUnit)}${onShowOnMap ? DBLCLICK_HINT : ""}`}
               </title>
               {isSelected && (
                 <circle
@@ -692,6 +701,8 @@ interface AltPlotProps {
   showMisses: boolean;
   selectedId: string | null;
   onSelectEngagement: (id: string) => void;
+  /** Single-file viewer: double-click a dot to jump the map to that launch. */
+  onShowOnMap?: (e: MissileEngagement) => void;
 }
 
 /**
@@ -707,6 +718,7 @@ export function AltitudeScatterPlot({
   showMisses,
   selectedId,
   onSelectEngagement,
+  onShowOnMap,
 }: AltPlotProps) {
   const isFeet = altitudeUnit.startsWith("ft");
   const kAlt = isFeet ? 3.28084 : 1;
@@ -765,6 +777,7 @@ export function AltitudeScatterPlot({
           <p className="muted small matrix-sub">
             Diagonal band = Co-Altitude (±{fmtAlt(thresholds.coAltBandM, altitudeUnit)}). Below diagonal =
             High→Low; above = Low→High.
+            {onShowOnMap && " Double-click a dot to jump the map to that launch."}
           </p>
         </div>
       </div>
@@ -850,9 +863,14 @@ export function AltitudeScatterPlot({
           const color = ALT_RELATION_COLORS[ic.altitudeRelation];
           const isSelected = e.id === selectedId;
           return (
-            <g key={e.id} onClick={() => onSelectEngagement(e.id)} style={{ cursor: "pointer" }}>
+            <g
+              key={e.id}
+              onClick={() => onSelectEngagement(e.id)}
+              onDoubleClick={onShowOnMap ? () => onShowOnMap(e) : undefined}
+              style={DOT_STYLE}
+            >
               <title>
-                {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — Shooter ${fmtAlt(e.shooter!.altM, altitudeUnit)} → Target ${fmtAlt(e.target!.altM, altitudeUnit)} (${ALT_RELATION_LABELS[ic.altitudeRelation]}), Range ${fmtDist(ic.slantRangeM, distanceUnit)}`}
+                {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — Shooter ${fmtAlt(e.shooter!.altM, altitudeUnit)} → Target ${fmtAlt(e.target!.altM, altitudeUnit)} (${ALT_RELATION_LABELS[ic.altitudeRelation]}), Range ${fmtDist(ic.slantRangeM, distanceUnit)}${onShowOnMap ? DBLCLICK_HINT : ""}`}
               </title>
               {isSelected && <circle cx={sx} cy={sy} r={9} fill="none" stroke="var(--text)" strokeWidth={2} />}
               {e.isKill ? (

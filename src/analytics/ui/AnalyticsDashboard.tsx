@@ -164,6 +164,14 @@ export function AnalyticsPanels({ dash, singleFile = false, onShowOnMap }: Analy
   };
 
   const selectEngagement = (id: string) => setSelectedEngagementId(selectedEngagementId === id ? null : id);
+  // A double-click first delivers two clicks (select, then deselect), so select explicitly here:
+  // the dot stays highlighted while the map jumps to it.
+  const showDotOnMap = onShowOnMap
+    ? (e: MissileEngagement) => {
+        setSelectedEngagementId(e.id);
+        onShowOnMap(e);
+      }
+    : undefined;
 
   return (
     <>
@@ -217,6 +225,7 @@ export function AnalyticsPanels({ dash, singleFile = false, onShowOnMap }: Analy
           onToggleShowMisses={dash.setShowMissesOnScatter}
           selectedId={selectedEngagementId}
           onSelectEngagement={selectEngagement}
+          onShowOnMap={showDotOnMap}
         />
         <AltitudeScatterPlot
           engagements={result.engagements}
@@ -226,6 +235,7 @@ export function AnalyticsPanels({ dash, singleFile = false, onShowOnMap }: Analy
           showMisses={dash.showMissesOnScatter}
           selectedId={selectedEngagementId}
           onSelectEngagement={selectEngagement}
+          onShowOnMap={showDotOnMap}
         />
       </div>
 
