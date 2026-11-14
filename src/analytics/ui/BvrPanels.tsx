@@ -1629,7 +1629,7 @@ export function SuddenReactionCard({
   const plotW = W - margin.left - margin.right;
   const plotH = H - margin.top - margin.bottom;
   const maxCount = Math.max(1, ...visibleBins.map((b) => b.count));
-  const yTicks = [0, Math.round(maxCount / 2), maxCount];
+  const yTicks = [...new Set([0, Math.round(maxCount / 2), maxCount])];
   const bandW = visibleBins.length > 0 ? plotW / visibleBins.length : plotW;
   const barW = Math.max(8, bandW - Math.max(4, bandW * 0.24));
 
@@ -1669,14 +1669,14 @@ export function SuddenReactionCard({
           <div className="mode-switch">
             <button
               type="button"
-              className={stackMode === "outcome" ? "active" : ""}
+              className={stackMode === "outcome" ? "on" : ""}
               onClick={() => setStackMode("outcome")}
             >
               Outcome
             </button>
             <button
               type="button"
-              className={stackMode === "chaff" ? "active" : ""}
+              className={stackMode === "chaff" ? "on" : ""}
               onClick={() => setStackMode("chaff")}
             >
               Chaff
@@ -1687,7 +1687,7 @@ export function SuddenReactionCard({
               <button
                 key={step}
                 type="button"
-                className={activeBinUnits === step ? "active" : ""}
+                className={activeBinUnits === step ? "on" : ""}
                 onClick={() => setBinStepUnits(step)}
               >
                 {step}
@@ -1706,7 +1706,7 @@ export function SuddenReactionCard({
           {scopeCounts.a2aAll > 0 && (
             <button
               type="button"
-              className={effectiveScope === "a2a-all" ? "active" : ""}
+              className={effectiveScope === "a2a-all" ? "on" : ""}
               onClick={() => setWeaponScope("a2a-all")}
             >
               All A2A Missiles ({scopeCounts.a2aAll})
@@ -1714,7 +1714,7 @@ export function SuddenReactionCard({
           )}
           <button
             type="button"
-            className={effectiveScope === "A2A-ARH" ? "active" : ""}
+            className={effectiveScope === "A2A-ARH" ? "on" : ""}
             onClick={() => setWeaponScope("A2A-ARH")}
             disabled={scopeCounts.arh === 0}
           >
@@ -1722,7 +1722,7 @@ export function SuddenReactionCard({
           </button>
           <button
             type="button"
-            className={effectiveScope === "A2A-IR" ? "active" : ""}
+            className={effectiveScope === "A2A-IR" ? "on" : ""}
             onClick={() => setWeaponScope("A2A-IR")}
             disabled={scopeCounts.ir === 0}
           >
@@ -1730,7 +1730,7 @@ export function SuddenReactionCard({
           </button>
           <button
             type="button"
-            className={effectiveScope === "A2A-SARH" ? "active" : ""}
+            className={effectiveScope === "A2A-SARH" ? "on" : ""}
             onClick={() => setWeaponScope("A2A-SARH")}
             disabled={scopeCounts.sarh === 0}
           >
@@ -1739,7 +1739,7 @@ export function SuddenReactionCard({
           {(scopeCounts.hasNonA2a || scopeCounts.a2aAll === 0) && (
             <button
               type="button"
-              className={effectiveScope === "all" ? "active" : ""}
+              className={effectiveScope === "all" ? "on" : ""}
               onClick={() => setWeaponScope("all")}
             >
               All Weapons ({scopeCounts.all})
@@ -1873,10 +1873,10 @@ export function SuddenReactionCard({
                     y1={y}
                     x2={W - margin.right}
                     y2={y}
-                    stroke="#2a303a"
+                    stroke="var(--border)"
                     strokeDasharray="2 3"
                   />
-                  <text x={margin.left - 6} y={y + 3} fill="#8b949e" fontSize={10} textAnchor="end">
+                  <text x={margin.left - 6} y={y + 3} fill="var(--muted)" fontSize={10} textAnchor="end">
                     {t}
                   </text>
                 </g>
@@ -1930,14 +1930,14 @@ export function SuddenReactionCard({
                     <text
                       x={xCenter}
                       y={Math.max(margin.top + 10, topY - 4)}
-                      fill="#c9d1d9"
+                      fill="var(--text)"
                       fontSize={9.5}
                       textAnchor="middle"
                     >
                       {b.count}
                     </text>
                   )}
-                  <text x={xCenter} y={H - 12} fill="#9aa4b2" fontSize={9.5} textAnchor="middle">
+                  <text x={xCenter} y={H - 12} fill="var(--muted)" fontSize={9.5} textAnchor="middle">
                     {b.isOverflow
                       ? `${Math.round(b.minM / unitM)}+`
                       : `${Math.round(b.minM / unitM)}–${Math.round(b.maxM / unitM)}`}
@@ -1969,7 +1969,13 @@ export function SuddenReactionCard({
               </g>
             )}
 
-            <text x={margin.left + plotW * 0.5} y={H - 1} fill="#8b949e" fontSize={9.5} textAnchor="middle">
+            <text
+              x={margin.left + plotW * 0.5}
+              y={H - 1}
+              fill="var(--muted)"
+              fontSize={9.5}
+              textAnchor="middle"
+            >
               Missile-to-Target Slant Range at Sudden Reaction Onset ({unitName})
             </text>
           </svg>
@@ -1978,28 +1984,28 @@ export function SuddenReactionCard({
             {stackMode === "outcome" ? (
               <>
                 <span className="legend-item">
-                  <span className="legend-swatch" style={{ background: "#34d399" }} />
+                  <span className="dot" style={{ background: "#34d399" }} />
                   Survived ({analysis.suddenSurvived})
                 </span>
                 <span className="legend-item">
-                  <span className="legend-swatch" style={{ background: "#f87171" }} />
+                  <span className="dot" style={{ background: "#f87171" }} />
                   Killed ({analysis.suddenKills})
                 </span>
               </>
             ) : (
               <>
                 <span className="legend-item">
-                  <span className="legend-swatch" style={{ background: "#60a5fa" }} />
+                  <span className="dot" style={{ background: "#60a5fa" }} />
                   With chaff ({analysis.withChaffShots})
                 </span>
                 <span className="legend-item">
-                  <span className="legend-swatch" style={{ background: "#f59e0b" }} />
+                  <span className="dot" style={{ background: "#f59e0b" }} />
                   Maneuver / no chaff ({analysis.withoutChaffShots})
                 </span>
               </>
             )}
             <span className="legend-item">
-              <span className="legend-swatch" style={{ background: "#38bdf8" }} />
+              <span className="dot" style={{ background: "#38bdf8" }} />
               Median M&rarr;T range
             </span>
           </div>
