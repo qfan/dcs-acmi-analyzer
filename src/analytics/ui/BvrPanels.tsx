@@ -11,6 +11,13 @@ import {
   type PilotReport,
   type ShotTacticalMetrics,
 } from "../derive.ts";
+import {
+  ALTITUDE_BAND_ORDER,
+  ALTITUDE_BANDS,
+  type AltitudeBand,
+  type FittedMissile,
+  tierAltitudeScales,
+} from "../missileReach.ts";
 import type { MissileEngagement } from "../model.ts";
 import type { DefeatModeSummary, DefenseTypeSummary } from "../query.ts";
 import {
@@ -22,6 +29,7 @@ import {
   DEFAULT_MILSIM_TIMELINE,
   evaluateBvrTimeline,
   type GateVerdictStatus,
+  scaleTimelineTable,
   THREAT_TIER_META,
   THREAT_TIER_ORDER,
   type ThreatTierValidation,
@@ -37,6 +45,10 @@ import {
 } from "../timelineImage.ts";
 
 const KT_MS = 1852 / 3600;
+
+function timelineTablesEqual(a: BvrTimelineTable, b: BvrTimelineTable): boolean {
+  return THREAT_TIER_ORDER.every((tier) => BVR_TIMELINE_ROWS.every((r) => a[tier][r.key] === b[tier][r.key]));
+}
 /** Fewest hot BVR shots before the loaded data's median closure is offered for gate times. */
 const MIN_CLOSURE_SAMPLES = 8;
 /** Target aspect at launch at or above this counts as hot (180° = pure head-on). */
@@ -929,16 +941,44 @@ function renderCellEmpiricalSubtext(
   }
 }
 
+type AltitudeFilter = "all" | "hi18" | AltitudeBand;
+
 export function BvrTimelineCard({
   engagements,
   tacticsById,
+  fitted,
 }: {
   engagements: MissileEngagement[];
   tacticsById: Map<string, ShotTacticalMetrics>;
+  /** Fitted missile models; when present, an altitude band scales the chart's kinematic gates. */
+  fitted?: FittedMissile[] | null;
 }) {
   const [table, setTable] = useState<BvrTimelineTable>(() => cloneTimelineTable(DEFAULT_MILSIM_TIMELINE));
   const [strikeFighterAdd2Nm, setStrikeFighterAdd2Nm] = useState(false);
-  const [highAltOnly, setHighAltOnly] = useState(false);
+  const [altFilter, setAltFilter] = useState<AltitudeFilter>("all");
+  const highAltOnly = altFilter === "hi18";
+  const band: AltitudeBand | null = altFilter === "all" || altFilter === "hi18" ? null : altFilter;
+  const bandScales = useMemo(
+    () => (band && fitted ? tierAltitudeScales(fitted, band) : null),
+    [band, fitted],
+  );
+  /** The chart, with its kinematic gates scaled to the chosen altitude band by the fitted missile reach. */
+  const priorTable = useMemo(
+    () => (bandScales ? scaleTimelineTable(DEFAULT_MILSIM_TIMELINE, bandScales) : DEFAULT_MILSIM_TIMELINE),
+    [bandScales],
+  );
+  // A new altitude situation starts from its own scaled chart. A refit (the selection changed) only
+  // moves the table along if it was still untouched, so hand edits survive filter changes.
+  const prevPrior = useRef(priorTable);
+  const prevAltFilter = useRef(altFilter);
+  useEffect(() => {
+    const old = prevPrior.current;
+    const situationChanged = prevAltFilter.current !== altFilter;
+    prevPrior.current = priorTable;
+    prevAltFilter.current = altFilter;
+    if (old === priorTable) return;
+    setTable((t) => (situationChanged || timelineTablesEqual(t, old) ? cloneTimelineTable(priorTable) : t));
+  }, [priorTable, altFilter]);
   const [priorWeight, setPriorWeight] = useState<number>(8);
   const [showAllPlanningRows, setShowAllPlanningRows] = useState(true);
   const [kneeboardTheme, setKneeboardTheme] = useState<KneeboardTheme>("day");
@@ -959,9 +999,8 @@ export function BvrTimelineCard({
   useEffect(() => {
     const canvas = kneeboardRef.current;
     if (!showKneeboard || !canvas) return;
-    const isBaseline = THREAT_TIER_ORDER.every((tier) =>
-      BVR_TIMELINE_ROWS.every((r) => table[tier][r.key] === DEFAULT_MILSIM_TIMELINE[tier][r.key]),
-    );
+    const isBaseline = timelineTablesEqual(table, priorTable);
+    const bandPart = band ? ` · ${ALTITUDE_BANDS[band].label}` : "";
     renderKneeboardCanvas(
       table,
       {
@@ -971,7 +1010,9 @@ export function BvrTimelineCard({
         gateTimesClosureKt: gateClosureKt,
         roundUpNm: kneeboardRoundUp,
         planLanes: kneeboardLanes,
-        sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
+        sourceLabel:
+          (isBaseline ? (band ? "Chart scaled by fitted reach" : "Chart baseline") : "Custom / ACMI-fitted") +
+          bandPart,
       },
       canvas,
     );
@@ -984,6 +1025,8 @@ export function BvrTimelineCard({
     gateClosureKt,
     kneeboardRoundUp,
     kneeboardLanes,
+    priorTable,
+    band,
   ]);
 
   const saveKneeboard = () => {
@@ -1002,8 +1045,12 @@ export function BvrTimelineCard({
         strikeFighterAdd2Nm,
         priorWeight,
         highAltOnly,
+        priorTable,
+        altBandFt: band
+          ? { minFt: ALTITUDE_BANDS[band].minFt, maxFt: ALTITUDE_BANDS[band].maxFt }
+          : undefined,
       }),
-    [engagements, tacticsById, table, strikeFighterAdd2Nm, priorWeight, highAltOnly],
+    [engagements, tacticsById, table, strikeFighterAdd2Nm, priorWeight, highAltOnly, priorTable, band],
   );
 
   const updateCell = (tier: BvrThreatTier, key: BvrTimelineRowKey, val: number) => {
@@ -1036,7 +1083,7 @@ export function BvrTimelineCard({
   };
 
   const resetToChartDefault = () => {
-    setTable(cloneTimelineTable(DEFAULT_MILSIM_TIMELINE));
+    setTable(cloneTimelineTable(priorTable));
   };
 
   const visibleRows = showAllPlanningRows
@@ -1188,11 +1235,19 @@ export function BvrTimelineCard({
             *Strike Fighter Tactics (+2 nm to NLT SR &amp; MOR)
           </label>
           <label
-            className="toggle"
-            title="Filter to engagements where shooter or target is >= 18,000 ft (closer to the chart's >M0.95 at 35,000' deploy baseline)"
+            className="small muted"
+            title="Altitude situation. A band keeps only shots launched in it (mean shooter/target altitude) and scales the chart's kinematic gates (THREAT RANGE, NLT SR, MOR, MRAR, DR, LSR, MAR, STERN WEZ) by how far the fitted missiles reach there compared with 35,000 ft. Radar and decision gates stay. The table restarts from the scaled chart."
           >
-            <input type="checkbox" checked={highAltOnly} onChange={(e) => setHighAltOnly(e.target.checked)} />{" "}
-            BVR High-Alt Envelope Only (&ge;18,000 ft)
+            Altitude:{" "}
+            <select value={altFilter} onChange={(e) => setAltFilter(e.target.value as AltitudeFilter)}>
+              <option value="all">All altitudes (chart as printed)</option>
+              <option value="hi18">Shooter or target &ge;18,000 ft (chart as printed)</option>
+              {ALTITUDE_BAND_ORDER.map((b) => (
+                <option key={b} value={b} disabled={!fitted}>
+                  {ALTITUDE_BANDS[b].label}, gates scaled{fitted ? "" : " (fitting…)"}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="toggle">
             <input
@@ -1219,6 +1274,19 @@ export function BvrTimelineCard({
           </label>
         </div>
       </div>
+
+      {band && bandScales && (
+        <p className="small muted" style={{ margin: "0 0 10px" }}>
+          <strong>{ALTITUDE_BANDS[band].label}:</strong> gates scaled from the chart's 35,000 ft by fitted
+          reach at {ALTITUDE_BANDS[band].refFt.toLocaleString()} ft —{" "}
+          {THREAT_TIER_ORDER.map((tier) => {
+            const sc = bandScales[tier];
+            if (!sc) return `${tier}: no fitted missile`;
+            return `${tier}: head-on ×${sc.hot.toFixed(2)}, no-escape ×${sc.cold.toFixed(2)} (${sc.borrowed ? "borrowed from all fitted missiles" : sc.weapons.join(", ")})`;
+          }).join(" · ")}
+          . Auto-Fit then blends in the outcomes of shots launched in this band.
+        </p>
+      )}
 
       <div className="table-wrap">
         <table className="records timeline-table">
@@ -1287,7 +1355,7 @@ export function BvrTimelineCard({
                 {THREAT_TIER_ORDER.map((tier) => {
                   const ev = evaluations[tier];
                   const val = table[tier][row.key];
-                  const chartDefault = DEFAULT_MILSIM_TIMELINE[tier][row.key];
+                  const chartDefault = priorTable[tier][row.key];
                   const cellInfo = renderCellEmpiricalSubtext(
                     row.key,
                     ev,
@@ -1349,7 +1417,7 @@ export function BvrTimelineCard({
                           color: row.directlyTestable && diffFromAuto >= 1.5 ? "#eab308" : "var(--muted)",
                         }}
                       >
-                        Chart: <strong>{chartDefault}</strong> nm · Auto-Fit:{" "}
+                        {band ? "Scaled chart" : "Chart"}: <strong>{chartDefault}</strong> nm · Auto-Fit:{" "}
                         <strong>{cellInfo.autoValNm.toFixed(1)}</strong> nm
                       </div>
                     </td>
@@ -1370,9 +1438,8 @@ export function BvrTimelineCard({
               <div key={tier} className="card kpi-card">
                 <div className="stat-label">{tier} Verdict</div>
                 <div className="muted small" style={{ marginTop: 4 }}>
-                  0 shots in current selection — using 100% Mil-Sim Chart prior (MAR{" "}
-                  {DEFAULT_MILSIM_TIMELINE[tier].marNm} nm, Threat{" "}
-                  {DEFAULT_MILSIM_TIMELINE[tier].threatRangeNm} nm).
+                  0 shots in current selection — using 100% {band ? "scaled " : ""}Mil-Sim Chart prior (MAR{" "}
+                  {priorTable[tier].marNm} nm, Threat {priorTable[tier].threatRangeNm} nm).
                 </div>
               </div>
             );

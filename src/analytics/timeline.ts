@@ -261,6 +261,38 @@ export const DEFAULT_MILSIM_TIMELINE: BvrTimelineTable = {
   },
 };
 
+/** Rows that move with the threat missile's head-on reach. */
+export const HOT_REACH_ROWS: BvrTimelineRowKey[] = ["threatRangeNm", "nltSrNm"];
+/** Rows that move with the threat missile's no-escape (tail-chase) reach. */
+export const COLD_REACH_ROWS: BvrTimelineRowKey[] = [
+  "morNm",
+  "mrarNm",
+  "drNm",
+  "lsrNm",
+  "marNm",
+  "sternWezNm",
+];
+
+/**
+ * Scales a table's kinematic gates by per-tier reach ratios (fitted reach at the band altitude ÷ reach at
+ * the chart's altitude). Radar and decision gates (OFR, DFR, commit, pump, tac range, meld) stay as they
+ * are. Values round to 0.5 nm.
+ */
+export function scaleTimelineTable(
+  table: BvrTimelineTable,
+  scales: Record<BvrThreatTier, { hot: number; cold: number } | null>,
+): BvrTimelineTable {
+  const out = cloneTimelineTable(table);
+  const r = (v: number) => Math.max(0.5, Math.round(v * 2) / 2);
+  for (const tier of THREAT_TIER_ORDER) {
+    const s = scales[tier];
+    if (!s) continue;
+    for (const k of HOT_REACH_ROWS) out[tier][k] = r(table[tier][k] * s.hot);
+    for (const k of COLD_REACH_ROWS) out[tier][k] = r(table[tier][k] * s.cold);
+  }
+  return out;
+}
+
 export function cloneTimelineTable(table: BvrTimelineTable): BvrTimelineTable {
   return {
     "IR/SAR-1": { ...table["IR/SAR-1"] },
@@ -447,6 +479,8 @@ export function evaluateBvrTimeline(
     strikeFighterAdd2Nm?: boolean;
     priorWeight?: number;
     highAltOnly?: boolean;
+    /** Keep only shots whose mean shooter/target launch altitude falls in [minFt, maxFt). */
+    altBandFt?: { minFt: number; maxFt: number };
     priorTable?: BvrTimelineTable;
   } = {},
 ): Record<BvrThreatTier, ThreatTierValidation> {
@@ -463,6 +497,10 @@ export function evaluateBvrTimeline(
 
   for (const e of engagements) {
     if (!e.initial) continue;
+    if (options.altBandFt) {
+      const meanFt = e.initial.meanAltM / 0.3048;
+      if (meanFt < options.altBandFt.minFt || meanFt >= options.altBandFt.maxFt) continue;
+    }
     if (options.highAltOnly) {
       const sAlt = e.shooter?.altM ?? 0;
       const tAlt = e.target?.altM ?? 0;
@@ -534,8 +572,7 @@ export function evaluateBvrTimeline(
       const tac = tacticsById.get(e.id);
       return e.isKill || (tac !== undefined && tac.defenseType !== "none");
     }).length;
-    const nltSrForcedDefenseRate =
-      nltSrWindowShots > 0 ? nltSrForcedCount / nltSrWindowShots : null;
+    const nltSrForcedDefenseRate = nltSrWindowShots > 0 ? nltSrForcedCount / nltSrWindowShots : null;
 
     let nltSrVerdict: GateVerdictStatus = "low-data";
     let nltSrNote = "No shots observed near NLT SR window";
@@ -647,8 +684,7 @@ export function evaluateBvrTimeline(
       const tac = tacticsById.get(e.id);
       if (!tac) continue;
       if (tac.defenseType !== "none") {
-        const rM =
-          tac.coldTurnRangeM ?? reactionRangeFallback(tac, e) ?? e.initial?.slantRangeM ?? null;
+        const rM = tac.coldTurnRangeM ?? reactionRangeFallback(tac, e) ?? e.initial?.slantRangeM ?? null;
         if (rM !== null && rM > 0) {
           activeDefList.push({ rangeNm: rM / NM_TO_M, survived: e.isKill ? 0 : 1 });
         }
@@ -773,9 +809,9 @@ export function evaluateBvrTimeline(
     const mleMor =
       morLogistic !== null && morQuantile !== null
         ? Math.max(mleMar + 5, 0.5 * morLogistic + 0.5 * morQuantile)
-        : (morQuantile !== null
-            ? Math.max(mleMar + 5, morQuantile, mleThreatRange * 0.85)
-            : priorCol.morNm);
+        : morQuantile !== null
+          ? Math.max(mleMar + 5, morQuantile, mleThreatRange * 0.85)
+          : priorCol.morNm;
 
     // 4. Empirical DR (Notch Defense Range): 85% notch survival / 85th-pct defended death boundary
     const drLogistic = logisticThresholdAtProb(
@@ -787,8 +823,7 @@ export function evaluateBvrTimeline(
       true,
     );
     const drQuantile = percentile(killedDefendedRanges, 0.85);
-    const mleDr =
-      drLogistic ?? drQuantile ?? Math.max(mleMar + 2, priorCol.drNm + (mleMar - priorCol.marNm));
+    const mleDr = drLogistic ?? drQuantile ?? Math.max(mleMar + 2, priorCol.drNm + (mleMar - priorCol.marNm));
 
     // 5. Empirical NLT SR (First Shot Range): 85th-percentile BVR launch range / forced-defense boundary
     const bvrLaunchRanges = allLaunchRanges.filter((r) => r >= 10);
@@ -833,14 +868,8 @@ export function evaluateBvrTimeline(
       postMar + 0.8,
       Math.min(postDr - 0.5, blend(mleLsr, priorCol.lsrNm, activeDefList.length * 0.5)),
     );
-    const postMor = Math.max(
-      postDr + 2,
-      blend(mleMor, priorCol.morNm, coldList.length + bvrShots * 0.25),
-    );
-    const postNltSr = Math.max(
-      postMor + 1,
-      blend(mleNltSr, priorCol.nltSrNm, bvrShots),
-    );
+    const postMor = Math.max(postDr + 2, blend(mleMor, priorCol.morNm, coldList.length + bvrShots * 0.25));
+    const postNltSr = Math.max(postMor + 1, blend(mleNltSr, priorCol.nltSrNm, bvrShots));
     const postStern = Math.min(
       postMar - 1.5,
       Math.max(2, blend(mleStern, priorCol.sternWezNm, sternList.length)),

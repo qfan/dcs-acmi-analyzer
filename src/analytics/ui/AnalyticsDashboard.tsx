@@ -31,6 +31,7 @@ import {
   WeaponBreakdownCard,
 } from "./Charts.tsx";
 import { EngagementTable } from "./EngagementTable.tsx";
+import { MissileModelsCard, useFittedMissiles } from "./MissilePanels.tsx";
 
 /**
  * Query state and results behind the analytics panels, shared by the multi-file Analytics page and
@@ -103,9 +104,13 @@ export interface AnalyticsPanelsProps {
   onShowOnMap?: (e: MissileEngagement) => void;
 }
 
+const NO_ENGAGEMENTS: MissileEngagement[] = [];
+
 /** Filters, KPIs, charts, cards and the engagement table, in page order. */
 export function AnalyticsPanels({ dash, singleFile = false, onShowOnMap }: AnalyticsPanelsProps) {
   const { units, query, setQuery, result, selectedEngagementId, setSelectedEngagementId } = dash;
+  // One recording rarely has enough shots per missile to fit, so the viewer skips it.
+  const missileFit = useFittedMissiles(singleFile ? NO_ENGAGEMENTS : result.engagements);
   const distUnitName = distanceUnitName(units.distance);
   const distUnitM = distanceUnitM(units.distance);
 
@@ -263,7 +268,15 @@ export function AnalyticsPanels({ dash, singleFile = false, onShowOnMap }: Analy
         onChangeNotchGateDeg={(deg) => setQuery({ ...query, notchGateDeg: deg })}
       />
 
-      {!singleFile && <BvrTimelineCard engagements={result.engagements} tacticsById={result.tacticsById} />}
+      {!singleFile && <MissileModelsCard fitted={missileFit.fitted} busy={missileFit.busy} />}
+
+      {!singleFile && (
+        <BvrTimelineCard
+          engagements={result.engagements}
+          tacticsById={result.tacticsById}
+          fitted={missileFit.fitted}
+        />
+      )}
 
       <WeaponBreakdownCard
         weapons={result.weaponBreakdown}
