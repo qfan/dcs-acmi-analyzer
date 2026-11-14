@@ -28,6 +28,9 @@ import {
 } from "../timeline.ts";
 import {
   DEFAULT_GATE_CLOSURE_KT,
+  KNEEBOARD_PLAN_ORDER,
+  KNEEBOARD_PLANS,
+  type KneeboardPlan,
   type KneeboardTheme,
   renderKneeboardCanvas,
   saveCanvasPng,
@@ -939,6 +942,7 @@ export function BvrTimelineCard({
   const [priorWeight, setPriorWeight] = useState<number>(8);
   const [showAllPlanningRows, setShowAllPlanningRows] = useState(true);
   const [kneeboardTheme, setKneeboardTheme] = useState<KneeboardTheme>("day");
+  const [kneeboardPlan, setKneeboardPlan] = useState<KneeboardPlan>("all");
   /** "off", a fixed closure in kt, or "data" for the loaded shots' median launch closure. */
   const [gateTimes, setGateTimes] = useState<string>("off");
   const dataClosure = useMemo(() => medianBvrLaunchClosureKt(engagements), [engagements]);
@@ -961,6 +965,7 @@ export function BvrTimelineCard({
       table,
       {
         theme: kneeboardTheme,
+        plan: kneeboardPlan,
         strikeFighterAdd2Nm,
         gateTimesClosureKt: gateClosureKt,
         roundUpNm: kneeboardRoundUp,
@@ -968,12 +973,22 @@ export function BvrTimelineCard({
       },
       canvas,
     );
-  }, [showKneeboard, table, kneeboardTheme, strikeFighterAdd2Nm, gateClosureKt, kneeboardRoundUp]);
+  }, [
+    showKneeboard,
+    table,
+    kneeboardTheme,
+    kneeboardPlan,
+    strikeFighterAdd2Nm,
+    gateClosureKt,
+    kneeboardRoundUp,
+  ]);
 
   const saveKneeboard = () => {
     const canvas = kneeboardRef.current;
     if (!canvas) return;
-    void saveCanvasPng(canvas, `bvr-timeline-${kneeboardTheme}.png`).catch((err) =>
+    const planPart =
+      kneeboardPlan === "all" ? "" : `-${kneeboardPlan.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+    void saveCanvasPng(canvas, `bvr-timeline${planPart}-${kneeboardTheme}.png`).catch((err) =>
       alert(`Kneeboard save failed: ${err instanceof Error ? err.message : err}`),
     );
   };
@@ -1080,6 +1095,18 @@ export function BvrTimelineCard({
         <div className="kneeboard-preview">
           <canvas ref={kneeboardRef} className="kneeboard-canvas" aria-label="Kneeboard PNG preview" />
           <div className="kneeboard-side small muted">
+            <select
+              value={kneeboardPlan}
+              onChange={(e) => setKneeboardPlan(e.target.value as KneeboardPlan)}
+              title="Print every gate, or only the gates one game plan flies through (Skate: out at MOR · Short Skate: out NLT MAR · Banzai: to the merge)"
+              aria-label="Kneeboard game plan"
+            >
+              {KNEEBOARD_PLAN_ORDER.map((p) => (
+                <option key={p} value={p}>
+                  {p === "all" ? "All gates" : `Plan ${KNEEBOARD_PLANS[p].label}`}
+                </option>
+              ))}
+            </select>
             <select
               value={kneeboardTheme}
               onChange={(e) => setKneeboardTheme(e.target.value as KneeboardTheme)}

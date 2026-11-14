@@ -1,6 +1,56 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MILSIM_TIMELINE } from "../src/analytics/timeline.ts";
-import { roundUpTable, secondsToNextGate } from "../src/analytics/timelineImage.ts";
+import {
+  KNEEBOARD_PLAN_ORDER,
+  KNEEBOARD_PLANS,
+  planGateChain,
+  planRows,
+  roundUpTable,
+  secondsToNextGate,
+} from "../src/analytics/timelineImage.ts";
+
+describe("kneeboard plans", () => {
+  const codes = (p: Parameters<typeof planRows>[0]) => planRows(p).map((r) => r.key);
+
+  it("keeps all 14 rows on the 'all' card", () => {
+    expect(codes("all")).toHaveLength(14);
+  });
+
+  it("stops the skate card at MOR and its reattack", () => {
+    const rows = codes("skate");
+    expect(rows).toContain("morNm");
+    expect(rows).toContain("mrarNm");
+    for (const k of ["drNm", "lsrNm", "marNm", "sternWezNm", "ofrNm", "dfrNm"] as const) {
+      expect(rows).not.toContain(k);
+    }
+  });
+
+  it("gives banzai the merge gates and factor ranges but not the out ranges", () => {
+    const rows = codes("banzai");
+    for (const k of ["ofrNm", "dfrNm", "drNm", "lsrNm", "marNm", "sternWezNm"] as const) {
+      expect(rows).toContain(k);
+    }
+    expect(rows).not.toContain("morNm");
+    expect(rows).not.toContain("mrarNm");
+  });
+
+  it("only highlights and rewords gates the plan shows, in chart order", () => {
+    for (const p of KNEEBOARD_PLAN_ORDER) {
+      const shown = new Set(codes(p));
+      for (const k of KNEEBOARD_PLANS[p].critical) expect(shown.has(k)).toBe(true);
+      for (const k of Object.keys(KNEEBOARD_PLANS[p].descriptions)) expect(shown.has(k as never)).toBe(true);
+    }
+  });
+
+  it("times each plan's gates to the next gate on its own card", () => {
+    const ar2 = DEFAULT_MILSIM_TIMELINE["AR-2"];
+    // Skate: MOR is the last step, nothing after it
+    expect(planGateChain("skate").at(-1)).toBe("morNm");
+    expect(secondsToNextGate(ar2, "morNm", 1200, 0, planGateChain("skate"))).toBeNull();
+    // Banzai skips MOR: SR 38 → DR 23 is 15 nm = 45 s at 1200 kt
+    expect(secondsToNextGate(ar2, "nltSrNm", 1200, 0, planGateChain("banzai"))).toBeCloseTo(45);
+  });
+});
 
 describe("roundUpTable", () => {
   it("rounds every gate up to a whole nm without touching the input", () => {

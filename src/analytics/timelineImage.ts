@@ -16,8 +16,106 @@ import {
 
 export type KneeboardTheme = "day" | "night";
 
+/**
+ * Which game plan the card is for. "all" is the full 14-row chart; the others are the three basic
+ * game plans the squadron briefs before the fight ("Colt, target single group, plan skate"), each
+ * showing only the gates that plan flies through, worded as the action to take there.
+ */
+export type KneeboardPlan = "all" | "skate" | "shortSkate" | "banzai";
+
+export const KNEEBOARD_PLAN_ORDER: KneeboardPlan[] = ["all", "skate", "shortSkate", "banzai"];
+
+interface PlanMeta {
+  label: string;
+  /** One-line definition printed under the title (omitted for "all"). */
+  summary: string;
+  rows: BvrTimelineRowKey[];
+  /** Gates drawn in the accent color: where this plan gets out or commits. */
+  critical: BvrTimelineRowKey[];
+  /** Plan-specific wording that replaces CARD_DESCRIPTIONS for these rows. */
+  descriptions: Partial<Record<BvrTimelineRowKey, string>>;
+  /** Print the "on timeline × targeted" decision box. */
+  decisionBox: boolean;
+}
+
+/** Gates every plan flies through before the first shot. */
+const PRE_SHOT: BvrTimelineRowKey[] = [
+  "threatRangeNm",
+  "nltCommitNm",
+  "pumpNm",
+  "tacRangeNm",
+  "meldSortNm",
+  "nltSrNm",
+];
+
+const SHOT_CRANK = "Fox-3, then crank ≥50° ATA — don't gimbal and trash the shot";
+
+export const KNEEBOARD_PLANS: Record<KneeboardPlan, PlanMeta> = {
+  all: {
+    label: "All gates",
+    summary: "",
+    rows: BVR_TIMELINE_ROWS.map((r) => r.key),
+    critical: ["marNm", "sternWezNm"],
+    descriptions: {},
+    decisionBox: false,
+  },
+  skate: {
+    label: "Skate",
+    summary: "Launch and leave at MOR: shoot, crank, support the missile, then go out. Never inside MOR.",
+    rows: [...PRE_SHOT, "morNm", "mrarNm"],
+    critical: ["morNm"],
+    descriptions: {
+      nltSrNm: SHOT_CRANK,
+      morNm: "OUT NLT here — threat at 6, drag ≥10 s supersonic, descend to 25,000'",
+      mrarNm: "Earliest turn back in — set radar for the reattack while dragging",
+    },
+    decisionBox: false,
+  },
+  shortSkate: {
+    label: "Short Skate",
+    summary: "Launch and leave NLT MAR: shoot, crank, notch if targeted, then abort.",
+    rows: [...PRE_SHOT, "morNm", "drNm", "lsrNm", "marNm"],
+    critical: ["marNm"],
+    descriptions: {
+      nltSrNm: SHOT_CRANK,
+      morNm: "Assess targeted status — see decision box; losing → out now",
+      drNm: "Targeted → notch now; not targeted → keep cranking",
+      lsrNm: "Last shot at 45° ATA, then abort",
+      marNm: "ABORT NLT here — threat at 6, unload, descend low",
+    },
+    decisionBox: true,
+  },
+  banzai: {
+    label: "Banzai",
+    summary: "Launch and defend, then press to the merge. Inside MAR you are committed.",
+    rows: ["threatRangeNm", "ofrNm", "dfrNm", ...PRE_SHOT.slice(1), "drNm", "lsrNm", "marNm", "sternWezNm"],
+    critical: ["marNm", "sternWezNm"],
+    descriptions: {
+      nltSrNm: SHOT_CRANK,
+      drNm: "Targeted → notch, set radar for the pitch back in",
+      lsrNm: "Last BVR shot at 45° ATA — then go to the merge",
+      marNm: "Inside: committed — BANZAI, eyeball / shooter roles",
+    },
+    decisionBox: true,
+  },
+};
+
+/** The rows a plan's card shows, in chart order. */
+export function planRows(plan: KneeboardPlan): BvrTimelineRowMeta[] {
+  const keep = new Set(KNEEBOARD_PLANS[plan].rows);
+  return BVR_TIMELINE_ROWS.filter((r) => keep.has(r.key));
+}
+
+/** GATE_TIME_CHAIN limited to the gates a plan shows, so times run to the next gate on its card. */
+export function planGateChain(plan: KneeboardPlan): BvrTimelineRowKey[] {
+  const keep = new Set(KNEEBOARD_PLANS[plan].rows);
+  return GATE_TIME_CHAIN.filter((k) => keep.has(k));
+}
+
 export interface KneeboardOptions {
   theme?: KneeboardTheme;
+  /** Game plan to print; defaults to "all". */
+  plan?: KneeboardPlan;
   /** Bake the +2 nm strike-fighter adjustment into the starred rows (NLT SR, MOR). */
   strikeFighterAdd2Nm?: boolean;
   /** Short provenance line, e.g. "Chart baseline" or "Custom / ACMI-fitted". */
@@ -60,9 +158,11 @@ export function secondsToNextGate(
   from: BvrTimelineRowKey,
   closureKt: number,
   strikeBonusNm = 0,
+  /** Gates to step through; a plan's card passes planGateChain(plan). */
+  chain: BvrTimelineRowKey[] = GATE_TIME_CHAIN,
 ): number | null {
-  const i = GATE_TIME_CHAIN.indexOf(from);
-  const to = GATE_TIME_CHAIN[i + 1];
+  const i = chain.indexOf(from);
+  const to = chain[i + 1];
   if (i < 0 || !to || !(closureKt > 0)) return null;
   const eff = (k: BvrTimelineRowKey) =>
     column[k] + (BVR_TIMELINE_ROWS.find((r) => r.key === k)?.hasStrikeFighterStar ? strikeBonusNm : 0);
@@ -70,6 +170,18 @@ export function secondsToNextGate(
   if (!(dNm > 0)) return null;
   return (dNm / closureKt) * 3600;
 }
+
+/** Short names for the gate-time footer line. */
+const CHAIN_SHORT: Partial<Record<BvrTimelineRowKey, string>> = {
+  nltCommitNm: "Commit",
+  tacRangeNm: "Tac",
+  meldSortNm: "Meld",
+  nltSrNm: "SR",
+  morNm: "MOR",
+  drNm: "DR",
+  lsrNm: "LSR",
+  marNm: "MAR",
+};
 
 /** Plain-language gate descriptions for the card (the analytics descriptions mention ACMI stats). */
 const CARD_DESCRIPTIONS: Record<BvrTimelineRowKey, string> = {
@@ -200,6 +312,10 @@ export function renderKneeboardCanvas(
 ): HTMLCanvasElement {
   // Rounding happens before anything is drawn, so gate times use the rounded values too.
   const table = opts.roundUpNm ? roundUpTable(sourceTable) : sourceTable;
+  const plan = opts.plan ?? "all";
+  const planMeta = KNEEBOARD_PLANS[plan];
+  const rows = planRows(plan);
+  const chain = planGateChain(plan);
   const theme = opts.theme ?? "day";
   const pal = PALETTES[theme];
   const scale = opts.scale ?? 2;
@@ -226,10 +342,22 @@ export function renderKneeboardCanvas(
 
   // ── Title block ──
   let y = M + 30;
-  ctx.fillStyle = pal.fg;
-  ctx.font = `800 32px ${FONT}`;
   ctx.textAlign = "left";
-  ctx.fillText("BVR TIMELINE", M, y);
+  const title = "BVR TIMELINE";
+  const planTitle = plan === "all" ? "" : `  PLAN ${planMeta.label.toUpperCase()}`;
+  // Shrink the title if a long plan name would run into the right-hand labels.
+  let titlePx = 32;
+  for (; titlePx > 20; titlePx -= 2) {
+    ctx.font = `800 ${titlePx}px ${FONT}`;
+    if (ctx.measureText(title + planTitle).width <= innerW - 190) break;
+  }
+  ctx.fillStyle = pal.fg;
+  ctx.fillText(title, M, y);
+  if (planTitle) {
+    const tw = ctx.measureText(title).width;
+    ctx.fillStyle = pal.accent;
+    ctx.fillText(planTitle, M + tw, y);
+  }
   ctx.font = `600 14px ${FONT}`;
   ctx.fillStyle = pal.muted;
   ctx.textAlign = "right";
@@ -239,6 +367,15 @@ export function renderKneeboardCanvas(
   ctx.fillStyle = pal.fg;
   ctx.fillRect(M, y, innerW, 3);
   y += 3;
+
+  if (planMeta.summary) {
+    ctx.textAlign = "left";
+    ctx.fillStyle = pal.fg;
+    ctx.font = `600 13px ${FONT}`;
+    ctx.fillText(wrapLines(ctx, planMeta.summary, innerW, 1)[0] ?? "", M, y + 19);
+    y += 28;
+  }
+  const tableTop = y;
 
   // ── Tier header ──
   const headerH = 74;
@@ -270,24 +407,30 @@ export function renderKneeboardCanvas(
   // ── Rows ──
   const bandH = 22;
   const closureKt = opts.gateTimesClosureKt ?? null;
-  const footerH = closureKt ? 70 : 54;
-  const sections = BVR_TIMELINE_ROWS.reduce<BvrTimelineRowMeta["section"][]>((acc, r) => {
+  const decisionH = planMeta.decisionBox ? 66 : 0;
+  const footerH = (closureKt ? 70 : 54) + decisionH;
+  const sections = rows.reduce<BvrTimelineRowMeta["section"][]>((acc, r) => {
     if (acc[acc.length - 1] !== r.section) acc.push(r.section);
     return acc;
   }, []);
   const rowsAvail = H - M - footerH - y - sections.length * bandH;
-  const rowH = Math.floor(rowsAvail / BVR_TIMELINE_ROWS.length);
+  // Plan cards have fewer rows; cap the height so they stay a table rather than stretching to fill.
+  const rowH = Math.min(64, Math.floor(rowsAvail / rows.length));
+  const critical = new Set(planMeta.critical);
 
   let prevSection: BvrTimelineRowMeta["section"] | null = null;
   let stripe = false;
-  for (const row of BVR_TIMELINE_ROWS) {
+  for (const row of rows) {
     if (row.section !== prevSection) {
       ctx.fillStyle = pal.band;
       ctx.fillRect(M, y, innerW, bandH);
       ctx.fillStyle = pal.bandFg;
       ctx.font = `700 12px ${FONT}`;
       ctx.textAlign = "left";
-      ctx.fillText(SECTION_LABELS[row.section], M + 10, y + 15);
+      // A plan card without OFR/DFR has only THREAT RANGE in the first band.
+      const onlyThreat =
+        row.section === "factors" && !rows.some((r) => r.key === "ofrNm" || r.key === "dfrNm");
+      ctx.fillText(onlyThreat ? "THREAT" : SECTION_LABELS[row.section], M + 10, y + 15);
       y += bandH;
       prevSection = row.section;
       stripe = false;
@@ -299,14 +442,15 @@ export function renderKneeboardCanvas(
     }
     stripe = !stripe;
 
-    const isCritical = row.key === "marNm" || row.key === "sternWezNm";
+    const isCritical = critical.has(row.key);
     ctx.textAlign = "left";
     ctx.fillStyle = isCritical ? pal.accent : pal.fg;
     ctx.font = `800 16px ${FONT}`;
     ctx.fillText(`${row.code}${row.hasStrikeFighterStar ? "*" : ""}`, M + 10, y + 21);
     ctx.fillStyle = pal.muted;
     ctx.font = `500 11px ${FONT}`;
-    wrapLines(ctx, CARD_DESCRIPTIONS[row.key], gateColW - 18, 2).forEach((ln, li) => {
+    const desc = planMeta.descriptions[row.key] ?? CARD_DESCRIPTIONS[row.key];
+    wrapLines(ctx, desc, gateColW - 18, 2).forEach((ln, li) => {
       ctx.fillText(ln, M + 10, y + 36 + li * 12);
     });
 
@@ -318,7 +462,7 @@ export function renderKneeboardCanvas(
       ctx.fillText(fmtNm(v), tierX(i) + tierColW / 2, y + rowH / 2 + 9);
 
       if (closureKt) {
-        const s = secondsToNextGate(table[tier], row.key, closureKt, bonus);
+        const s = secondsToNextGate(table[tier], row.key, closureKt, bonus, chain);
         if (s !== null) {
           ctx.textAlign = "right";
           ctx.fillStyle = pal.muted;
@@ -335,7 +479,6 @@ export function renderKneeboardCanvas(
   }
 
   // vertical column rules across header + body
-  const tableTop = M + 30 + 14 + 3;
   ctx.fillStyle = pal.rule;
   for (let i = 0; i < THREAT_TIER_ORDER.length; i++) {
     ctx.fillRect(Math.round(tierX(i)), tableTop, 1, y - tableTop);
@@ -344,22 +487,49 @@ export function renderKneeboardCanvas(
   ctx.lineWidth = 1.5;
   ctx.strokeRect(M, tableTop, innerW, y - tableTop);
 
+  // ── Decision box (slide "Decision Range": on timeline × targeted) ──
+  if (planMeta.decisionBox) {
+    y += 14;
+    const boxH = decisionH - 14;
+    ctx.strokeStyle = pal.accent;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(M, y, innerW, boxH);
+    ctx.textAlign = "left";
+    ctx.fillStyle = pal.accent;
+    ctx.font = `800 13px ${FONT}`;
+    ctx.fillText("DECISION", M + 10, y + 20);
+    ctx.fillStyle = pal.fg;
+    ctx.font = `600 12px ${FONT}`;
+    ctx.fillText(
+      "Behind timeline AND bandit pointing at you (TA ≤ 30°) or spiked → LOSING: defend, then out.",
+      M + 92,
+      y + 20,
+    );
+    ctx.fillStyle = pal.muted;
+    ctx.font = `500 12px ${FONT}`;
+    ctx.fillText("Any other case → winning: continue the plan.", M + 92, y + 38);
+    y += boxH;
+  }
+
   // ── Footer ──
   ctx.textAlign = "left";
   ctx.fillStyle = pal.muted;
   ctx.font = `500 11px ${FONT}`;
+  const starred = rows.filter((r) => r.hasStrikeFighterStar).map((r) => r.code);
+  const starredText = starred.join(" and ");
   const footNote = bonus
-    ? "*Strike-fighter tactics: +2 nm already applied to NLT SR and MOR."
-    : "*Strike-fighter tactics: add 2 nm to NLT SR and MOR.";
-  ctx.fillText(footNote, M, y + 20);
+    ? `*Strike-fighter tactics: +2 nm already applied to ${starredText}.`
+    : `*Strike-fighter tactics: add 2 nm to ${starredText}.`;
+  if (starred.length) ctx.fillText(footNote, M, y + 20);
   ctx.fillText(
     "Tiers by threat missile: IR/SAR-1 gen-1 SARH/IR · SAR-2 long-range Fox-1 · AR-1 early Fox-3 · AR-2 modern Fox-3.",
     M,
     y + 36,
   );
   if (closureKt) {
+    const flow = chain.map((k) => CHAIN_SHORT[k] ?? k).join(" → ");
     ctx.fillText(
-      `↓ Ns = seconds to the next gate (Commit → Tac → Meld → SR → MOR → DR → LSR → MAR) at ${Math.round(closureKt)} kt closure, both hot.`,
+      `↓ Ns = seconds to the next gate (${flow}) at ${Math.round(closureKt)} kt closure, both hot.`,
       M,
       y + 52,
     );
