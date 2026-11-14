@@ -15,6 +15,7 @@ import { dist, Geo } from "../analysis/geo.ts";
 import { weaponLabel } from "../ui/records.ts";
 import { speedOfSoundMs } from "./atmosphere.ts";
 import { buildShotTrack, DecoyIndex, measureMissileFlight } from "./flight.ts";
+import { assessFileQuality, engagementUfo, scanAircraftMotion } from "./quality.ts";
 import {
   type AltitudeRelation,
   type AspectCategory,
@@ -699,6 +700,16 @@ export function extractFileAnalytics(
 
   engagements.sort((a, b) => a.launchTime - b.launchTime);
 
+  const motion = scanAircraftMotion(rec, geo);
+  for (const e of engagements) {
+    if (e.isGun || e.domain === "A2G") continue;
+    const sh = e.shooter ? motion.get(e.shooter.uid) : undefined;
+    const tg = e.target ? motion.get(e.target.uid) : undefined;
+    if (!sh && !tg) continue;
+    e.ufo = engagementUfo(e, sh, [tg]);
+  }
+  const quality = assessFileQuality(rec, geo, motion, engagements, analysis.scrambled.aircraft);
+
   const durationS = Math.max(0, rec.timeEnd - rec.timeStart);
   const a2aMissileShots = engagements.filter((e) => e.domain === "A2A" && !e.isGun).length;
   const bvrShots = engagements.filter(
@@ -730,6 +741,7 @@ export function extractFileAnalytics(
     engagements,
     parseMs: performance.now() - t0,
     meta,
+    quality,
     extractorVersion: EXTRACTOR_VERSION,
   };
 }

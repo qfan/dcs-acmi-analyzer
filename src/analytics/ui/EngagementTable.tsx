@@ -173,6 +173,14 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                       </td>
                       <td>
                         <PlatformWho p={e.target} units={units} />
+                        {e.ufo && e.ufo.shooter + e.ufo.target > 0 && (
+                          <span
+                            className="badge warn"
+                            title={`Off-path ("UFO") samples around this shot: shooter ${e.ufo.shooter}, target ${e.ufo.target}. Launch geometry and miss distance may be wrong.`}
+                          >
+                            UFO
+                          </span>
+                        )}
                         {e.targetSource === "inferred" && (
                           <span className="badge" title="Target inferred from trajectory / launch cone">
                             inferred
@@ -374,6 +382,15 @@ function EngagementDetailsCard({
             Confidence: <strong>{e.confidence}</strong> · Target source: <strong>{e.targetSource}</strong>
             {e.friendlyFire ? " · Friendly Fire" : ""}
           </dd>
+          {e.ufo && e.ufo.shooter + e.ufo.target > 0 && (
+            <>
+              <dt>Track quality</dt>
+              <dd>
+                Off-path ("UFO") samples from 10 s before launch to 5 s after the shot: shooter{" "}
+                <strong>{e.ufo.shooter}</strong> · target <strong>{e.ufo.target}</strong>
+              </dd>
+            </>
+          )}
         </dl>
       </div>
     </div>

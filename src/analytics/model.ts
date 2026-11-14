@@ -141,13 +141,120 @@ export interface MissileEngagement {
   flight: MissileFlight | null;
   /** Resampled shooter / target / missile paths for post-launch analyses (A2A & SAM missiles only). */
   track: ShotTrack | null;
+  /**
+   * Off-path ("UFO") samples of the shooter and target from a little before launch to a little after
+   * the end of the shot. Any warp in this window corrupts launch geometry and miss distances.
+   * Missing on data extracted before quality labels existed.
+   */
+  ufo?: { shooter: number; target: number };
+}
+
+/** Thresholds for recording quality labels (see quality.ts). */
+export const QUALITY_RULES = {
+  /** Path bend beyond this many g (plus slack) is not flyable: the sample is off-path. */
+  maxG: 15,
+  offPathSlackM: 30,
+  /** Off-path samples closer than this belong to one episode (s). */
+  episodeGapS: 3,
+  /** An aircraft is a heavy UFO when it has at least this many off-path samples and ... */
+  heavyMinSamples: 10,
+  /** ... at least this many separate episodes, or this many seconds inside episodes. */
+  heavyMinEpisodes: 3,
+  heavyMinSeconds: 10,
+  /** Server-wide lag: windows with ≥ N aircraft off-path that are ≥ share of aircraft alive. */
+  massWindowS: 10,
+  massMinAircraft: 3,
+  massMinShare: 0.3,
+  /** File is "mass UFO" with at least this many such windows. */
+  massMinWindows: 3,
+  /** Aircraft with fewer samples are not counted as tracked. */
+  minTrackedSamples: 50,
+  /** Shot window for engagement-level UFO counts (s before launch / after shot end). */
+  shotWindowPreS: 10,
+  shotWindowPostS: 5,
+  /** Shots with at least this many off-path samples (shooter + target) count as UFO-affected. */
+  shotUfoMinSamples: 1,
+  /** Recordings shorter than this are "short" (s). */
+  shortS: 5 * 60,
+  /** Fewer BVR shots than this is "few BVR". */
+  fewBvrShots: 3,
+  /** Per-file list of troubled aircraft is cut to this many. */
+  keepAircraft: 40,
+} as const;
+
+export type QualityFlag = "short" | "no-a2a" | "no-bvr" | "few-bvr" | "ufo-mass" | "ufo-some" | "scrambled";
+
+export const QUALITY_FLAG_ORDER: QualityFlag[] = [
+  "ufo-mass",
+  "ufo-some",
+  "scrambled",
+  "short",
+  "no-a2a",
+  "no-bvr",
+  "few-bvr",
+];
+
+export const QUALITY_FLAG_LABELS: Record<QualityFlag, string> = {
+  "ufo-mass": "Mass UFO",
+  "ufo-some": "UFO aircraft",
+  scrambled: "Scrambled",
+  short: "Short",
+  "no-a2a": "No A2A",
+  "no-bvr": "No BVR",
+  "few-bvr": "Few BVR",
+};
+
+export const QUALITY_FLAG_HELP: Record<QualityFlag, string> = {
+  "ufo-mass":
+    "Many aircraft warp at the same moments: server-side lag. Positions throughout the file are unreliable.",
+  "ufo-some": "One or more aircraft warp repeatedly: those players' connections. Others are clean.",
+  scrambled: "Protected recording: some horizontal positions are scrambled and take no part in geometry.",
+  short: `Shorter than ${QUALITY_RULES.shortS / 60} minutes.`,
+  "no-a2a": "No air-to-air missile launches.",
+  "no-bvr": "Air-to-air missiles, but none launched beyond 10 nm.",
+  "few-bvr": `Fewer than ${QUALITY_RULES.fewBvrShots} BVR missile shots.`,
+};
+
+/** none: no off-path sample at all; minor: isolated warps; some: ≥1 heavy aircraft; mass: server-wide. */
+export type UfoLevel = "none" | "minor" | "some" | "mass";
+
+/** One aircraft (one life) that went off-path at least once. */
+export interface MotionTrouble {
+  uid: number;
+  name: string;
+  pilot: string;
+  side: string;
+  flightS: number;
+  samples: number;
+  offPathSamples: number;
+  episodes: number;
+  /** Seconds covered by off-path episodes. */
+  ufoS: number;
+  perMin: number;
+  heavy: boolean;
+}
+
+export interface FileQuality {
+  flags: QualityFlag[];
+  ufoLevel: UfoLevel;
+  /** Aircraft with enough samples to judge. */
+  trackedAircraft: number;
+  heavyAircraft: number;
+  offPathSamples: number;
+  /** Time windows where many aircraft were off-path together (server lag). */
+  massWindows: number;
+  massPeakShare: number;
+  /** A2A missile shots whose shooter or target went off-path around the shot. */
+  ufoShots: number;
+  /** Aircraft with off-path samples, worst first. */
+  aircraft: MotionTrouble[];
 }
 
 /**
  * Bump whenever extraction output changes meaning or shape: cached results with an older
  * version are ignored and the file is re-parsed.
  */
-export const EXTRACTOR_VERSION = 2;
+export const EXTRACTOR_VERSION = 3;
 
 /** Launch range above which a shot counts as BVR (10 nm). */
 export const BVR_RANGE_M = 10 * 1852;
@@ -242,6 +349,8 @@ export interface FileAnalytics {
   engagements: MissileEngagement[];
   parseMs: number;
   meta: RecordingMeta;
+  /** Quality labels. Missing on data extracted before they existed (old bundles). */
+  quality?: FileQuality;
   extractorVersion: number;
 }
 

@@ -19,11 +19,15 @@ import {
   DEFAULT_THRESHOLDS,
   type EngagementDomain,
   type FileAnalytics,
+  QUALITY_FLAG_HELP,
+  QUALITY_FLAG_LABELS,
+  QUALITY_FLAG_ORDER,
+  type QualityFlag,
   WEAPON_CLASS_LABELS,
   WEAPON_CLASS_ORDER,
   type WeaponClass,
 } from "../model.ts";
-import { type AnalyticsQuery, DEFAULT_QUERY, runAnalyticsQuery } from "../query.ts";
+import { type AnalyticsQuery, DEFAULT_QUERY, isUfoShot, runAnalyticsQuery } from "../query.ts";
 import { ANALYTICS_SAMPLES, fetchAnalyticsSample, shouldAutoLoadSamples } from "../samples.ts";
 import { type BatchFileJob, extractFilesInPool } from "../worker/client.ts";
 import {
@@ -419,6 +423,8 @@ export function AnalyticsApp() {
     query.minRangeM !== null ||
     query.maxRangeM !== null ||
     query.minFileBvrShots > 0 ||
+    query.excludeQualityFlags.length > 0 ||
+    query.excludeUfoShots ||
     query.includeGuns ||
     !query.excludeFriendlyFire ||
     query.confirmedTargetsOnly ||
@@ -604,6 +610,10 @@ export function AnalyticsApp() {
                 files={files}
                 enabledFileIds={query.enabledFileIds}
                 duplicateFileIds={result.duplicateFileIds}
+                qualityExcludedFileIds={result.qualityExcludedFileIds}
+                ufoExcludedShots={result.ufoExcludedShots}
+                query={query}
+                setQuery={setQuery}
                 onToggleFile={toggleFileEnabled}
                 onRemoveFile={removeFile}
                 onEnableAll={() => setQuery({ ...query, enabledFileIds: null })}
@@ -757,6 +767,10 @@ function DatasetCard({
   files,
   enabledFileIds,
   duplicateFileIds,
+  qualityExcludedFileIds,
+  ufoExcludedShots,
+  query,
+  setQuery,
   onToggleFile,
   onRemoveFile,
   onEnableAll,
@@ -764,6 +778,10 @@ function DatasetCard({
   files: FileAnalytics[];
   enabledFileIds: string[] | null;
   duplicateFileIds: Set<string>;
+  qualityExcludedFileIds: Set<string>;
+  ufoExcludedShots: number;
+  query: AnalyticsQuery;
+  setQuery: (q: AnalyticsQuery) => void;
   onToggleFile: (id: string) => void;
   onRemoveFile: (id: string) => void;
   onEnableAll: () => void;
@@ -780,7 +798,11 @@ function DatasetCard({
           <h3>
             Loaded Recordings ({enabledCount} of {files.length} active · {totalKills} total kills, {totalEng}{" "}
             weapon events
-            {duplicateFileIds.size > 0 ? ` · ${duplicateFileIds.size} skipped as duplicate session` : ""})
+            {duplicateFileIds.size > 0 ? ` · ${duplicateFileIds.size} skipped as duplicate session` : ""}
+            {qualityExcludedFileIds.size > 0
+              ? ` · ${qualityExcludedFileIds.size} skipped by quality label`
+              : ""}
+            )
           </h3>
         </div>
         <div className="head-actions">
@@ -795,16 +817,19 @@ function DatasetCard({
         </div>
       </div>
 
+      <QualityBar files={files} query={query} setQuery={setQuery} ufoExcludedShots={ufoExcludedShots} />
+
       {expanded && (
         <div className="file-chips">
           {files.map((f) => {
             const checked = enabledFileIds === null || enabledFileIds.includes(f.fileId);
             const isDuplicate = duplicateFileIds.has(f.fileId);
+            const isQualityExcluded = qualityExcludedFileIds.has(f.fileId);
             const a2aKills = f.engagements.filter((e) => e.isKill && !e.isGun).length;
             return (
               <div
                 key={f.fileId}
-                className={`file-chip${checked && !isDuplicate ? " active" : " muted-chip"}`}
+                className={`file-chip${checked && !isDuplicate && !isQualityExcluded ? " active" : " muted-chip"}`}
               >
                 <label
                   className="file-chip-label"
@@ -821,6 +846,7 @@ function DatasetCard({
                     {isDuplicate ? " · duplicate, skipped" : ""}
                   </span>
                 </label>
+                <QualityBadges file={f} />
                 <button
                   type="button"
                   className="file-chip-remove"
@@ -836,6 +862,115 @@ function DatasetCard({
         </div>
       )}
     </section>
+  );
+}
+
+/** Tooltip text for a file's quality labels, including the worst UFO aircraft. */
+function qualityTitle(f: FileAnalytics): string {
+  const q = f.quality;
+  if (!q) return "Quality not assessed (data extracted by an older version).";
+  const lines = q.flags.map((flag) => `${QUALITY_FLAG_LABELS[flag]}: ${QUALITY_FLAG_HELP[flag]}`);
+  if (q.offPathSamples > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(
+      `Off-path samples: ${q.offPathSamples} · heavy UFO aircraft: ${q.heavyAircraft} of ${q.trackedAircraft}` +
+        (q.massWindows > 0 ? ` · server-lag windows: ${q.massWindows}` : "") +
+        ` · UFO-affected A2A shots: ${q.ufoShots}`,
+    );
+    for (const a of q.aircraft.slice(0, 6)) {
+      lines.push(
+        `  ${a.heavy ? "●" : "○"} ${a.name}${a.pilot ? ` (${a.pilot})` : ""}: ${a.offPathSamples} samples in ${a.episodes} episode${a.episodes === 1 ? "" : "s"}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+function QualityBadges({ file }: { file: FileAnalytics }) {
+  const q = file.quality;
+  if (!q) return null;
+  const minorUfo = q.ufoLevel === "minor";
+  if (q.flags.length === 0 && !minorUfo) return null;
+  return (
+    <span className="quality-badges" title={qualityTitle(file)}>
+      {QUALITY_FLAG_ORDER.filter((flag) => q.flags.includes(flag)).map((flag) => (
+        <span key={flag} className={`badge${flag.startsWith("ufo") || flag === "scrambled" ? " warn" : ""}`}>
+          {QUALITY_FLAG_LABELS[flag]}
+        </span>
+      ))}
+      {minorUfo && <span className="badge">minor UFO</span>}
+    </span>
+  );
+}
+
+/** Label counts with one-click exclusion, plus the per-shot UFO switch. */
+function QualityBar({
+  files,
+  query,
+  setQuery,
+  ufoExcludedShots,
+}: {
+  files: FileAnalytics[];
+  query: AnalyticsQuery;
+  setQuery: (q: AnalyticsQuery) => void;
+  ufoExcludedShots: number;
+}) {
+  const counts = new Map<QualityFlag, number>();
+  let ufoShots = 0;
+  let unassessed = 0;
+  for (const f of files) {
+    if (!f.quality) unassessed++;
+    for (const flag of f.quality?.flags ?? []) counts.set(flag, (counts.get(flag) ?? 0) + 1);
+    for (const e of f.engagements) if (e.domain === "A2A" && !e.isGun && isUfoShot(e)) ufoShots++;
+  }
+  const present = QUALITY_FLAG_ORDER.filter(
+    (flag) => counts.has(flag) || query.excludeQualityFlags.includes(flag),
+  );
+  if (present.length === 0 && ufoShots === 0 && !query.excludeUfoShots && unassessed === 0) return null;
+  const toggleFlag = (flag: QualityFlag) =>
+    setQuery({
+      ...query,
+      excludeQualityFlags: query.excludeQualityFlags.includes(flag)
+        ? query.excludeQualityFlags.filter((x) => x !== flag)
+        : [...query.excludeQualityFlags, flag],
+    });
+  return (
+    <div className="quality-bar">
+      {present.length > 0 && <span className="muted small">Labels (click to exclude):</span>}
+      {present.map((flag) => {
+        const excluded = query.excludeQualityFlags.includes(flag);
+        return (
+          <button
+            key={flag}
+            type="button"
+            className={`quality-toggle${excluded ? " excluded" : ""}${flag.startsWith("ufo") ? " ufo" : ""}`}
+            aria-pressed={excluded}
+            title={`${QUALITY_FLAG_HELP[flag]}\n${excluded ? "Excluded: click to include again." : "Click to exclude these files."}`}
+            onClick={() => toggleFlag(flag)}
+          >
+            {excluded ? "⊘ " : ""}
+            {QUALITY_FLAG_LABELS[flag]} ({counts.get(flag) ?? 0})
+          </button>
+        );
+      })}
+      <label
+        className="toggle small"
+        title="Drop single shots whose shooter or target warped from 10 s before launch to 5 s after the shot, even in otherwise clean files."
+      >
+        <input
+          type="checkbox"
+          checked={query.excludeUfoShots}
+          onChange={(e) => setQuery({ ...query, excludeUfoShots: e.target.checked })}
+        />{" "}
+        Exclude UFO-affected shots (
+        {query.excludeUfoShots ? `${ufoExcludedShots} dropped` : `${ufoShots} A2A`})
+      </label>
+      {unassessed > 0 && (
+        <span className="muted small" title="Re-extract the original .acmi files to get quality labels.">
+          · {unassessed} file{unassessed === 1 ? "" : "s"} without quality data
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -1198,6 +1333,30 @@ function QueryFilterCard({
             >
               Range: {query.minRangeM !== null ? fmtDist(query.minRangeM, "km") : "0"} –{" "}
               {query.maxRangeM !== null ? fmtDist(query.maxRangeM, "km") : "∞"} ×
+            </button>
+          )}
+          {query.excludeQualityFlags.map((flag) => (
+            <button
+              key={flag}
+              type="button"
+              className="filter-chip"
+              onClick={() =>
+                setQuery({
+                  ...query,
+                  excludeQualityFlags: query.excludeQualityFlags.filter((x) => x !== flag),
+                })
+              }
+            >
+              Excluding: {QUALITY_FLAG_LABELS[flag]} ×
+            </button>
+          ))}
+          {query.excludeUfoShots && (
+            <button
+              type="button"
+              className="filter-chip"
+              onClick={() => setQuery({ ...query, excludeUfoShots: false })}
+            >
+              Excluding: UFO-affected shots ×
             </button>
           )}
           <button

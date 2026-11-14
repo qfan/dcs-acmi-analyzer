@@ -23,6 +23,8 @@ import {
   type EngagementDomain,
   type FileAnalytics,
   type MissileEngagement,
+  QUALITY_RULES,
+  type QualityFlag,
   type WeaponClass,
 } from "./model.ts";
 
@@ -69,6 +71,10 @@ export interface AnalyticsQuery {
   minFileBvrShots: number;
   /** Automatically skip duplicate copies of the same recording session (default true). */
   deduplicateSessions: boolean;
+  /** Skip files carrying any of these quality labels (default none: everything counts). */
+  excludeQualityFlags: QualityFlag[];
+  /** Skip shots whose shooter or target went off-path ("UFO") around the shot. */
+  excludeUfoShots: boolean;
   /** User-adjustable notch gate half-angle around 90° beam (degrees, default 15°). */
   notchGateDeg: number;
   /** Dynamic thresholds for Co-Altitude band and High/Low altitude floor. */
@@ -99,6 +105,8 @@ export const DEFAULT_QUERY: AnalyticsQuery = {
   minConfidence: "low",
   minFileBvrShots: 0,
   deduplicateSessions: true,
+  excludeQualityFlags: [],
+  excludeUfoShots: false,
   notchGateDeg: 15,
   thresholds: { ...DEFAULT_THRESHOLDS },
 };
@@ -199,6 +207,10 @@ export interface QueryResult {
   tacticsById: Map<string, ShotTacticalMetrics>;
   /** File IDs skipped as duplicate session recordings. */
   duplicateFileIds: Set<string>;
+  /** File IDs skipped because of an excluded quality label. */
+  qualityExcludedFileIds: Set<string>;
+  /** Shots that matched every other filter but were dropped as UFO-affected. */
+  ufoExcludedShots: number;
   kpis: {
     totalShots: number;
     shotsWithTarget: number;
@@ -244,6 +256,11 @@ const CONF_RANK: Record<"low" | "medium" | "high", number> = {
   medium: 1,
   high: 2,
 };
+
+/** Shooter or target went off-path around the shot (see quality.ts). */
+export function isUfoShot(e: MissileEngagement): boolean {
+  return (e.ufo?.shooter ?? 0) + (e.ufo?.target ?? 0) >= QUALITY_RULES.shotUfoMinSamples;
+}
 
 export function percentile(sortedValues: number[], p: number): number | null {
   if (sortedValues.length === 0) return null;
@@ -317,8 +334,16 @@ export function runAnalyticsQuery(
   const enabledSet = query.enabledFileIds ? new Set(query.enabledFileIds) : null;
   // Apply the user's file selection first, then de-duplicate, so disabling one copy of a
   // session falls back to another enabled copy instead of hiding both.
+  const qualityExcludedFileIds = new Set<string>();
   const selectedFiles = files.filter((f) => {
     if (enabledSet && !enabledSet.has(f.fileId)) return false;
+    if (
+      query.excludeQualityFlags.length > 0 &&
+      f.quality?.flags.some((flag) => query.excludeQualityFlags.includes(flag))
+    ) {
+      qualityExcludedFileIds.add(f.fileId);
+      return false;
+    }
     if (query.minFileBvrShots > 0 && (f.meta?.bvrShots ?? 0) < query.minFileBvrShots) return false;
     return true;
   });
@@ -334,6 +359,7 @@ export function runAnalyticsQuery(
   const facetPatches = new Set<string>();
 
   const matching: MissileEngagement[] = [];
+  let ufoExcludedShots = 0;
   const minConfRank = CONF_RANK[query.minConfidence];
 
   for (const f of activeFiles) {
@@ -408,6 +434,10 @@ export function runAnalyticsQuery(
       }
 
       if (!matchesSearch(e, query.searchText)) continue;
+      if (query.excludeUfoShots && isUfoShot(e)) {
+        ufoExcludedShots++;
+        continue;
+      }
 
       matching.push(e);
     }
@@ -716,6 +746,8 @@ export function runAnalyticsQuery(
     kills,
     tacticsById,
     duplicateFileIds: duplicateIds,
+    qualityExcludedFileIds,
+    ufoExcludedShots,
     kpis: {
       totalShots: matching.length,
       shotsWithTarget: shotsWithGeom.length,

@@ -62,6 +62,8 @@ export function engagementsToCsv(
     "time_in_notch_s",
     "target_chaff",
     "target_flare",
+    "ufo_shooter_samples",
+    "ufo_target_samples",
   ];
 
   const rows = [headers.join(",")];
@@ -118,6 +120,8 @@ export function engagementsToCsv(
       tac ? tac.timeInNotchS.toFixed(1) : "",
       tac?.targetChaffCount ?? "",
       tac?.targetFlareCount ?? "",
+      e.ufo?.shooter ?? "",
+      e.ufo?.target ?? "",
     ];
     rows.push(r.map(csvCell).join(","));
   }
@@ -245,6 +249,12 @@ export function anonymizeDataset(files: FileAnalytics[], options?: { idPrefix?: 
         author: null,
         sessionKey: `${datePart || num}:${Math.round(f.durationS / 60)}`,
       },
+      quality: f.quality
+        ? {
+            ...f.quality,
+            aircraft: f.quality.aircraft.map((a) => ({ ...a, pilot: mapPilot(a.pilot, a.name) })),
+          }
+        : undefined,
       engagements: f.engagements.map((e, eIdx) => ({
         ...e,
         id: `${fileId}:${eIdx}`,

@@ -72,6 +72,39 @@ main.analytics-main,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.quality-badges {
+  display: inline-flex;
+  gap: 2px;
+  cursor: help;
+}
+.quality-badges .badge {
+  margin: 0;
+}
+.quality-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 8px;
+}
+.quality-toggle {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.quality-toggle.ufo {
+  border-color: color-mix(in srgb, #f59e0b 45%, var(--border));
+}
+.quality-toggle.excluded {
+  text-decoration: line-through;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--error) 10%, var(--bg));
+  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+}
 .file-chip-remove {
   background: none;
   border: none;
