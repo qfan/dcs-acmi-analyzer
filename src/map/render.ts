@@ -1,4 +1,5 @@
 import { type MapData, type MapTrack, pilotAt, sampleAt } from "./mapData.ts";
+import { trailSecondsFor } from "./trails.ts";
 
 /** World centre (metres), zoom (CSS pixels per metre), and canvas size in CSS pixels. */
 export interface View {
@@ -151,8 +152,8 @@ export function drawMap(
     const role = tr.uid === o.primaryUid ? "primary" : tr.uid === o.secondaryUid ? "secondary" : null;
     const selected = role !== null;
     const moving = tr.kind === "air" || tr.kind === "heli" || tr.kind === "weapon";
-    if (moving && (o.trailS > 0 || selected))
-      drawTrail(ctx, d, v, tr, t, selected ? t - tr.t0 : o.trailS, s, color);
+    const trailS = moving ? trailSecondsFor(tr.uid, o.trailS, o.primaryUid, o.secondaryUid) : 0;
+    if (trailS > 0) drawTrail(ctx, d, v, tr, t, trailS, s, color);
     if (sx < -50 || sy < -50 || sx > v.w + 50 || sy > v.h + 50) continue;
     drawIcon(ctx, tr, sx, sy, s.hdg, color);
     if (role) drawSelectionRing(ctx, sx, sy, role, theme);

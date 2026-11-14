@@ -525,7 +525,12 @@ function draw(gl: Gl, p: ViewProps, overlay: HTMLCanvasElement | null, hitsRef: 
   const scaleAt = (pos: Vector3, px: number) => camera.position.distanceTo(pos) * perPx * px;
 
   const selectedUids = [p.primary, p.secondary].filter((u): u is number => u !== null);
-  const f = buildFrame(p.data, p.t, { trailS: p.trailS, ground: p.ground, selected: selectedUids }, sideRgb);
+  const f = buildFrame(
+    p.data,
+    p.t,
+    { trailS: p.trailS, ground: p.ground, primary: p.primary, secondary: p.secondary },
+    sideRgb,
+  );
 
   // Symbols, one instanced mesh per kind.
   const byKind: Record<string, typeof f.objects> = {};

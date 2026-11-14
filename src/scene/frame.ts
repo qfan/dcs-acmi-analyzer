@@ -1,5 +1,6 @@
 import { Euler, Quaternion, Vector3 } from "three";
 import { type MapData, type MapKind, type MapTrack, pilotAt, sampleAt } from "../map/mapData.ts";
+import { trailSecondsFor } from "../map/trails.ts";
 
 /**
  * Pure per-frame scene building for the 3D view (no WebGL here, so it is unit-tested).
@@ -47,8 +48,9 @@ export interface FrameObject {
 export interface FrameOptions {
   trailS: number;
   ground: boolean;
-  /** Selected objects (primary, secondary): drawn with their whole trail. */
-  selected: readonly number[];
+  primary: number | null;
+  /** With both primary and secondary selected, only those two keep a trail (see trailSecondsFor). */
+  secondary: number | null;
 }
 
 export interface Frame {
@@ -96,7 +98,7 @@ export function buildFrame(d: MapData, t: number, o: FrameOptions, color: ColorF
         dropP.push(pos.x, pos.y, pos.z, pos.x, 0, pos.z);
         dropC.push(...rgb, ...rgb);
       }
-      const seconds = o.selected.includes(tr.uid) ? t - tr.t0 : o.trailS;
+      const seconds = trailSecondsFor(tr.uid, o.trailS, o.primary, o.secondary);
       if (seconds > 0) appendTrail(d, tr, t, seconds, pos, rgb, trailP, trailC, v, prev);
     }
   }
