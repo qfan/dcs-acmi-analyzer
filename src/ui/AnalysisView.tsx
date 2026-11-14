@@ -4,6 +4,7 @@ import type { Analysis, Kill, PilotStats } from "../analysis/analyze.ts";
 import { settingsStore, useSettings } from "../settings/react.ts";
 import type { Settings } from "../settings/schema.ts";
 import { fmtAlt, fmtDist, fmtShortDist, fmtSpeed } from "../settings/units.ts";
+import { Pinnable } from "./pins.tsx";
 import {
   type Clock,
   type Filter,
@@ -57,50 +58,60 @@ export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
 
   return (
     <>
-      <FilterBar
-        filter={filter}
-        setFilter={setFilter}
-        sides={sideOptions}
-        pilots={analysis.pilots}
-        clock={clock}
-        setClock={setClock}
-        hasTimeOfDay={timeOfDay(refTime, 0) !== null}
-      />
+      <Pinnable id="filters" title="Filters">
+        <FilterBar
+          filter={filter}
+          setFilter={setFilter}
+          sides={sideOptions}
+          pilots={analysis.pilots}
+          clock={clock}
+          setClock={setClock}
+          hasTimeOfDay={timeOfDay(refTime, 0) !== null}
+        />
+      </Pinnable>
 
-      <section className="card">
-        <h3>Kills and losses ({filtered ? `${visibleKills.length} of ${kills.length}` : kills.length})</h3>
-        {analysis.scrambled.objects > 0 && (
-          <p className="notice">
-            {analysis.scrambled.protectedHeader ? "This is a protected multiplayer recording: the" : "The"}{" "}
-            positions of {analysis.scrambled.objects.toLocaleString()} object
-            {analysis.scrambled.objects === 1 ? "" : "s"} ({analysis.scrambled.aircraft.toLocaleString()}{" "}
-            aircraft) are scrambled in the file, so who shot whom can't be worked out for them. They are left
-            out of the kill list below. Only Tacview with the server's key can restore these positions.
-          </p>
-        )}
-        {kills.length === 0 ? (
-          <p className="muted">Nothing was destroyed in this recording.</p>
-        ) : visibleKills.length === 0 ? (
-          <p className="muted">No kills match the filter.</p>
-        ) : (
-          <KillTable records={visibleKills} fmt={fmt} refTime={refTime} onShowOnMap={onShowOnMap} />
-        )}
-        <Footnotes analysis={analysis} />
-      </section>
+      <Pinnable id="kills" title="Kills and losses">
+        <section className="card">
+          <h3>Kills and losses ({filtered ? `${visibleKills.length} of ${kills.length}` : kills.length})</h3>
+          {analysis.scrambled.objects > 0 && (
+            <p className="notice">
+              {analysis.scrambled.protectedHeader ? "This is a protected multiplayer recording: the" : "The"}{" "}
+              positions of {analysis.scrambled.objects.toLocaleString()} object
+              {analysis.scrambled.objects === 1 ? "" : "s"} ({analysis.scrambled.aircraft.toLocaleString()}{" "}
+              aircraft) are scrambled in the file, so who shot whom can't be worked out for them. They are
+              left out of the kill list below. Only Tacview with the server's key can restore these positions.
+            </p>
+          )}
+          {kills.length === 0 ? (
+            <p className="muted">Nothing was destroyed in this recording.</p>
+          ) : visibleKills.length === 0 ? (
+            <p className="muted">No kills match the filter.</p>
+          ) : (
+            <KillTable records={visibleKills} fmt={fmt} refTime={refTime} onShowOnMap={onShowOnMap} />
+          )}
+          <Footnotes analysis={analysis} />
+        </section>
+      </Pinnable>
 
       {analysis.pilots.length > 0 && (
-        <section className="card">
-          <h3>Pilots and units</h3>
-          <PilotTable
-            pilots={visiblePilots}
-            sides={sides}
-            selected={filter.pilot}
-            onSelect={(key) => setFilter({ ...filter, pilot: filter.pilot === key ? "" : key })}
-          />
-        </section>
+        <Pinnable id="pilots" title="Pilots and units">
+          <section className="card">
+            <h3>Pilots and units</h3>
+            <PilotTable
+              pilots={visiblePilots}
+              sides={sides}
+              selected={filter.pilot}
+              onSelect={(key) => setFilter({ ...filter, pilot: filter.pilot === key ? "" : key })}
+            />
+          </section>
+        </Pinnable>
       )}
 
-      <ShotsTable all={shots} visible={visibleShots} filtered={filtered} fmt={fmt} />
+      {shots.length > 0 && (
+        <Pinnable id="shots" title="Shots">
+          <ShotsTable all={shots} visible={visibleShots} filtered={filtered} fmt={fmt} />
+        </Pinnable>
+      )}
     </>
   );
 }

@@ -929,3 +929,115 @@ button.row-toggle {
     margin-bottom: 6px;
   }
 }
+
+/* ── Pinned side panels (pins.tsx) ── */
+main:has(> .pin-layout.has-left),
+main:has(> .pin-layout.has-right) {
+  max-width: none;
+}
+
+.pin-layout {
+  --rail-left-min: 0px;
+  --rail-right-min: 0px;
+}
+
+.pin-layout.has-left {
+  --rail-left-min: 300px;
+}
+
+.pin-layout.has-right {
+  --rail-right-min: 300px;
+}
+
+.pin-layout.has-left,
+.pin-layout.has-right {
+  display: grid;
+  /* The map column keeps its usual 1000px; rails share the rest of the window. */
+  grid-template-columns:
+    minmax(var(--rail-left-min), 1fr)
+    minmax(0, 1000px)
+    minmax(var(--rail-right-min), 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.pin-main {
+  min-width: 0;
+}
+
+.pin-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  position: sticky;
+  top: 8px;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  /* room for the first panel's pin buttons, which sit on its top edge */
+  padding-top: 12px;
+}
+
+.pin-rail:empty {
+  padding: 0;
+}
+
+.pinnable {
+  position: relative;
+  min-width: 0;
+}
+
+/* The filter bar's own sticky would be confined to this wrapper, so the wrapper sticks instead. */
+.pinnable:has(> .filter-bar) {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.pin-bar {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  position: absolute;
+  top: -11px;
+  right: 14px;
+  z-index: 6;
+  display: flex;
+  gap: 4px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.pinnable:hover > .pin-bar,
+.pin-bar:focus-within {
+  opacity: 1;
+}
+
+.pin-btn {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.pin-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Pinned state: filled + bold, not just a color change. */
+.pin-btn.on {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+  font-weight: 700;
+}
+
+.pin-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
