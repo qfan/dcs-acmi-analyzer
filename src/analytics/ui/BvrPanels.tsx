@@ -26,6 +26,7 @@ import {
   THREAT_TIER_ORDER,
   type ThreatTierValidation,
 } from "../timeline.ts";
+import { downloadKneeboardPng, type KneeboardTheme } from "../timelineImage.ts";
 
 const SAMPLE_CONF_BADGE: Record<
   "high" | "moderate" | "low",
@@ -905,6 +906,18 @@ export function BvrTimelineCard({
   const [highAltOnly, setHighAltOnly] = useState(false);
   const [priorWeight, setPriorWeight] = useState<number>(8);
   const [showAllPlanningRows, setShowAllPlanningRows] = useState(true);
+  const [kneeboardTheme, setKneeboardTheme] = useState<KneeboardTheme>("day");
+
+  const exportKneeboard = () => {
+    const isBaseline = THREAT_TIER_ORDER.every((tier) =>
+      BVR_TIMELINE_ROWS.every((r) => table[tier][r.key] === DEFAULT_MILSIM_TIMELINE[tier][r.key]),
+    );
+    void downloadKneeboardPng(table, {
+      theme: kneeboardTheme,
+      strikeFighterAdd2Nm,
+      sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
+    }).catch((err) => alert(`Kneeboard export failed: ${err instanceof Error ? err.message : err}`));
+  };
 
   const evaluations = useMemo(
     () =>
@@ -992,6 +1005,25 @@ export function BvrTimelineCard({
           >
             Reset to Chart Baseline
           </button>
+          <span className="small muted" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <select
+              value={kneeboardTheme}
+              onChange={(e) => setKneeboardTheme(e.target.value as KneeboardTheme)}
+              title="Kneeboard color scheme"
+              aria-label="Kneeboard color scheme"
+            >
+              <option value="day">Day</option>
+              <option value="night">Night</option>
+            </select>
+            <button
+              type="button"
+              className="small-btn"
+              title="Download the current table values as a clean 768×1024 kneeboard PNG (no stats) for in-game use"
+              onClick={exportKneeboard}
+            >
+              Export Kneeboard PNG
+            </button>
+          </span>
         </div>
       </div>
 
