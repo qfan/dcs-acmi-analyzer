@@ -4,6 +4,7 @@ import { useSettings } from "../settings/react.ts";
 import type { ParseOutcome } from "../worker/client.ts";
 import { AnalysisView } from "./AnalysisView.tsx";
 import { type MapFocus, MapView } from "./MapView.tsx";
+import { RecordingAnalytics } from "./RecordingAnalytics.tsx";
 import { formatClock } from "./records.ts";
 
 const GLOBAL_ORDER = [
@@ -24,7 +25,7 @@ const isAircraft = (o: ObjectSummary) =>
   o.tags.includes("Air") && (o.tags.includes("FixedWing") || o.tags.includes("Rotorcraft"));
 const isWeapon = (o: ObjectSummary) => o.tags.includes("Weapon");
 
-export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome }) {
+export function Summary({ name, file, outcome }: { name: string; file: Blob; outcome: ParseOutcome }) {
   const clock = useSettings().settings.time.clock;
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const r = outcome.summary;
@@ -91,6 +92,27 @@ export function Summary({ name, outcome }: { name: string; outcome: ParseOutcome
           }
         />
       )}
+      <RecordingAnalytics
+        file={file}
+        name={name}
+        onShowOnMap={
+          outcome.map
+            ? (e) => {
+                // Shooter as primary, target as secondary, like the kill table's "show on map".
+                const shooter = e.shooter?.uid ?? null;
+                const target = e.target?.uid ?? null;
+                setFocus((f) => ({
+                  time: e.launchTime,
+                  uid: target ?? shooter ?? e.weaponUid,
+                  primary: shooter ?? target,
+                  secondary: shooter !== null ? target : null,
+                  seq: (f?.seq ?? 0) + 1,
+                }));
+              }
+            : undefined
+        }
+      />
+
       {outcome.analysisError && (
         <section className="card">
           <p className="notice">The kill analysis failed: {outcome.analysisError}</p>

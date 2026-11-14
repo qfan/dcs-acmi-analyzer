@@ -7,7 +7,7 @@ import { Summary } from "./Summary.tsx";
 type State =
   | { phase: "idle" }
   | { phase: "loading"; name: string; progress: number }
-  | { phase: "done"; name: string; outcome: ParseOutcome }
+  | { phase: "done"; name: string; file: Blob; outcome: ParseOutcome }
   | { phase: "error"; name: string; message: string };
 
 export function App() {
@@ -26,7 +26,7 @@ export function App() {
     cancelRef.current = job.cancel;
     try {
       const outcome = await job.promise;
-      setState({ phase: "done", name, outcome });
+      setState({ phase: "done", name, file, outcome });
     } catch (err) {
       setState({ phase: "error", name, message: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -151,7 +151,7 @@ export function App() {
             <p>{state.message}</p>
           </div>
         )}
-        {state.phase === "done" && <Summary name={state.name} outcome={state.outcome} />}
+        {state.phase === "done" && <Summary name={state.name} file={state.file} outcome={state.outcome} />}
       </main>
 
       <dialog ref={settingsDialog} className="settings-dialog" aria-label="View settings">

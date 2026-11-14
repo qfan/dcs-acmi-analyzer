@@ -18,13 +18,15 @@ interface Props {
   units: Settings["units"];
   selectedId: string | null;
   onSelectId: (id: string | null) => void;
+  /** When set (single-file viewer), each shot gets a button that jumps the map to its launch. */
+  onShowOnMap?: (e: MissileEngagement) => void;
 }
 
 type SortKey = "range" | "time" | "shooterAlt" | "targetAlt" | "aspect" | "closure" | "flightTime";
 
 const ROW_LIMIT = 200;
 
-export function EngagementTable({ engagements, kills, units, selectedId, onSelectId }: Props) {
+export function EngagementTable({ engagements, kills, units, selectedId, onSelectId, onShowOnMap }: Props) {
   const [tableScope, setTableScope] = useState<"kills" | "all">("kills");
   const [sortKey, setSortKey] = useState<SortKey>("range");
   const [sortDesc, setSortDesc] = useState(true);
@@ -77,6 +79,7 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
           </h3>
           <p className="muted small matrix-sub">
             Click any row to inspect its complete launch-time initial condition geometry.
+            {onShowOnMap && " Map jumps to a few seconds before the launch with shooter and target selected."}
           </p>
         </div>
         <fieldset className="mode-switch" aria-label="Table scope">
@@ -104,6 +107,7 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
           <table>
             <thead>
               <tr>
+                {onShowOnMap ? <th aria-label="Show on map" /> : null}
                 <th>Recording</th>
                 <th className="num">
                   <button type="button" className="link" onClick={() => toggleSort("time")}>
@@ -147,6 +151,21 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                       className={`clickable${isOpen ? " open selected" : ""}`}
                       onClick={() => onSelectId(isOpen ? null : e.id)}
                     >
+                      {onShowOnMap && (
+                        <td>
+                          <button
+                            type="button"
+                            className="secondary small-btn"
+                            title="Jump the map to this shot"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              onShowOnMap(e);
+                            }}
+                          >
+                            Map
+                          </button>
+                        </td>
+                      )}
                       <td className="small muted file-cell" title={e.fileName}>
                         <button
                           type="button"
@@ -213,16 +232,19 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                           "–"
                         )}
                       </td>
-                      <td className="num">
-                        {ic ? fmtSpeed(ic.closureMs, units.speed) : "–"}
-                      </td>
+                      <td className="num">{ic ? fmtSpeed(ic.closureMs, units.speed) : "–"}</td>
                       <td className="num">
                         {e.flightTimeS !== null ? `${e.flightTimeS.toFixed(1)} s` : "–"}
                       </td>
                     </tr>
                     {isOpen && (
                       <tr className="details-row">
-                        <td colSpan={11}>
+                        <td colSpan={onShowOnMap ? 12 : 11}>
+                          {onShowOnMap && (
+                            <button type="button" className="small-btn" onClick={() => onShowOnMap(e)}>
+                              Show on map
+                            </button>
+                          )}
                           <EngagementDetailsCard e={e} units={units} />
                         </td>
                       </tr>
@@ -265,20 +287,12 @@ function PlatformWho({ p, units }: { p: PlatformSnapshot | null; units: Settings
       ) : (
         p.name
       )}
-      {p.altM !== null && (
-        <span className="muted small"> · {fmtAlt(p.altM, units.altitude)}</span>
-      )}
+      {p.altM !== null && <span className="muted small"> · {fmtAlt(p.altM, units.altitude)}</span>}
     </span>
   );
 }
 
-function EngagementDetailsCard({
-  e,
-  units,
-}: {
-  e: MissileEngagement;
-  units: Settings["units"];
-}) {
+function EngagementDetailsCard({ e, units }: { e: MissileEngagement; units: Settings["units"] }) {
   const ic = e.initial;
   const s = e.shooter;
   const t = e.target;
@@ -307,14 +321,15 @@ function EngagementDetailsCard({
               <dd>
                 <strong>{fmtDist(ic.slantRangeM, units.distance)}</strong> slant (
                 {fmtDist(ic.horizontalRangeM, units.distance)} horizontal)
-                {e.fPoleRangeM !== null ? ` · F-pole at impact: ${fmtDist(e.fPoleRangeM, units.distance)}` : ""}
+                {e.fPoleRangeM !== null
+                  ? ` · F-pole at impact: ${fmtDist(e.fPoleRangeM, units.distance)}`
+                  : ""}
               </dd>
               <dt>Altitude Relation</dt>
               <dd>
                 <strong>{ALT_RELATION_LABELS[ic.altitudeRelation]}</strong> · Target{" "}
-                {fmtShortDist(Math.abs(ic.altDiffM), units.altitude)}{" "}
-                {ic.altDiffM >= 0 ? "above" : "below"} shooter (look angle{" "}
-                {ic.lookAngleDeg >= 0 ? "+" : ""}
+                {fmtShortDist(Math.abs(ic.altDiffM), units.altitude)} {ic.altDiffM >= 0 ? "above" : "below"}{" "}
+                shooter (look angle {ic.lookAngleDeg >= 0 ? "+" : ""}
                 {ic.lookAngleDeg.toFixed(1)}°)
               </dd>
               <dt>Target Aspect</dt>
@@ -329,8 +344,7 @@ function EngagementDetailsCard({
               </dd>
               <dt>Closure Rate</dt>
               <dd>
-                {fmtSpeed(Math.abs(ic.closureMs), units.speed)}{" "}
-                {ic.closureMs >= 0 ? "closing" : "opening"}
+                {fmtSpeed(Math.abs(ic.closureMs), units.speed)} {ic.closureMs >= 0 ? "closing" : "opening"}
               </dd>
             </>
           )}
@@ -355,7 +369,9 @@ function EngagementDetailsCard({
                 Alt: {fmtAlt(s.altM, units.altitude)} · Speed: {fmtSpeed(s.speedMs, units.speed)}
                 {s.mach !== null ? ` (Mach ${s.mach.toFixed(2)})` : ""}
                 {s.headingDeg !== null ? ` · Hdg ${Math.round(s.headingDeg)}°` : ""}
-                {s.pitchDeg !== null ? ` · Pitch ${s.pitchDeg >= 0 ? "+" : ""}${Math.round(s.pitchDeg)}°` : ""}
+                {s.pitchDeg !== null
+                  ? ` · Pitch ${s.pitchDeg >= 0 ? "+" : ""}${Math.round(s.pitchDeg)}°`
+                  : ""}
               </>
             ) : (
               "Unknown"
@@ -371,7 +387,9 @@ function EngagementDetailsCard({
                 Alt: {fmtAlt(t.altM, units.altitude)} · Speed: {fmtSpeed(t.speedMs, units.speed)}
                 {t.mach !== null ? ` (Mach ${t.mach.toFixed(2)})` : ""}
                 {t.headingDeg !== null ? ` · Hdg ${Math.round(t.headingDeg)}°` : ""}
-                {t.pitchDeg !== null ? ` · Pitch ${t.pitchDeg >= 0 ? "+" : ""}${Math.round(t.pitchDeg)}°` : ""}
+                {t.pitchDeg !== null
+                  ? ` · Pitch ${t.pitchDeg >= 0 ? "+" : ""}${Math.round(t.pitchDeg)}°`
+                  : ""}
               </>
             ) : (
               "Unknown"
