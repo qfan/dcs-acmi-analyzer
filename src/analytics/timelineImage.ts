@@ -27,6 +27,8 @@ export interface KneeboardOptions {
    * at this closure speed (knots). Omit or null to leave them off.
    */
   gateTimesClosureKt?: number | null;
+  /** Round every gate up to a whole nm (see roundUpTable); gate times then use the rounded values. */
+  roundUpNm?: boolean;
   scale?: number;
 }
 
@@ -120,17 +122,19 @@ const PALETTES: Record<
     headerFg: "#111418",
     accent: "#b91c1c",
   },
+  // Brightest text is #bbbbbb, not white: full white is glaring in a dark room.
   night: {
     bg: "#0a0d10",
-    fg: "#d6dde4",
+    fg: "#bbbbbb",
     muted: "#8592a0",
     rule: "#2a323b",
     stripe: "#11161b",
     band: "#1c2630",
-    bandFg: "#c9d3dc",
+    bandFg: "#bbbbbb",
     headerBg: "#151c23",
-    headerFg: "#d6dde4",
-    accent: "#e07a5f",
+    headerFg: "#bbbbbb",
+    // red for MAR / STERN WEZ, capped at the same 0xbb channel so it is no brighter than the text
+    accent: "#bb6a55",
   },
 };
 
@@ -171,12 +175,31 @@ function wrapLines(
   return lines;
 }
 
+/**
+ * Every gate rounded up to a whole nm. Up is the safe direction for every row: threat range and
+ * WEZ grow, and each decision (commit, shoot, out, defend, abort) happens earlier, never later.
+ */
+export function roundUpTable(table: BvrTimelineTable): BvrTimelineTable {
+  const out = {} as BvrTimelineTable;
+  for (const tier of THREAT_TIER_ORDER) {
+    const col = { ...table[tier] };
+    for (const k of Object.keys(col) as BvrTimelineRowKey[]) {
+      // tolerance so 13.0000001 from float math stays 13
+      col[k] = Math.ceil(col[k] - 1e-6);
+    }
+    out[tier] = col;
+  }
+  return out;
+}
+
 export function renderKneeboardCanvas(
-  table: BvrTimelineTable,
+  sourceTable: BvrTimelineTable,
   opts: KneeboardOptions = {},
   /** Draw into this canvas (e.g. a live preview) instead of a new one; it is resized and cleared. */
   target?: HTMLCanvasElement,
 ): HTMLCanvasElement {
+  // Rounding happens before anything is drawn, so gate times use the rounded values too.
+  const table = opts.roundUpNm ? roundUpTable(sourceTable) : sourceTable;
   const theme = opts.theme ?? "day";
   const pal = PALETTES[theme];
   const scale = opts.scale ?? 2;

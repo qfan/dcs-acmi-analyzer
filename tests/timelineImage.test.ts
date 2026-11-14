@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MILSIM_TIMELINE } from "../src/analytics/timeline.ts";
-import { secondsToNextGate } from "../src/analytics/timelineImage.ts";
+import { roundUpTable, secondsToNextGate } from "../src/analytics/timelineImage.ts";
+
+describe("roundUpTable", () => {
+  it("rounds every gate up to a whole nm without touching the input", () => {
+    const src = DEFAULT_MILSIM_TIMELINE;
+    const fitted = { ...src, "AR-2": { ...src["AR-2"], morNm: 36.2, drNm: 22.0000001, marNm: 17.5 } };
+    const r = roundUpTable(fitted);
+    expect(r["AR-2"].morNm).toBe(37);
+    expect(r["AR-2"].drNm).toBe(22);
+    expect(r["AR-2"].marNm).toBe(18);
+    expect(r["SAR-2"]).toEqual(src["SAR-2"]);
+    expect(fitted["AR-2"].morNm).toBe(36.2);
+  });
+
+  it("feeds gate times the rounded values", () => {
+    // MOR 36.2 → DR 22.4 is 13.8 nm raw; rounded 37 → 23 is 14 nm = 42 s at 1200 kt
+    const col = { ...DEFAULT_MILSIM_TIMELINE["AR-2"], morNm: 36.2, drNm: 22.4 };
+    const r = roundUpTable({ ...DEFAULT_MILSIM_TIMELINE, "AR-2": col });
+    expect(secondsToNextGate(r["AR-2"], "morNm", 1200)).toBeCloseTo(42);
+  });
+});
 
 describe("secondsToNextGate", () => {
   const ar2 = DEFAULT_MILSIM_TIMELINE["AR-2"];

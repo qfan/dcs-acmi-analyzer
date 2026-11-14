@@ -946,6 +946,8 @@ export function BvrTimelineCard({
     gateTimes === "off" ? null : gateTimes === "data" ? (dataClosure?.kt ?? null) : Number(gateTimes);
 
   const [showKneeboard, setShowKneeboard] = useState(false);
+  /** Round the image's gates up to whole nm (the table keeps its decimals). */
+  const [kneeboardRoundUp, setKneeboardRoundUp] = useState(true);
   const kneeboardRef = useRef<HTMLCanvasElement>(null);
 
   // Redraw the preview whenever the table or an image option changes, so edits show up live.
@@ -961,11 +963,12 @@ export function BvrTimelineCard({
         theme: kneeboardTheme,
         strikeFighterAdd2Nm,
         gateTimesClosureKt: gateClosureKt,
+        roundUpNm: kneeboardRoundUp,
         sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
       },
       canvas,
     );
-  }, [showKneeboard, table, kneeboardTheme, strikeFighterAdd2Nm, gateClosureKt]);
+  }, [showKneeboard, table, kneeboardTheme, strikeFighterAdd2Nm, gateClosureKt, kneeboardRoundUp]);
 
   const saveKneeboard = () => {
     const canvas = kneeboardRef.current;
@@ -1104,6 +1107,17 @@ export function BvrTimelineCard({
                 </option>
               )}
             </select>
+            <label
+              className="toggle"
+              title="Round every gate on the image up to a whole nm (decisions happen earlier, never later). Gate times use the rounded values. The table keeps its decimals."
+            >
+              <input
+                type="checkbox"
+                checked={kneeboardRoundUp}
+                onChange={(e) => setKneeboardRoundUp(e.target.checked)}
+              />{" "}
+              Round up to whole nm
+            </label>
             <button type="button" className="small-btn" onClick={saveKneeboard}>
               Save PNG
             </button>
