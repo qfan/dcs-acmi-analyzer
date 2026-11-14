@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchSample, SAMPLES, sampleFromUrl } from "../samples.ts";
 import { type ParseOutcome, parseInWorker } from "../worker/client.ts";
 import { SettingsPanel } from "./SettingsPanel.tsx";
+import { SiteFooter } from "./SiteFooter.tsx";
 import { Summary } from "./Summary.tsx";
 
 type State =
@@ -156,6 +157,8 @@ export function App() {
         )}
         {state.phase === "done" && <Summary name={state.name} file={state.file} outcome={state.outcome} />}
       </main>
+
+      <SiteFooter />
 
       <dialog ref={settingsDialog} className="settings-dialog" aria-label="View settings">
         <SettingsPanel onClose={() => settingsDialog.current?.close()} />

@@ -89,3 +89,16 @@ pnpm lint
   leaving stale files behind.
 - **Removing the sample files.** `samples/` is about 9 MB. If you don't want to host it, delete
   `dist/samples/` before uploading; only the "Load sample" buttons stop working.
+
+## License and disclaimer
+
+Released under the [BSD Zero Clause License (0BSD)](LICENSE): use it for anything, no attribution
+required. The bundled dependencies (React, three.js, fflate) keep their own MIT licenses; the built site
+ships their texts in `third-party-licenses.txt` and links to it from the page footer.
+
+This is an unofficial project. It is **not affiliated with, endorsed by, or sponsored by** Eagle
+Dynamics (DCS World) or Raia Software (Tacview). DCS World and Tacview are trademarks of their
+respective owners.
+
+Most of the code was written by AI coding assistants (Claude Code and Google Antigravity) under human
+direction. It is provided as-is, without warranty.

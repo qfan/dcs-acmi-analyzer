@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Browser-only viewer and analyser for Tacview ACMI recordings",
+  "license": "0BSD",
   "type": "module",
   "packageManager": "pnpm@12.18.0",
   "engines": {

@@ -108,6 +108,31 @@ main {
   color: var(--muted);
 }
 
+.site-footer {
+  max-width: 760px;
+  margin: 48px auto 0;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.site-footer p {
+  margin: 0 0 6px;
+}
+
+.site-footer a {
+  color: var(--accent);
+}
+
+.site-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 8px;
+}
+
 .summary {
   display: grid;
   gap: 16px;

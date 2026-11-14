@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingsPanel } from "../../ui/SettingsPanel.tsx";
+import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { formatDuration } from "../../ui/Summary.tsx";
 import {
   anonymizeDataset,
@@ -514,6 +515,8 @@ export function AnalyticsApp() {
           )
         )}
       </main>
+
+      <SiteFooter />
 
       <dialog ref={settingsDialogRef} className="settings-dialog" aria-label="View settings">
         <SettingsPanel onClose={() => settingsDialogRef.current?.close()} />
