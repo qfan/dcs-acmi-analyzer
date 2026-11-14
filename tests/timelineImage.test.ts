@@ -3,6 +3,7 @@ import { DEFAULT_MILSIM_TIMELINE } from "../src/analytics/timeline.ts";
 import {
   KNEEBOARD_PLAN_ORDER,
   KNEEBOARD_PLANS,
+  laneMembership,
   planGateChain,
   planRows,
   roundUpTable,
@@ -40,6 +41,18 @@ describe("kneeboard plans", () => {
       for (const k of KNEEBOARD_PLANS[p].critical) expect(shown.has(k)).toBe(true);
       for (const k of Object.keys(KNEEBOARD_PLANS[p].descriptions)) expect(shown.has(k as never)).toBe(true);
     }
+  });
+
+  it("marks lane gates as used, flown through, or outside the plan's span", () => {
+    const skate = laneMembership("skate");
+    expect(skate.morNm).toBe("use");
+    expect(skate.ofrNm).toBe("pass"); // between THREAT RANGE and COMMIT, not acted on
+    expect(skate.drNm).toBe("none"); // after the skate is over
+    const banzai = laneMembership("banzai");
+    expect(banzai.morNm).toBe("pass");
+    expect(banzai.sternWezNm).toBe("use");
+    expect(laneMembership("shortSkate").mrarNm).toBe("pass");
+    expect(laneMembership("shortSkate").sternWezNm).toBe("none");
   });
 
   it("times each plan's gates to the next gate on its own card", () => {

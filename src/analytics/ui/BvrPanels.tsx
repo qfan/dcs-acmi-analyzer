@@ -952,6 +952,7 @@ export function BvrTimelineCard({
   const [showKneeboard, setShowKneeboard] = useState(false);
   /** Round the image's gates up to whole nm (the table keeps its decimals). */
   const [kneeboardRoundUp, setKneeboardRoundUp] = useState(true);
+  const [kneeboardLanes, setKneeboardLanes] = useState(true);
   const kneeboardRef = useRef<HTMLCanvasElement>(null);
 
   // Redraw the preview whenever the table or an image option changes, so edits show up live.
@@ -969,6 +970,7 @@ export function BvrTimelineCard({
         strikeFighterAdd2Nm,
         gateTimesClosureKt: gateClosureKt,
         roundUpNm: kneeboardRoundUp,
+        planLanes: kneeboardLanes,
         sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
       },
       canvas,
@@ -981,6 +983,7 @@ export function BvrTimelineCard({
     strikeFighterAdd2Nm,
     gateClosureKt,
     kneeboardRoundUp,
+    kneeboardLanes,
   ]);
 
   const saveKneeboard = () => {
@@ -1145,6 +1148,19 @@ export function BvrTimelineCard({
               />{" "}
               Round up to whole nm
             </label>
+            {kneeboardPlan === "all" && (
+              <label
+                className="toggle"
+                title="Draw a lane per game plan beside the gates: solid = Skate, hatched = Short Skate, double rail = Banzai. Bars mark the gates a plan uses, dots the ones it flies through, a cross bar where it gets out."
+              >
+                <input
+                  type="checkbox"
+                  checked={kneeboardLanes}
+                  onChange={(e) => setKneeboardLanes(e.target.checked)}
+                />{" "}
+                Show game-plan lanes
+              </label>
+            )}
             <button type="button" className="small-btn" onClick={saveKneeboard}>
               Save PNG
             </button>

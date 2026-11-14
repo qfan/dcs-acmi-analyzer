@@ -127,7 +127,77 @@ export interface KneeboardOptions {
   gateTimesClosureKt?: number | null;
   /** Round every gate up to a whole nm (see roundUpTable); gate times then use the rounded values. */
   roundUpNm?: boolean;
+  /**
+   * On the "all" card, draw one lane per game plan down the gate column showing which gates that
+   * plan uses (default true). Lanes differ by pattern, not color, so they read in grayscale.
+   */
+  planLanes?: boolean;
   scale?: number;
+}
+
+/** Lane order on the "all" card, left to right. */
+export const LANE_PLANS: Exclude<KneeboardPlan, "all">[] = ["skate", "shortSkate", "banzai"];
+
+const LANE_LABELS: Record<Exclude<KneeboardPlan, "all">, string> = {
+  skate: "SKATE",
+  shortSkate: "SHORT",
+  banzai: "BANZAI",
+};
+
+/**
+ * Where each plan's lane sits on the "all" card: "use" rows are gates the plan acts on, "pass" rows
+ * lie between its first and last gate (flown through, no action), "none" is outside its span.
+ */
+export function laneMembership(
+  plan: Exclude<KneeboardPlan, "all">,
+): Record<BvrTimelineRowKey, "use" | "pass" | "none"> {
+  const keep = new Set(KNEEBOARD_PLANS[plan].rows);
+  const idx = BVR_TIMELINE_ROWS.map((r, i) => (keep.has(r.key) ? i : -1)).filter((i) => i >= 0);
+  const first = Math.min(...idx);
+  const last = Math.max(...idx);
+  const out = {} as Record<BvrTimelineRowKey, "use" | "pass" | "none">;
+  BVR_TIMELINE_ROWS.forEach((r, i) => {
+    out[r.key] = keep.has(r.key) ? "use" : i > first && i < last ? "pass" : "none";
+  });
+  return out;
+}
+
+/**
+ * One lane's "use" segment, distinguished by shape so it survives grayscale / color-blind viewing:
+ * Skate = solid bar, Short Skate = diagonal-hatched bar, Banzai = double rail.
+ */
+function drawLaneBar(
+  ctx: CanvasRenderingContext2D,
+  plan: Exclude<KneeboardPlan, "all">,
+  cx: number,
+  top: number,
+  h: number,
+  color: string,
+): void {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  if (plan === "skate") {
+    ctx.fillRect(cx - 3, top, 6, h);
+  } else if (plan === "banzai") {
+    ctx.fillRect(cx - 4, top, 2, h);
+    ctx.fillRect(cx + 2, top, 2, h);
+  } else {
+    const x0 = cx - 4;
+    ctx.fillRect(x0, top, 1, h);
+    ctx.fillRect(x0 + 7, top, 1, h);
+    ctx.beginPath();
+    ctx.rect(x0, top, 8, h);
+    ctx.clip();
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let yy = top - 8; yy < top + h + 8; yy += 5) {
+      ctx.moveTo(x0, yy + 8);
+      ctx.lineTo(x0 + 8, yy);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /** Default closure for gate times: hot-on-hot BVR closure in the sample recordings is ~1,100–1,250 kt. */
@@ -339,6 +409,10 @@ export function renderKneeboardCanvas(
   const tierColW = (innerW - gateColW) / THREAT_TIER_ORDER.length;
   const tierX = (i: number) => M + gateColW + i * tierColW;
   const bonus = opts.strikeFighterAdd2Nm ? 2 : 0;
+  const lanesOn = plan === "all" && (opts.planLanes ?? true);
+  const laneW = 15;
+  const lanesW = lanesOn ? LANE_PLANS.length * laneW + 8 : 0;
+  const laneX = (j: number) => M + gateColW - lanesW + 2 + j * laneW + laneW / 2;
 
   // ── Title block ──
   let y = M + 30;
@@ -388,6 +462,19 @@ export function renderKneeboardCanvas(
   ctx.font = `500 11px ${FONT}`;
   ctx.fillStyle = pal.muted;
   ctx.fillText("Threat tier →", M + 10, y + 44);
+  if (lanesOn) {
+    // Rotated plan names above each lane.
+    ctx.fillStyle = pal.headerFg;
+    ctx.font = `700 9px ${FONT}`;
+    ctx.textAlign = "right";
+    LANE_PLANS.forEach((lp, j) => {
+      ctx.save();
+      ctx.translate(laneX(j) + 3, y + 6);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(LANE_LABELS[lp], 0, 0);
+      ctx.restore();
+    });
+  }
   THREAT_TIER_ORDER.forEach((tier, i) => {
     const meta = THREAT_TIER_META[tier];
     const cx = tierX(i) + tierColW / 2;
@@ -408,7 +495,7 @@ export function renderKneeboardCanvas(
   const bandH = 22;
   const closureKt = opts.gateTimesClosureKt ?? null;
   const decisionH = planMeta.decisionBox ? 66 : 0;
-  const footerH = (closureKt ? 70 : 54) + decisionH;
+  const footerH = (closureKt ? 70 : 54) + decisionH + (lanesOn ? 24 : 0);
   const sections = rows.reduce<BvrTimelineRowMeta["section"][]>((acc, r) => {
     if (acc[acc.length - 1] !== r.section) acc.push(r.section);
     return acc;
@@ -417,11 +504,16 @@ export function renderKneeboardCanvas(
   // Plan cards have fewer rows; cap the height so they stay a table rather than stretching to fill.
   const rowH = Math.min(64, Math.floor(rowsAvail / rows.length));
   const critical = new Set(planMeta.critical);
+  // Short rows (the 14-row card) pull text up so a two-line description clears the row rule.
+  const tight = rowH < 58;
 
+  /** Vertical extent of every band and row, so lanes can be drawn through them afterwards. */
+  const segments: { key: BvrTimelineRowKey | null; top: number; h: number }[] = [];
   let prevSection: BvrTimelineRowMeta["section"] | null = null;
   let stripe = false;
   for (const row of rows) {
     if (row.section !== prevSection) {
+      segments.push({ key: null, top: y, h: bandH });
       ctx.fillStyle = pal.band;
       ctx.fillRect(M, y, innerW, bandH);
       ctx.fillStyle = pal.bandFg;
@@ -441,17 +533,23 @@ export function renderKneeboardCanvas(
       ctx.fillRect(M, y, innerW, rowH);
     }
     stripe = !stripe;
+    segments.push({ key: row.key, top: y, h: rowH });
 
     const isCritical = critical.has(row.key);
+    if (isCritical) {
+      // Shape cue for the out / commit gates, so they don't rely on red alone.
+      ctx.fillStyle = pal.accent;
+      ctx.fillRect(M + 1, y, 5, rowH - 1);
+    }
     ctx.textAlign = "left";
     ctx.fillStyle = isCritical ? pal.accent : pal.fg;
     ctx.font = `800 16px ${FONT}`;
-    ctx.fillText(`${row.code}${row.hasStrikeFighterStar ? "*" : ""}`, M + 10, y + 21);
+    ctx.fillText(`${row.code}${row.hasStrikeFighterStar ? "*" : ""}`, M + 10, y + (tight ? 19 : 21));
     ctx.fillStyle = pal.muted;
     ctx.font = `500 11px ${FONT}`;
     const desc = planMeta.descriptions[row.key] ?? CARD_DESCRIPTIONS[row.key];
-    wrapLines(ctx, desc, gateColW - 18, 2).forEach((ln, li) => {
-      ctx.fillText(ln, M + 10, y + 36 + li * 12);
+    wrapLines(ctx, desc, gateColW - 18 - lanesW, 2).forEach((ln, li) => {
+      ctx.fillText(ln, M + 10, y + (tight ? 33 : 36) + li * (tight ? 11 : 12));
     });
 
     THREAT_TIER_ORDER.forEach((tier, i) => {
@@ -476,6 +574,33 @@ export function renderKneeboardCanvas(
     ctx.fillStyle = pal.rule;
     ctx.fillRect(M, y + rowH - 1, innerW, 1);
     y += rowH;
+  }
+
+  // ── Plan lanes ("all" card): which gates each game plan uses ──
+  if (lanesOn) {
+    LANE_PLANS.forEach((lp, j) => {
+      const member = laneMembership(lp);
+      const cx = laneX(j);
+      const firstRow = segments.findIndex((sg) => sg.key !== null && member[sg.key] !== "none");
+      const lastRow = segments.findLastIndex((sg) => sg.key !== null && member[sg.key] !== "none");
+      segments.forEach((sg, i) => {
+        if (i < firstRow || i > lastRow) return;
+        if (sg.key === null) {
+          ctx.fillStyle = pal.bandFg;
+          ctx.fillRect(cx - 0.5, sg.top, 1, sg.h);
+        } else if (member[sg.key] === "use") {
+          drawLaneBar(ctx, lp, cx, sg.top, sg.h, pal.fg);
+          if (KNEEBOARD_PLANS[lp].critical.includes(sg.key)) {
+            // Stop bar: where this plan gets out / commits.
+            ctx.fillStyle = pal.fg;
+            ctx.fillRect(cx - 6, sg.top + sg.h / 2 - 2, 12, 4);
+          }
+        } else {
+          ctx.fillStyle = pal.muted;
+          for (let yy = sg.top + 1; yy < sg.top + sg.h; yy += 4) ctx.fillRect(cx - 0.5, yy, 1, 2);
+        }
+      });
+    });
   }
 
   // vertical column rules across header + body
@@ -512,6 +637,27 @@ export function renderKneeboardCanvas(
   }
 
   // ── Footer ──
+  if (lanesOn) {
+    // Lane legend: pattern swatch + plan name.
+    let lx = M;
+    const ly = y + 8;
+    ctx.font = `600 11px ${FONT}`;
+    ctx.textAlign = "left";
+    const items: [Exclude<KneeboardPlan, "all">, string][] = [
+      ["skate", "SKATE — out at MOR"],
+      ["shortSkate", "SHORT SKATE — out NLT MAR"],
+      ["banzai", "BANZAI — to the merge"],
+    ];
+    for (const [lp, text] of items) {
+      drawLaneBar(ctx, lp, lx + 5, ly, 16, pal.fg);
+      ctx.fillStyle = pal.fg;
+      ctx.fillText(text, lx + 14, ly + 12);
+      lx += 14 + ctx.measureText(text).width + 18;
+    }
+    ctx.fillRect(lx + 1, ly + 6, 12, 4);
+    ctx.fillText("= out / commit gate", lx + 18, ly + 12);
+    y += 24;
+  }
   ctx.textAlign = "left";
   ctx.fillStyle = pal.muted;
   ctx.font = `500 11px ${FONT}`;
