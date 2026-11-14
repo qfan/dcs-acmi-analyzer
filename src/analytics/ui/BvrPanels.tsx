@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DistanceUnit } from "../../settings/schema.ts";
 import { fmtDist } from "../../settings/units.ts";
 import {
@@ -26,7 +26,12 @@ import {
   THREAT_TIER_ORDER,
   type ThreatTierValidation,
 } from "../timeline.ts";
-import { DEFAULT_GATE_CLOSURE_KT, downloadKneeboardPng, type KneeboardTheme } from "../timelineImage.ts";
+import {
+  DEFAULT_GATE_CLOSURE_KT,
+  type KneeboardTheme,
+  renderKneeboardCanvas,
+  saveCanvasPng,
+} from "../timelineImage.ts";
 
 const KT_MS = 1852 / 3600;
 /** Fewest hot BVR shots before the loaded data's median closure is offered for gate times. */
@@ -940,16 +945,34 @@ export function BvrTimelineCard({
   const gateClosureKt =
     gateTimes === "off" ? null : gateTimes === "data" ? (dataClosure?.kt ?? null) : Number(gateTimes);
 
-  const exportKneeboard = () => {
+  const [showKneeboard, setShowKneeboard] = useState(false);
+  const kneeboardRef = useRef<HTMLCanvasElement>(null);
+
+  // Redraw the preview whenever the table or an image option changes, so edits show up live.
+  useEffect(() => {
+    const canvas = kneeboardRef.current;
+    if (!showKneeboard || !canvas) return;
     const isBaseline = THREAT_TIER_ORDER.every((tier) =>
       BVR_TIMELINE_ROWS.every((r) => table[tier][r.key] === DEFAULT_MILSIM_TIMELINE[tier][r.key]),
     );
-    void downloadKneeboardPng(table, {
-      theme: kneeboardTheme,
-      strikeFighterAdd2Nm,
-      gateTimesClosureKt: gateClosureKt,
-      sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
-    }).catch((err) => alert(`Kneeboard export failed: ${err instanceof Error ? err.message : err}`));
+    renderKneeboardCanvas(
+      table,
+      {
+        theme: kneeboardTheme,
+        strikeFighterAdd2Nm,
+        gateTimesClosureKt: gateClosureKt,
+        sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
+      },
+      canvas,
+    );
+  }, [showKneeboard, table, kneeboardTheme, strikeFighterAdd2Nm, gateClosureKt]);
+
+  const saveKneeboard = () => {
+    const canvas = kneeboardRef.current;
+    if (!canvas) return;
+    void saveCanvasPng(canvas, `bvr-timeline-${kneeboardTheme}.png`).catch((err) =>
+      alert(`Kneeboard save failed: ${err instanceof Error ? err.message : err}`),
+    );
   };
 
   const evaluations = useMemo(
@@ -1038,7 +1061,22 @@ export function BvrTimelineCard({
           >
             Reset to Chart Baseline
           </button>
-          <span className="small muted" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <button
+            type="button"
+            className="small-btn"
+            title="Preview the current table as a clean 768×1024 kneeboard PNG (no stats) for in-game use"
+            aria-expanded={showKneeboard}
+            onClick={() => setShowKneeboard((v) => !v)}
+          >
+            {showKneeboard ? "Hide Kneeboard PNG" : "Show Kneeboard PNG"}
+          </button>
+        </div>
+      </div>
+
+      {showKneeboard && (
+        <div className="kneeboard-preview">
+          <canvas ref={kneeboardRef} className="kneeboard-canvas" aria-label="Kneeboard PNG preview" />
+          <div className="kneeboard-side small muted">
             <select
               value={kneeboardTheme}
               onChange={(e) => setKneeboardTheme(e.target.value as KneeboardTheme)}
@@ -1066,17 +1104,17 @@ export function BvrTimelineCard({
                 </option>
               )}
             </select>
-            <button
-              type="button"
-              className="small-btn"
-              title="Download the current table values as a clean 768×1024 kneeboard PNG (no stats) for in-game use"
-              onClick={exportKneeboard}
-            >
-              Export Kneeboard PNG
+            <button type="button" className="small-btn" onClick={saveKneeboard}>
+              Save PNG
             </button>
-          </span>
+            <p>
+              Updates live: edit cells in the table, use Auto-Fit, or tick Strike Fighter Tactics below, then
+              save. 768×1024, saved at 2× resolution. In DCS, put it in{" "}
+              <code>Saved Games\DCS\Kneeboard\</code>.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Sub-toolbar for Strike Fighter +2nm, High-Alt filter, Prior weight, and row filter */}
       <div className="query-subbar" style={{ marginBottom: 10 }}>

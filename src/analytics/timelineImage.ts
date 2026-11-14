@@ -174,13 +174,16 @@ function wrapLines(
 export function renderKneeboardCanvas(
   table: BvrTimelineTable,
   opts: KneeboardOptions = {},
+  /** Draw into this canvas (e.g. a live preview) instead of a new one; it is resized and cleared. */
+  target?: HTMLCanvasElement,
 ): HTMLCanvasElement {
   const theme = opts.theme ?? "day";
   const pal = PALETTES[theme];
   const scale = opts.scale ?? 2;
   const W = 768;
   const H = 1024;
-  const canvas = document.createElement("canvas");
+  const canvas = target ?? document.createElement("canvas");
+  // Setting the size also resets the context transform and clears the old drawing.
   canvas.width = W * scale;
   canvas.height = H * scale;
   const ctx = canvas.getContext("2d");
@@ -342,12 +345,8 @@ export function renderKneeboardCanvas(
   return canvas;
 }
 
-export async function downloadKneeboardPng(
-  table: BvrTimelineTable,
-  opts: KneeboardOptions = {},
-  filename = `bvr-timeline-${opts.theme ?? "day"}.png`,
-): Promise<void> {
-  const canvas = renderKneeboardCanvas(table, opts);
+/** Save a rendered kneeboard canvas as a PNG download. */
+export async function saveCanvasPng(canvas: HTMLCanvasElement, filename: string): Promise<void> {
   const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
   if (!blob) throw new Error("PNG encoding failed");
   const url = URL.createObjectURL(blob);

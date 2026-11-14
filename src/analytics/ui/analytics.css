@@ -463,4 +463,41 @@ main.analytics-main,
   width: 22%;
 }
 
+/* BVR timeline kneeboard PNG preview: the image on the left, its options and Save on the right. */
+.kneeboard-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 4px 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
 
+.kneeboard-canvas {
+  width: 384px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 4;
+  border: 1px solid var(--border);
+}
+
+.kneeboard-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+
+.kneeboard-side select {
+  width: auto;
+  max-width: 100%;
+}
+
+.kneeboard-side p {
+  margin: 4px 0 0;
+}
