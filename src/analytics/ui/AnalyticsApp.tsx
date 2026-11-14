@@ -409,7 +409,7 @@ export function AnalyticsApp() {
           >
             Units & Settings
           </button>
-          <a href="./" className="nav-link-btn" title="Open the single-recording ACMI Viewer">
+          <a href="./index.html" className="nav-link-btn" title="Open the single-recording ACMI Viewer">
             Single-File Viewer →
           </a>
           <input

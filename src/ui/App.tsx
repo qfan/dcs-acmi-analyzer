@@ -111,6 +111,9 @@ export function App() {
           >
             Settings
           </button>
+          <a href="./analytics.html" className="nav-link-btn" title="Open the multi-recording Analytics page">
+            Multi-File Analytics →
+          </a>
           <input
             ref={fileInput}
             type="file"

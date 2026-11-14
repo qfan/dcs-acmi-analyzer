@@ -4,6 +4,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  // Relative asset URLs, so the built pages work from any subfolder of a site.
+  base: "./",
   worker: { format: "es" },
   build: {
     rollupOptions: {
