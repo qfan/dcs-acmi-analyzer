@@ -4,3 +4,4 @@ dist/
 .vite/
 corpus-report/
 tmp/
+.wrangler/

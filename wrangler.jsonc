@@ -1,0 +1,9 @@
+// Cloudflare Workers static-assets deployment: serves the Vite build output, no server code.
+// Build with `pnpm build`, then `npx wrangler deploy` (or let Cloudflare's Git integration do both).
+{
+  "name": "acmi",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}
