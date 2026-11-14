@@ -22,7 +22,51 @@ export interface KneeboardOptions {
   strikeFighterAdd2Nm?: boolean;
   /** Short provenance line, e.g. "Chart baseline" or "Custom / ACMI-fitted". */
   sourceLabel?: string;
+  /**
+   * When set, print the seconds between consecutive gates of the head-on flow (see GATE_TIME_CHAIN)
+   * at this closure speed (knots). Omit or null to leave them off.
+   */
+  gateTimesClosureKt?: number | null;
   scale?: number;
+}
+
+/** Default closure for gate times: hot-on-hot BVR closure in the sample recordings is ~1,100–1,250 kt. */
+export const DEFAULT_GATE_CLOSURE_KT = 1200;
+
+/**
+ * Gates flown in sequence while pressing hot on one group: commit → sort → shoot → the successive
+ * last-chance defensive decisions. Factor ranges, threat range, PUMP / MRAR (branches off the flow)
+ * and STERN WEZ (tail-chase geometry) are not steps on this line, so they get no time.
+ */
+export const GATE_TIME_CHAIN: BvrTimelineRowKey[] = [
+  "nltCommitNm",
+  "tacRangeNm",
+  "meldSortNm",
+  "nltSrNm",
+  "morNm",
+  "drNm",
+  "lsrNm",
+  "marNm",
+];
+
+/**
+ * Seconds from `from` to the next gate of GATE_TIME_CHAIN for one tier column, or null when `from`
+ * is not on the chain, is last, or the next gate is not closer (no positive time to fly).
+ */
+export function secondsToNextGate(
+  column: Record<BvrTimelineRowKey, number>,
+  from: BvrTimelineRowKey,
+  closureKt: number,
+  strikeBonusNm = 0,
+): number | null {
+  const i = GATE_TIME_CHAIN.indexOf(from);
+  const to = GATE_TIME_CHAIN[i + 1];
+  if (i < 0 || !to || !(closureKt > 0)) return null;
+  const eff = (k: BvrTimelineRowKey) =>
+    column[k] + (BVR_TIMELINE_ROWS.find((r) => r.key === k)?.hasStrikeFighterStar ? strikeBonusNm : 0);
+  const dNm = eff(from) - eff(to);
+  if (!(dNm > 0)) return null;
+  return (dNm / closureKt) * 3600;
 }
 
 /** Plain-language gate descriptions for the card (the analytics descriptions mention ACMI stats). */
@@ -199,7 +243,8 @@ export function renderKneeboardCanvas(
 
   // ── Rows ──
   const bandH = 22;
-  const footerH = 54;
+  const closureKt = opts.gateTimesClosureKt ?? null;
+  const footerH = closureKt ? 70 : 54;
   const sections = BVR_TIMELINE_ROWS.reduce<BvrTimelineRowMeta["section"][]>((acc, r) => {
     if (acc[acc.length - 1] !== r.section) acc.push(r.section);
     return acc;
@@ -245,6 +290,16 @@ export function renderKneeboardCanvas(
       ctx.fillStyle = isCritical ? pal.accent : pal.fg;
       ctx.font = `800 26px ${FONT}`;
       ctx.fillText(fmtNm(v), tierX(i) + tierColW / 2, y + rowH / 2 + 9);
+
+      if (closureKt) {
+        const s = secondsToNextGate(table[tier], row.key, closureKt, bonus);
+        if (s !== null) {
+          ctx.textAlign = "right";
+          ctx.fillStyle = pal.muted;
+          ctx.font = `600 10px ${FONT}`;
+          ctx.fillText(`↓ ${Math.round(s)}s`, tierX(i) + tierColW - 5, y + rowH - 5);
+        }
+      }
     });
 
     // row + column rules
@@ -276,6 +331,13 @@ export function renderKneeboardCanvas(
     M,
     y + 36,
   );
+  if (closureKt) {
+    ctx.fillText(
+      `↓ Ns = seconds to the next gate (Commit → Tac → Meld → SR → MOR → DR → LSR → MAR) at ${Math.round(closureKt)} kt closure, both hot.`,
+      M,
+      y + 52,
+    );
+  }
 
   return canvas;
 }

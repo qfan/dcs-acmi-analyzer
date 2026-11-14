@@ -26,7 +26,34 @@ import {
   THREAT_TIER_ORDER,
   type ThreatTierValidation,
 } from "../timeline.ts";
-import { downloadKneeboardPng, type KneeboardTheme } from "../timelineImage.ts";
+import { DEFAULT_GATE_CLOSURE_KT, downloadKneeboardPng, type KneeboardTheme } from "../timelineImage.ts";
+
+const KT_MS = 1852 / 3600;
+/** Fewest hot BVR shots before the loaded data's median closure is offered for gate times. */
+const MIN_CLOSURE_SAMPLES = 8;
+/** Target aspect at launch at or above this counts as hot (180° = pure head-on). */
+const HOT_ASPECT_DEG = 135;
+
+/** Median closure (kt) at launch over hot-aspect BVR missile shots (> 10 nm), or null with too few. */
+function medianBvrLaunchClosureKt(engagements: MissileEngagement[]): { kt: number; n: number } | null {
+  const xs = engagements
+    .filter(
+      (e) =>
+        e.domain === "A2A" &&
+        !e.isGun &&
+        e.initial !== null &&
+        e.initial.slantRangeM > 10 * 1852 &&
+        // target pointing at the shooter: the both-hot geometry the gate times assume
+        e.initial.aspectDeg >= HOT_ASPECT_DEG &&
+        e.initial.closureMs > 0,
+    )
+    .map((e) => (e.initial?.closureMs ?? 0) / KT_MS)
+    .sort((a, b) => a - b);
+  if (xs.length < MIN_CLOSURE_SAMPLES) return null;
+  const mid = xs.length >> 1;
+  const med = xs.length % 2 ? (xs[mid] ?? 0) : ((xs[mid - 1] ?? 0) + (xs[mid] ?? 0)) / 2;
+  return { kt: Math.round(med / 10) * 10, n: xs.length };
+}
 
 const SAMPLE_CONF_BADGE: Record<
   "high" | "moderate" | "low",
@@ -907,6 +934,11 @@ export function BvrTimelineCard({
   const [priorWeight, setPriorWeight] = useState<number>(8);
   const [showAllPlanningRows, setShowAllPlanningRows] = useState(true);
   const [kneeboardTheme, setKneeboardTheme] = useState<KneeboardTheme>("day");
+  /** "off", a fixed closure in kt, or "data" for the loaded shots' median launch closure. */
+  const [gateTimes, setGateTimes] = useState<string>("off");
+  const dataClosure = useMemo(() => medianBvrLaunchClosureKt(engagements), [engagements]);
+  const gateClosureKt =
+    gateTimes === "off" ? null : gateTimes === "data" ? (dataClosure?.kt ?? null) : Number(gateTimes);
 
   const exportKneeboard = () => {
     const isBaseline = THREAT_TIER_ORDER.every((tier) =>
@@ -915,6 +947,7 @@ export function BvrTimelineCard({
     void downloadKneeboardPng(table, {
       theme: kneeboardTheme,
       strikeFighterAdd2Nm,
+      gateTimesClosureKt: gateClosureKt,
       sourceLabel: isBaseline ? "Chart baseline" : "Custom / ACMI-fitted",
     }).catch((err) => alert(`Kneeboard export failed: ${err instanceof Error ? err.message : err}`));
   };
@@ -1014,6 +1047,24 @@ export function BvrTimelineCard({
             >
               <option value="day">Day</option>
               <option value="night">Night</option>
+            </select>
+            <select
+              value={gateTimes === "data" && !dataClosure ? "off" : gateTimes}
+              onChange={(e) => setGateTimes(e.target.value)}
+              title="Print the seconds between consecutive gates (Commit → Tac → Meld → SR → MOR → DR → LSR → MAR) on the kneeboard, at this closure speed"
+              aria-label="Gate times on kneeboard"
+            >
+              <option value="off">No gate times</option>
+              <option value="1000">Gate times @ 1000 kt</option>
+              <option value={String(DEFAULT_GATE_CLOSURE_KT)}>
+                Gate times @ {DEFAULT_GATE_CLOSURE_KT} kt
+              </option>
+              <option value="1400">Gate times @ 1400 kt</option>
+              {dataClosure && (
+                <option value="data">
+                  Gate times @ {dataClosure.kt} kt (median of {dataClosure.n} hot BVR shots loaded)
+                </option>
+              )}
             </select>
             <button
               type="button"
