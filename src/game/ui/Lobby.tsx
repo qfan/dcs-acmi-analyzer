@@ -9,33 +9,183 @@ import type {
   NetStatus,
   SlotState,
 } from "../engine/protocol.ts";
+import {
+  blockedAsMixedContent,
+  isRelayUrl,
+  type ProbeResult,
+  type RelayInfo,
+  relayLabel,
+} from "../net/relays.ts";
 import { SCENARIOS, scenarioById } from "../sim/scenarios.ts";
 import { FightSettings } from "./StartDialog.tsx";
 
 export const TURN_CHOICES = [0, 10, 20, 30] as const;
+
+const CUSTOM = "__custom__";
+
+function probeText(p: ProbeResult | undefined): string {
+  if (!p || p.state === "checking") return "checking…";
+  if (p.state === "ok") return `✓ ${p.ms} ms`;
+  if (p.state === "busy") return "full";
+  if (p.state === "disabled") return "closed";
+  return "unreachable";
+}
+
+export interface ServerPickerProps {
+  relays: readonly RelayInfo[];
+  recent: readonly string[];
+  /** Chosen relay address, or "" for Automatic. */
+  selection: string;
+  onSelection: (url: string) => void;
+  onUseCustom: (url: string) => void;
+  onForget: (url: string) => void;
+  probes: ReadonlyMap<string, ProbeResult>;
+  onRefresh: () => void;
+  invite: { room: string; relayUrl: string | null } | null;
+}
+
+/** Which relay to use: Automatic, a built-in one, a recent custom one, or a new address. */
+function ServerPicker({
+  relays,
+  recent,
+  selection,
+  onSelection,
+  onUseCustom,
+  onForget,
+  probes,
+  onRefresh,
+  invite,
+}: ServerPickerProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const isBuiltin = relays.some((r) => r.url === selection);
+  const customs = recent.filter((u) => !relays.some((r) => r.url === u));
+  const best = relays
+    .filter((r) => probes.get(r.url)?.state === "ok")
+    .sort((a, b) => (probes.get(a.url)?.ms ?? 1e9) - (probes.get(b.url)?.ms ?? 1e9))[0];
+  const autoText = best
+    ? `Automatic: ${best.label} · ${probes.get(best.url)?.ms} ms`
+    : [...probes.values()].some((p) => p.state === "checking")
+      ? "Automatic (checking servers…)"
+      : "Automatic (no server answered)";
+  const draftOk = isRelayUrl(draft);
+  const warnMixed =
+    (!!selection && blockedAsMixedContent(selection)) || (draftOk && blockedAsMixedContent(draft));
+
+  return (
+    <div className="g-server">
+      <div className="g-row">
+        <span className="g-label">Server</span>
+        <select
+          aria-label="Relay server"
+          value={editing ? CUSTOM : selection}
+          onChange={(e) => {
+            if (e.target.value === CUSTOM) {
+              setEditing(true);
+              setDraft("");
+            } else {
+              setEditing(false);
+              onSelection(e.target.value);
+            }
+          }}
+        >
+          <option value="">{autoText}</option>
+          {relays.map((r) => (
+            <option key={r.url} value={r.url}>
+              {r.label} ({probeText(probes.get(r.url))})
+            </option>
+          ))}
+          {customs.length > 0 && (
+            <optgroup label="Recent">
+              {customs.map((u) => (
+                <option key={u} value={u}>
+                  {u} ({probeText(probes.get(u))})
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <option value={CUSTOM}>Custom address…</option>
+        </select>
+        <button type="button" onClick={onRefresh} title="Check the servers again">
+          ↻
+        </button>
+        {selection && !isBuiltin && !editing && (
+          <button type="button" onClick={() => onForget(selection)} title="Forget this address">
+            Forget
+          </button>
+        )}
+      </div>
+      {editing && (
+        <div className="g-row">
+          <span className="g-label" />
+          <input
+            type="text"
+            className="g-relay-url"
+            placeholder="wss://my-relay.example/ws"
+            aria-label="Custom relay address"
+            value={draft}
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value.trim())}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && draftOk) {
+                setEditing(false);
+                onUseCustom(draft);
+              }
+            }}
+          />
+          <button
+            type="button"
+            disabled={!draftOk}
+            onClick={() => {
+              setEditing(false);
+              onUseCustom(draft);
+            }}
+          >
+            Use
+          </button>
+        </div>
+      )}
+      {editing && draft && !draftOk && <p className="g-error">Enter a ws:// or wss:// address.</p>}
+      {warnMixed && (
+        <p className="g-error">
+          This page is served over https, so browsers block plain ws:// addresses here. Use wss://.
+        </p>
+      )}
+      {invite?.relayUrl && (
+        <p className="g-muted">
+          The invite for room {invite.room} is on {relayLabel(invite.relayUrl, relays)}; joining it uses that
+          server.
+        </p>
+      )}
+      <p className="g-muted g-small">
+        The relay passes messages between players, so players never see each other's addresses. Servers are
+        checked only while this tab is open. To use your own relay (LAN, Tailscale or a VM; see game/server in
+        the source), pick Custom address.
+      </p>
+    </div>
+  );
+}
 
 export function MultiplayerTab({
   name,
   onName,
   code,
   onCode,
-  relayUrl,
-  onRelayUrl,
   status,
   statusMessage,
   onHost,
   onJoin,
+  server,
 }: {
   name: string;
   onName: (s: string) => void;
   code: string;
   onCode: (s: string) => void;
-  relayUrl: string;
-  onRelayUrl: (s: string) => void;
   status: NetStatus;
   statusMessage: string | null;
   onHost: () => void;
   onJoin: () => void;
+  server: ServerPickerProps;
 }) {
   const busy = status === "connecting";
   const codeOk = /^[A-Z2-9]{6}$/.test(code);
@@ -92,20 +242,7 @@ export function MultiplayerTab({
       </div>
       {busy && <p className="g-muted">Connecting…</p>}
       {statusMessage && status !== "connecting" && <p className="g-error">{statusMessage}</p>}
-      <details className="g-advanced">
-        <summary>Advanced: relay server</summary>
-        <p className="g-muted">
-          The relay passes messages between players; it never sees anyone else's address. Change this only to
-          use your own relay (LAN, Tailscale or a VM; see game/server in the source).
-        </p>
-        <input
-          type="text"
-          className="g-relay-url"
-          value={relayUrl}
-          spellCheck={false}
-          onChange={(e) => onRelayUrl(e.target.value.trim())}
-        />
-      </details>
+      <ServerPicker {...server} />
     </div>
   );
 }
@@ -126,6 +263,7 @@ export function LobbyPanel({
   onAction,
   onLeave,
   inviteUrl,
+  serverName,
 }: {
   lobby: LobbyState;
   you: number;
@@ -133,6 +271,8 @@ export function LobbyPanel({
   onAction: (a: LobbyAction) => void;
   onLeave: () => void;
   inviteUrl: string;
+  /** The relay this room lives on (codes only work there). */
+  serverName: string;
 }) {
   const me = lobby.players.find((p) => p.id === you);
   const isHost = !!me?.host;
@@ -209,7 +349,7 @@ export function LobbyPanel({
           {copied ? "Copied" : "Copy invite link"}
         </button>
         <span className={`g-net g-net-${status}`} title={`Relay: ${status}`}>
-          ● {status === "connected" ? "connected" : status}
+          ● {status === "connected" ? `on ${serverName}` : status}
         </span>
       </div>
 

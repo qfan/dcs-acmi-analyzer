@@ -58,6 +58,10 @@ type Mode = "idle" | "sp" | "host" | "guest";
 export const MP_ALTITUDES_FT = [5000, 15000, 25000, 35000] as const;
 export const MP_LOADOUTS = [4, 6, 8, 10] as const;
 
+/** Relay refusals that mean "try another relay" (before getting into a room). */
+const HOST_RETRY = new Set(["unreachable", "bad-url", "timeout", "server-busy"]);
+const JOIN_RETRY = new Set(["unreachable", "bad-url", "timeout", "server-busy", "no-room"]);
+
 const TURN_PREFIX = "Turn:";
 const AWAY_PREFIX = "Waiting for";
 const RELAY_PAUSE = "Connection to the relay lost";
@@ -148,12 +152,12 @@ export class Engine {
       case "mp-host":
         this.stopSession();
         this.leaveMp();
-        this.startHosting(m.relayUrl, m.name, m.params);
+        this.startHosting(m.relayUrls, m.name, m.params);
         return;
       case "mp-join":
         this.stopSession();
         this.leaveMp();
-        this.startJoining(m.relayUrl, m.room, m.name);
+        this.startJoining(m.relayUrls, m.room, m.name);
         return;
       case "lobby":
         if (this.mode === "host") this.lobbyAction(this.you, m.action);
@@ -325,17 +329,25 @@ export class Engine {
 
   // ---------------------------------------------------------------- multiplayer: host
 
-  private startHosting(url: string, name: string, params: GameParams): void {
+  private startHosting(urls: string[], name: string, params: GameParams, attempt = 0): void {
+    const url = urls[attempt];
+    if (!url) {
+      this.mode = "host";
+      this.mpClosed("No server is taking new rooms right now. Try again later, or use your own relay.");
+      return;
+    }
     this.mode = "host";
     this.params = params;
+    let welcomed = false;
     const relay = new RelayClient(url, {
       onStatus: (status) => {
-        this.post({ t: "net", status });
+        this.post({ t: "net", status, relay: status === "connected" ? url : undefined });
         const s = this.session;
         if (status === "reconnecting" && s && !s.paused && !s.world.outcome)
           s.pause(`${RELAY_PAUSE}: reconnecting…`);
       },
       onWelcome: (info) => {
+        welcomed = true;
         if (info.resumed) {
           if (this.session?.pauseReason?.startsWith(RELAY_PAUSE)) this.session.play();
           this.broadcastLobby();
@@ -352,7 +364,15 @@ export class Engine {
       },
       onPeer: (kind, id, peerName) => this.hostPeer(kind, id, peerName),
       onMessage: (from, d) => this.hostMessage(from, d as GuestMsg),
-      onClosed: (_code, message) => this.mpClosed(message),
+      onClosed: (code, message) => {
+        // This relay can't open a room: try the next one.
+        if (!welcomed && this.relay === relay && HOST_RETRY.has(code) && attempt + 1 < urls.length) {
+          this.relay = null;
+          this.startHosting(urls, name, params, attempt + 1);
+          return;
+        }
+        this.mpClosed(message);
+      },
     });
     this.relay = relay;
     relay.create(name);
@@ -804,11 +824,18 @@ export class Engine {
 
   // ---------------------------------------------------------------- multiplayer: guest
 
-  private startJoining(url: string, room: string, name: string): void {
+  private startJoining(urls: string[], room: string, name: string, attempt = 0, sawNoRoom = false): void {
+    const url = urls[attempt];
     this.mode = "guest";
+    if (!url) {
+      this.mpClosed("No server to join.");
+      return;
+    }
+    let welcomed = false;
     const relay = new RelayClient(url, {
-      onStatus: (status) => this.post({ t: "net", status }),
+      onStatus: (status) => this.post({ t: "net", status, relay: status === "connected" ? url : undefined }),
       onWelcome: (info) => {
+        welcomed = true;
         this.you = info.you;
         this.hostId = info.host;
         if (info.resumed) this.toHost({ k: "sync" });
@@ -821,7 +848,18 @@ export class Engine {
       onMessage: (from, d) => {
         if (from === this.hostId) this.guestMessage(d as HostMsg);
       },
-      onClosed: (_code, message) => this.mpClosed(message),
+      onClosed: (code, message) => {
+        const noRoom = sawNoRoom || code === "no-room";
+        // Not on this relay (or it is unreachable): look on the next one.
+        if (!welcomed && this.relay === relay && JOIN_RETRY.has(code) && attempt + 1 < urls.length) {
+          this.relay = null;
+          this.startJoining(urls, room, name, attempt + 1, noRoom);
+          return;
+        }
+        this.mpClosed(
+          !welcomed && noRoom && urls.length > 1 ? "No room with that code on any server." : message,
+        );
+      },
     });
     this.relay = relay;
     relay.join(room, name);

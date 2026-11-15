@@ -36,9 +36,17 @@ send you a bill). A Node.js version of the same relay covers self-hosting, LAN a
   The browser flow (host, invite link, join, seat, ready, start, orders, pause, drop, NPC takeover,
   end match) was checked in two tabs against the local relay.
 
-**Not done:** the Cloudflare relay. Until it is deployed, the default relay address
-`wss://relay.qfan.ca/ws` doesn't exist; on localhost the game uses `ws://localhost:8787/ws`
-(run `node game/server/node/relay.ts`), and the Multiplayer tab's Advanced field takes any other.
+**Server selector** (`src/game/net/relays.ts`): built-in relays `wss://bvr-mini-game-server-cf.qfan.ca/ws`
+(Cloudflare) and `wss://bvr-mini-game-server-or.qfan.ca/ws` (Oracle), plus this computer's relay on
+localhost pages. While the Multiplayer tab is open the game reads each relay's `/healthz` (CORS, `ok`,
+`busy` or `disabled`). Automatic hosts on the quickest relay that is open, falling through to the
+next; a typed code is looked up on each known relay; invite links carry their relay
+(`#join=CODE&r=cf`, or the full address for a custom one). The last 5 custom relays are remembered
+in this browser.
+
+**Not done:** the Cloudflare and Oracle relays are not deployed yet, so both show as unreachable;
+on localhost the game uses `ws://localhost:8787/ws` (run `node game/server/node/relay.ts`), and Custom
+address takes any other.
 Binary snapshots and lockstep (5b) are not started.
 
 ---

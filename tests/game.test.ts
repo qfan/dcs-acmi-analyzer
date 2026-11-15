@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 import { mach, makeJet, minSpeedMs, specificExcessPower, stepJet } from "../src/game/sim/aircraft.ts";
 import { DEG, FT, KT, NM } from "../src/game/sim/atmosphere.ts";
 import { launchMissile, stepMissile } from "../src/game/sim/missile.ts";
@@ -14,7 +15,6 @@ import {
   type World,
   waitingOnMissiles,
 } from "../src/game/sim/world.ts";
-import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
 

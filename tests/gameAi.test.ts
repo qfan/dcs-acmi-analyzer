@@ -1,6 +1,7 @@
 // Whole NPC fights take a few seconds each, hence the longer timeouts below.
 import { describe, expect, it } from "vitest";
 import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 import { makeJet } from "../src/game/sim/aircraft.ts";
 import { NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
@@ -15,7 +16,6 @@ import {
   type World,
   waitingOnMissiles,
 } from "../src/game/sim/world.ts";
-import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
 

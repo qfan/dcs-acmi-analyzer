@@ -8,7 +8,7 @@ or audit beyond Node itself. The room logic is shared with the Cloudflare relay 
 node game/server/node/relay.ts
 ```
 
-It listens on `127.0.0.1:8787` by default. `GET /healthz` returns `ok` (or `disabled`), the
+It listens on `127.0.0.1:8787` by default. `GET /healthz` returns `ok`, `busy` (room or connection cap reached) or `disabled`, readable by the allowed pages (CORS) so the game can pick a working relay; the
 WebSocket endpoint is `/ws`, and everything else is a 404.
 
 ## Configuration (environment variables)

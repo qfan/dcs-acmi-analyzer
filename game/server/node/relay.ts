@@ -13,15 +13,22 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
+  DEFAULT_ORIGINS,
   type ErrorCode,
+  type HealthState,
+  healthHeaders,
   LIMITS,
   type Limits,
+  originMatches,
   parseClientMessage,
   type RelayMessage,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
 } from "../shared/protocol.ts";
 import { type Peer, type PeerSocket, Room } from "../shared/room.ts";
+
+export { DEFAULT_ORIGINS, originMatches };
+
 import { EgressBudget } from "./budget.ts";
 import { checkUpgrade, rejectUpgrade, WsConnection } from "./websocket.ts";
 
@@ -44,18 +51,6 @@ export interface RelayConfig {
   enabled: boolean;
   limits: Limits;
   log: (line: string) => void;
-}
-
-/** Entries ending in ":*" match any port (local development servers move between ports). */
-export const DEFAULT_ORIGINS = ["https://acmi.qfan.ca", "http://localhost:*", "http://127.0.0.1:*"];
-
-export function originMatches(allowed: string[], origin: string): boolean {
-  return allowed.some((a) => {
-    if (a === "*" || a === origin) return true;
-    if (!a.endsWith(":*")) return false;
-    const base = a.slice(0, -2);
-    return origin.startsWith(base) && /^:\d{1,5}$/.test(origin.slice(base.length));
-  });
 }
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): RelayConfig {
@@ -155,8 +150,14 @@ export function startRelay(cfg: RelayConfig): Promise<RunningRelay> {
 
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
-      res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
-      res.end(cfg.enabled && !budget.exceeded ? "ok\n" : "disabled\n");
+      const state: HealthState =
+        !cfg.enabled || budget.exceeded
+          ? "disabled"
+          : rooms.size >= cfg.maxRooms || connections >= cfg.maxConnections
+            ? "busy"
+            : "ok";
+      res.writeHead(200, healthHeaders(cfg.allowedOrigins, req.headers.origin));
+      res.end(`${state}\n`);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain" });

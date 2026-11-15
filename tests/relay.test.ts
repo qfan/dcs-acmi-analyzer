@@ -108,6 +108,19 @@ describe("relay", () => {
     expect((await fetch(`http://127.0.0.1:${r.port}/`)).status).toBe(404);
   });
 
+  it("lets allowed pages read its health, and says busy at the room cap", async () => {
+    const r = await relay({ maxRooms: 1 });
+    const health = (origin: string) =>
+      fetch(`http://127.0.0.1:${r.port}/healthz`, { headers: { Origin: origin } });
+    const ok = await health(ORIGIN);
+    expect(ok.headers.get("access-control-allow-origin")).toBe(ORIGIN);
+    expect(await ok.text()).toBe("ok\n");
+    const other = await health("https://evil.example");
+    expect(other.headers.get("access-control-allow-origin")).toBeNull();
+    await hostAndGuest(r);
+    expect(await (await health(ORIGIN)).text()).toBe("busy\n");
+  });
+
   it("creates a room, joins it, and forwards host and guest messages", async () => {
     const r = await relay();
     const { host, guest, hw, gw } = await hostAndGuest(r);

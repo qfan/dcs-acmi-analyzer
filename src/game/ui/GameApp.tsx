@@ -4,8 +4,17 @@ import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
 import type { NpcStatus } from "../ai/doctrine.ts";
-import { DEFAULT_RELAY_URL, type LobbyAction, type LobbyState, type NetStatus } from "../engine/protocol.ts";
+import type { LobbyAction, LobbyState, NetStatus } from "../engine/protocol.ts";
 import { TIME_SCALES } from "../engine/session.ts";
+import {
+  inviteLink,
+  knownRelays,
+  orderRelays,
+  type ProbeResult,
+  parseInvite,
+  probeRelay,
+  relayLabel,
+} from "../net/relays.ts";
 import {
   altLimitsM,
   availableG,
@@ -37,7 +46,7 @@ import { createEngineClient, type EngineClient } from "./engineClient.ts";
 import { LobbyPanel, MultiplayerTab } from "./Lobby.tsx";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { SinglePlayerTab, StartDialog, type StartTab } from "./StartDialog.tsx";
-import { loadLast, loadMp, loadParams, saveLast, saveMp, saveParams } from "./storage.ts";
+import { loadLast, loadMp, loadParams, saveLast, saveMp, saveParams, withRecent } from "./storage.ts";
 import { SessionView } from "./view.ts";
 
 /** Crank keeps the threat just inside the 60° radar gimbal. */
@@ -53,17 +62,11 @@ const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60
 const deg = (r: number) => Math.round(((r * 180) / Math.PI + 360) % 360);
 const fmtSigned = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x))}`;
 
-/** The relay the game uses unless the player set their own: a local one while developing. */
-function defaultRelayUrl(): string {
-  const h = location.hostname;
-  return h === "localhost" || h === "127.0.0.1" ? `ws://${h}:8787/ws` : DEFAULT_RELAY_URL;
-}
+/** Relays this page knows (the local one first while developing). */
+const RELAYS = knownRelays();
 
-/** A room code from an invite link (`#join=CODE`); the fragment never reaches any server. */
-function inviteCode(): string | null {
-  const m = /(?:^#|&)join=([A-Z2-9]{6})\b/i.exec(location.hash);
-  return m?.[1] ? m[1].toUpperCase() : null;
-}
+/** The invite in the address when the page opened (`#join=CODE&r=…`; never sent to any server). */
+const INVITE = parseInvite(location.hash, RELAYS);
 
 /** Altitude readout subline: climbing/diving rate and where to, or level. */
 function altSub(j: Jet): string {
@@ -97,7 +100,7 @@ export function GameApp() {
   const [session, setSession] = useState<SessionView | null>(null);
   const sessionRef = useRef<SessionView | null>(null);
   const [showStart, setShowStart] = useState(true);
-  const [startTab, setStartTab] = useState<StartTab>(() => (inviteCode() ? "multi" : "single"));
+  const [startTab, setStartTab] = useState<StartTab>(INVITE ? "multi" : "single");
   const [showParams, setShowParams] = useState(false);
   const [endSeen, setEndSeen] = useState(false);
   const [labels, setLabels] = useState(true);
@@ -115,10 +118,20 @@ export function GameApp() {
   const [, setTick] = useState(0);
 
   // Multiplayer
-  const mpSaved = loadMp();
-  const [mpName, setMpName] = useState(mpSaved.name);
-  const [relayUrl, setRelayUrl] = useState(mpSaved.relayUrl || defaultRelayUrl());
-  const [joinCode, setJoinCode] = useState(() => inviteCode() ?? "");
+  const [mpPrefs, setMpPrefs] = useState(loadMp);
+  const [mpName, setMpName] = useState(mpPrefs.name);
+  const [joinCode, setJoinCode] = useState(INVITE?.room ?? "");
+  /** The invite's relay applies while its code is still in the box. */
+  const inviteRelay = INVITE?.relayUrl && joinCode === INVITE.room ? INVITE.relayUrl : null;
+  const [probes, setProbes] = useState<ReadonlyMap<string, ProbeResult>>(new Map());
+  const [probeRound, setProbeRound] = useState(0);
+  /** The relay the current room is on. */
+  const [activeRelay, setActiveRelay] = useState<string | null>(null);
+  const updatePrefs = (p: Partial<typeof mpPrefs>) => {
+    const next = { ...mpPrefs, ...p };
+    setMpPrefs(next);
+    saveMp(next);
+  };
   const [lobby, setLobby] = useState<LobbyState | null>(null);
   const [you, setYou] = useState(-1);
   const [net, setNet] = useState<NetStatus>("idle");
@@ -164,7 +177,8 @@ export function GameApp() {
         case "match": {
           const v = new SessionView(m.meta, m.snap, fogRef.current);
           // A room without forced fog: tell the host this player's own choice from the start.
-          if (m.meta.mode !== "sp" && m.meta.roomFog === false && fogRef.current) engine.send({ t: "fog", on: true });
+          if (m.meta.mode !== "sp" && m.meta.roomFog === false && fogRef.current)
+            engine.send({ t: "fog", on: true });
           sessionRef.current = v;
           setSession(v);
           setShowStart(false);
@@ -196,6 +210,7 @@ export function GameApp() {
           return;
         case "net":
           setNet(m.status);
+          if (m.relay) setActiveRelay(m.relay);
           if (m.message !== undefined) setNetMsg(m.message);
           if (m.status === "connected") setNetMsg(null);
           if (m.status === "idle" || m.status === "closed") setLobby(null);
@@ -225,8 +240,26 @@ export function GameApp() {
 
   // An invite link opened the page: keep the code, drop it from the address bar.
   useEffect(() => {
-    if (inviteCode()) history.replaceState(null, "", location.pathname + location.search);
+    if (INVITE) history.replaceState(null, "", location.pathname + location.search);
   }, []);
+
+  // Check the relays while the Multiplayer tab is open (never for single-player use).
+  const pickingServer = showStart && startTab === "multi" && !lobby;
+  const selection = mpPrefs.relay;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: probeRound is the "check again" trigger
+  useEffect(() => {
+    if (!pickingServer) return;
+    const urls = [...new Set([...RELAYS.map((r) => r.url), ...(selection ? [selection] : [])])];
+    let live = true;
+    setProbes(new Map(urls.map((u) => [u, { state: "checking", ms: null } as ProbeResult])));
+    for (const u of urls)
+      void probeRelay(u).then((res) => {
+        if (live) setProbes((prev) => new Map(prev).set(u, res));
+      });
+    return () => {
+      live = false;
+    };
+  }, [pickingServer, selection, probeRound]);
 
   const mp = !!session?.multiplayer;
   const isHost = session?.meta.mode === "host" || !!lobby?.players.find((p) => p.id === you)?.host;
@@ -376,17 +409,32 @@ export function GameApp() {
 
   const lobbyAction = useCallback((a: LobbyAction) => send({ t: "lobby", action: a }), [send]);
 
+  /** A custom relay goes to the top of the recent list (built-in ones never do). */
+  const rememberRelay = (url: string, extra: Partial<typeof mpPrefs> = {}) =>
+    updatePrefs({
+      name: mpName.trim(),
+      ...extra,
+      recent: RELAYS.some((r) => r.url === url) ? mpPrefs.recent : withRecent(mpPrefs.recent, url),
+    });
+
   const hostGame = () => {
-    saveMp(mpName.trim(), relayUrl === defaultRelayUrl() ? "" : relayUrl);
+    const urls = selection ? [selection] : orderRelays(RELAYS, probes, "host");
+    if (selection) rememberRelay(selection);
+    else updatePrefs({ name: mpName.trim() });
     setNetMsg(null);
+    setActiveRelay(null);
     clearView();
-    send({ t: "mp-host", relayUrl, name: mpName.trim(), params });
+    send({ t: "mp-host", relayUrls: urls, name: mpName.trim(), params });
   };
   const joinGame = () => {
-    saveMp(mpName.trim(), relayUrl === defaultRelayUrl() ? "" : relayUrl);
+    // An invite names its relay; otherwise the chosen one, or every known relay in turn.
+    const urls = inviteRelay ? [inviteRelay] : selection ? [selection] : orderRelays(RELAYS, probes, "join");
+    if (inviteRelay ?? selection) rememberRelay(inviteRelay ?? selection);
+    else updatePrefs({ name: mpName.trim() });
     setNetMsg(null);
+    setActiveRelay(null);
     clearView();
-    send({ t: "mp-join", relayUrl, room: joinCode, name: mpName.trim() });
+    send({ t: "mp-join", relayUrls: urls, room: joinCode, name: mpName.trim() });
   };
   const leaveRoom = () => {
     send({ t: "mp-leave" });
@@ -618,7 +666,10 @@ export function GameApp() {
   const scenario = scenarioById(session?.scenarioId ?? scenarioId);
   const roomFog = session?.meta.roomFog === true;
   const fogOn = session ? session.fog : fog;
-  const inviteUrl = lobby ? `${location.origin}${location.pathname}#join=${lobby.room}` : "";
+  const inviteUrl =
+    lobby && activeRelay
+      ? inviteLink(`${location.origin}${location.pathname}`, lobby.room, activeRelay, RELAYS)
+      : "";
   const res = w?.outcome && session ? result(w.outcome, session.side, mp) : null;
 
   return (
@@ -1224,6 +1275,7 @@ export function GameApp() {
                 onAction={lobbyAction}
                 onLeave={leaveRoom}
                 inviteUrl={inviteUrl}
+                serverName={activeRelay ? relayLabel(activeRelay, RELAYS) : "the relay"}
               />
             ) : (
               <MultiplayerTab
@@ -1231,12 +1283,22 @@ export function GameApp() {
                 onName={setMpName}
                 code={joinCode}
                 onCode={setJoinCode}
-                relayUrl={relayUrl}
-                onRelayUrl={setRelayUrl}
                 status={net}
                 statusMessage={netMsg}
                 onHost={hostGame}
                 onJoin={joinGame}
+                server={{
+                  relays: RELAYS,
+                  recent: mpPrefs.recent,
+                  selection,
+                  onSelection: (url) => updatePrefs({ relay: url }),
+                  onUseCustom: (url) => updatePrefs({ relay: url, recent: withRecent(mpPrefs.recent, url) }),
+                  onForget: (url) =>
+                    updatePrefs({ relay: "", recent: mpPrefs.recent.filter((u) => u !== url) }),
+                  probes,
+                  onRefresh: () => setProbeRound((n) => n + 1),
+                  invite: inviteRelay && INVITE ? INVITE : null,
+                }}
               />
             )
           }

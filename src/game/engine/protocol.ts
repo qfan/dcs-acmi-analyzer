@@ -105,8 +105,10 @@ export type ToEngine =
   | { t: "scale"; k: number }
   | { t: "fog"; on: boolean }
   | { t: "visibility"; hidden: boolean }
-  | { t: "mp-host"; relayUrl: string; name: string; params: GameParams }
-  | { t: "mp-join"; relayUrl: string; room: string; name: string }
+  /** Relays to try in order: the first that opens a room hosts it. */
+  | { t: "mp-host"; relayUrls: string[]; name: string; params: GameParams }
+  /** Relays to try in order: the first that has the room is joined. */
+  | { t: "mp-join"; relayUrls: string[]; room: string; name: string }
   | { t: "lobby"; action: LobbyAction }
   | { t: "mp-leave" };
 
@@ -117,7 +119,8 @@ export type FromEngine =
   | { t: "meta"; meta: Partial<MatchMeta> }
   | { t: "flash"; text: string }
   | { t: "lobby"; lobby: LobbyState; you: number }
-  | { t: "net"; status: NetStatus; message?: string }
+  /** `relay`: the address in use, once connected. */
+  | { t: "net"; status: NetStatus; message?: string; relay?: string }
   | { t: "ended"; reason: string };
 
 /** Host → guests (inside relay messages). */
@@ -139,7 +142,5 @@ export type GuestMsg =
   | { k: "sync" }
   | { k: "ping"; n: number; rttMs: number | null };
 
-/** Default relay; self-hosters set their own in the Multiplayer tab. */
-export const DEFAULT_RELAY_URL = "wss://relay.qfan.ca/ws";
 /** Pauses each player gets per multiplayer match. */
 export const MP_PAUSES = 5;

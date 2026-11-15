@@ -102,9 +102,14 @@ describe("engine: multiplayer through the relay", () => {
     const url = `ws://127.0.0.1:${relay.port}/ws`;
     const host = harness();
     const guest = harness();
-    host.engine.handle({ t: "mp-host", relayUrl: url, name: "Viper", params: cloneParams(DEFAULT_PARAMS) });
+    host.engine.handle({
+      t: "mp-host",
+      relayUrls: [url],
+      name: "Viper",
+      params: cloneParams(DEFAULT_PARAMS),
+    });
     const hl = await host.until("lobby");
-    guest.engine.handle({ t: "mp-join", relayUrl: url, room: hl.lobby.room, name: "Mav" });
+    guest.engine.handle({ t: "mp-join", relayUrls: [url], room: hl.lobby.room, name: "Mav" });
     await guest.until("lobby", (m) => m.lobby.players.length === 2);
     return { relay, host, guest, code: hl.lobby.room };
   }
@@ -178,6 +183,35 @@ describe("engine: multiplayer through the relay", () => {
     host.engine.handle({ t: "lobby", action: { a: "to-lobby" } });
     const lobby = await host.until("lobby", (m) => m.lobby.phase === "lobby");
     expect(lobby.lobby.slots.find((s) => s.jetId === "R1")?.crew).toBe("open");
+  });
+
+  it("hosts on the first relay that works and finds a room on whichever relay has it", async () => {
+    const opts = { ...configFromEnv({}), port: 0, stateDir: null, log: () => {}, allowNoOrigin: true };
+    const a = await startRelay(opts);
+    const b = await startRelay(opts);
+    relays.push(a, b);
+    const urlA = `ws://127.0.0.1:${a.port}/ws`;
+    const urlB = `ws://127.0.0.1:${b.port}/ws`;
+    const nowhere = "ws://127.0.0.1:9/ws"; // nothing listens there
+    const host = harness();
+    host.engine.handle({
+      t: "mp-host",
+      relayUrls: [nowhere, urlA],
+      name: "Viper",
+      params: cloneParams(DEFAULT_PARAMS),
+    });
+    const hl = await host.until("lobby");
+    expect((await host.until("net", (m) => m.status === "connected")).relay).toBe(urlA);
+    expect(a.rooms.has(hl.lobby.room)).toBe(true);
+
+    const guest = harness();
+    guest.engine.handle({ t: "mp-join", relayUrls: [urlB, urlA], room: hl.lobby.room, name: "Mav" });
+    await guest.until("lobby", (m) => m.lobby.players.length === 2);
+    expect((await guest.until("net", (m) => m.status === "connected")).relay).toBe(urlA);
+
+    const lost = harness();
+    lost.engine.handle({ t: "mp-join", relayUrls: [urlB, urlA], room: "ABCDEF", name: "Ice" });
+    expect((await lost.until("ended")).reason).toBe("No room with that code on any server.");
   });
 
   it("closes the guest's match when the host leaves", async () => {

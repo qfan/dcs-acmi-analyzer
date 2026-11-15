@@ -152,3 +152,39 @@ export function parseClientMessage(text: string): ClientMessage | null {
       return null;
   }
 }
+
+/**
+ * Pages allowed to connect, by default. Entries ending in ":*" match any port (local development
+ * servers move between ports). Non-browser clients can send any Origin, so this only stops other
+ * websites from using the relay from their visitors' browsers.
+ */
+export const DEFAULT_ORIGINS = ["https://acmi.qfan.ca", "http://localhost:*", "http://127.0.0.1:*"];
+
+export function originMatches(allowed: readonly string[], origin: string): boolean {
+  return allowed.some((a) => {
+    if (a === "*" || a === origin) return true;
+    if (!a.endsWith(":*")) return false;
+    const base = a.slice(0, -2);
+    return origin.startsWith(base) && /^:\d{1,5}$/.test(origin.slice(base.length));
+  });
+}
+
+/**
+ * `GET /healthz` answers one word: "ok" (open for new rooms), "busy" (room or connection cap
+ * reached) or "disabled" (kill switch or spent budget). Allowed pages may read it (CORS), so the
+ * game can pick a working relay before hosting.
+ */
+export type HealthState = "ok" | "busy" | "disabled";
+
+export function healthHeaders(
+  allowed: readonly string[],
+  origin: string | undefined,
+): Record<string, string> {
+  const h: Record<string, string> = {
+    "content-type": "text/plain",
+    "cache-control": "no-store",
+    vary: "Origin",
+  };
+  if (origin && originMatches(allowed, origin)) h["access-control-allow-origin"] = origin;
+  return h;
+}
