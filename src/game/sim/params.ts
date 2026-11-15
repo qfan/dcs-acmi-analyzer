@@ -32,8 +32,15 @@ export interface AircraftParams {
   /** Thrust scales with (ρ/ρ0) to this power. */
   thrustDensityExp: number;
   rollRateDegS: number;
-  /** The jet never slows below this (no stall model). */
+  /** The jet never slows below this calibrated airspeed (kt), nor below its 1 g stall speed. */
   minSpeedKt: number;
+  /** Steepest climb or dive (deg) the altitude autopilot flies in "normal" and "max" turn modes. */
+  normalClimbDeg: number;
+  maxClimbDeg: number;
+  /** Hard deck: lowest altitude a jet can be ordered to (ft). Below 0 ft it hits the ground. */
+  minAltFt: number;
+  /** Highest altitude a jet can be ordered to (ft); thin air usually stops it lower. */
+  ceilingFt: number;
   /** AIM-120s carried. */
   missiles: number;
 }
@@ -144,6 +151,10 @@ export const DEFAULT_AIRCRAFT: AircraftParams = {
   thrustDensityExp: 0.9,
   rollRateDegS: 180,
   minSpeedKt: 130,
+  normalClimbDeg: 20,
+  maxClimbDeg: 45,
+  minAltFt: 1000,
+  ceilingFt: 50000,
   missiles: 4,
 };
 
@@ -379,6 +390,40 @@ export const PARAM_FIELDS: ParamField[] = [
     unit: "kN",
     kind: "number",
     min: 0,
+  },
+  {
+    group: "aircraft",
+    key: "normalClimbDeg",
+    label: "Climb/dive angle (Normal turns)",
+    unit: "°",
+    kind: "number",
+    min: 1,
+    max: 70,
+  },
+  {
+    group: "aircraft",
+    key: "maxClimbDeg",
+    label: "Climb/dive angle (Max turns)",
+    unit: "°",
+    kind: "number",
+    min: 1,
+    max: 70,
+  },
+  {
+    group: "aircraft",
+    key: "minAltFt",
+    label: "Hard deck (lowest ordered altitude)",
+    unit: "ft",
+    kind: "number",
+    min: 0,
+  },
+  {
+    group: "aircraft",
+    key: "ceilingFt",
+    label: "Highest ordered altitude",
+    unit: "ft",
+    kind: "number",
+    min: 1000,
   },
   { group: "aircraft", key: "tableMach", label: "Aero table Mach", kind: "numbers", min: 0 },
   { group: "aircraft", key: "clMax", label: "Max lift coefficient", kind: "numbers", min: 0.01 },

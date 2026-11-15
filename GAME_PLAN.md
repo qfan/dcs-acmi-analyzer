@@ -35,6 +35,30 @@ original plan and are kept as written.
   - **Tuning:** `node scripts/botmatch.ts` runs headless NPC-vs-NPC batches.
 - **Release:** the game page carries the same about/disclaimer footer as the viewer and analytics
   (unofficial, not affiliated with Eagle Dynamics or Raia Software, simplified game values, as-is).
+- **Phase 4 (altitude and energy), player side** (2026-11-15):
+  - **Flight model:** 3-DOF point mass. Lift splits into a turn part and a climb/dive part inside the
+    g available; an altitude-hold autopilot flies to the ordered altitude. Climb angle follows the
+    turn mode: Hold Spd climbs only on the power the current turn leaves over (Mach held), Normal
+    up to 20°, Max up to 45°. Low-speed protection stops a zoom before the minimum speed; hard deck
+    1,000 ft, ordered ceiling 50,000 ft; reaching the ground loses the jet. All editable.
+  - **Airspeeds:** ISA pressure and true/calibrated airspeed/Mach conversions (compressible pitot
+    formula, Rayleigh above Mach 1) in `sim/atmosphere.ts`. The panel shows Mach with KCAS and KTAS;
+    the jet minimum speed `minSpeedKt` is calibrated airspeed. Hold Spd holds Mach, so below 36k ft
+    the small fall in true airspeed goes into the climb too.
+  - **Missiles:** unchanged model (already density-driven); jets changing altitude now makes it
+    matter. Head-on Rmax against a 25k ft target: 16.5 nm fired from 5k ft, 47.7 nm from 25k ft,
+    57.7 nm from 45k ft. A target that dives into thick air makes the same shot arrive ~0.3 Mach
+    slower. The radar scan is now stabilised to the horizon (climbing no longer tilts the gimbal).
+  - **UI:** altitude order row (↑/↓ ±1,000 ft, Shift or PgUp/PgDn ±5,000, L level off), energy
+    height and Ps readouts, climb arrows and ordered altitude on map labels, side-view inset.
+  - **NPC altitude tactics: built, off by default.** Skill fields `commitAltFt` (Hold Spd climb)
+    and `defendDropFt` (dive when defending), plus unload-and-dive when slow. In botmatch batches,
+    climbing cost the NPC (Hard lost to Easy), and any defensive dive made almost every missile
+    miss, so fights ran out the 15-minute clock. The NPC's shot ranges assume the target holds
+    course and altitude; they need to allow for dives before these can be turned on.
+  - **Known, not from this change:** on the commit before Phase 4, Hard already loses to Normal in
+    botmatch (100% at 15k ft, 73% at 25k ft), against the Phase 3 note below. Jets in level AB keep
+    accelerating past Mach 1.4 at altitude (cd0 table); DCS data tops out near Mach 1.1–1.15.
 
 **Decisions that change the plan**
 - **Time:** real time with manual pause by default. Auto-pause and turn mode are optional settings.
@@ -44,7 +68,9 @@ original plan and are kept as written.
 - **Later:** the end-of-fight debrief (after n-vs-n); scored drills.
 
 **Next**
-- Phase 4 (altitude and energy) or Phase 5 (multiplayer).
+- Phase 4 remainder: NPC altitude tactics and shot ranges that allow for dives; rebalance Hard vs
+  Normal; supersonic drag so top speeds match the data; look-down notch ("notch low").
+- Phase 5 (multiplayer).
 - Later: n-vs-n beyond 2v2, then the end-of-fight debrief; revisit chaff.
 
 ---

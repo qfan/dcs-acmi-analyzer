@@ -207,6 +207,10 @@ export function stepMissile(
       ev.push("datalink-lost");
     }
     m.estPos = add(m.estPos, scale(m.estVel, dt));
+    if (m.estPos.z < 0) {
+      m.estPos.z = 0;
+      m.estVel = { ...m.estVel, z: 0 };
+    }
   }
 
   // 2. Pitbull, seeker acquisition and loss.

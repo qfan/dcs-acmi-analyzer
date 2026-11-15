@@ -22,7 +22,10 @@ export interface TargetTrack {
 
 /** Track carried forward to time t (dead reckoning). */
 export function trackAt(tr: TargetTrack, t: number): TargetTruth {
-  return { pos: add(tr.pos, scale(tr.vel, t - tr.t)), vel: { ...tr.vel }, alive: true };
+  const pos = add(tr.pos, scale(tr.vel, t - tr.t));
+  // Dead reckoning never puts a diving target underground.
+  if (pos.z < 0) return { pos: { ...pos, z: 0 }, vel: { ...tr.vel, z: 0 }, alive: true };
+  return { pos, vel: { ...tr.vel }, alive: true };
 }
 
 const PREDICT_DT = 0.1;

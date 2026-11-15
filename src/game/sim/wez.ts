@@ -62,6 +62,9 @@ export interface LaunchZone {
   rneNm: number;
   /** Shot taken right now against a target holding course. */
   now: FlyoutOutcome;
+  /** Altitudes (m) the zone was computed for: thin air up high stretches it a lot. */
+  shooterAltM: number;
+  targetAltM: number;
 }
 
 /** Probe ranges (nm) to find any hit first: very short shots can miss off-boresight (minimum range). */
@@ -98,7 +101,9 @@ function bisect(hits: (rangeM: number) => boolean, hiNm: number): number {
 
 function launchGeometry(shooter: Jet, target: Jet) {
   const sv = velocity(shooter);
-  const tv = velocity(target);
+  // A climbing or diving target is assumed to level off: extrapolating its climb for a whole
+  // flyout would send it to space or into the ground.
+  const tv = { ...velocity(target), z: 0 };
   const los = sub(target.pos, shooter.pos);
   const u = norm({ x: los.x, y: los.y, z: 0 });
   const dz = target.pos.z - shooter.pos.z;
@@ -118,6 +123,8 @@ export function launchZone(p: MissileParams, shooter: Jet, target: Jet, maxNm = 
     rmaxNm: bisect((r) => flyout(p, shooter.pos, sv, at(r), tv).hit, maxNm),
     rneNm: bisect((r) => flyout(p, shooter.pos, sv, at(r), away).hit, maxNm),
     now: flyout(p, shooter.pos, sv, target.pos, tv),
+    shooterAltM: shooter.pos.z,
+    targetAltM: target.pos.z,
   };
 }
 

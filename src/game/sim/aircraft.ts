@@ -6,10 +6,17 @@
  *   available g = min(g limit for the chosen effort, clMax(M)·q·S / W)
  *
  * So hard turns bleed speed through induced drag, thin air gives less lift and thrust, and the
- * turn rate falls off at both low and high speed. Altitude is held constant for now (γ = 0); the
- * state already carries γ for the later climb/dive phase.
+ * turn rate falls off at both low and high speed.
+ *
+ * Vertical: a 3-DOF point mass in wind axes. Lift splits into a horizontal part (turning) and a
+ * vertical part (holding γ against gravity, starting and ending climbs and dives), and the total
+ * stays inside the g available. An altitude-hold autopilot flies to the ordered altitude:
+ *   dV/dt = (T − D)/m − g·sin γ     dγ/dt = (L_v − g·cos γ)/V     dψ/dt = L_h/(V·cos γ)
+ * so a climb trades speed for height and a dive buys speed back: energy height Es = h + V²/2g
+ * changes only by (T − D)·V/W. The turn effort sets how steeply it climbs (Hold Spd: only on
+ * excess power, so Mach is held).
  */
-import { airDensity, DEG, G, interp, KT, RHO0, speedOfSoundMs } from "./atmosphere.ts";
+import { airDensity, DEG, FT, G, interp, KT, RHO0, speedOfSoundMs, tasFromCas } from "./atmosphere.ts";
 import type { AircraftParams } from "./params.ts";
 import { headingVec, type V3, wrapPi } from "./vec.ts";
 
@@ -34,6 +41,8 @@ export interface Jet {
   startPos: V3;
   /** Position (m): x east, y north, z altitude MSL. */
   pos: V3;
+  /** Altitude (m) the altitude-hold autopilot flies to. */
+  altCmd: number;
   /** Heading (rad, clockwise from north), flight-path angle (rad), true airspeed (m/s). */
   hdg: number;
   gamma: number;
@@ -73,6 +82,7 @@ export function makeJet(
     callsign: init.callsign,
     startPos: { x: init.x, y: init.y, z: init.altM },
     pos: { x: init.x, y: init.y, z: init.altM },
+    altCmd: init.altM,
     hdg,
     gamma: 0,
     speed: init.mach * speedOfSoundMs(init.altM),
@@ -122,7 +132,10 @@ export function availableG(
   const m = j.speed / speedOfSoundMs(j.pos.z);
   const q = 0.5 * airDensity(j.pos.z) * j.speed * j.speed;
   const liftG = (interp(p.tableMach, p.clMax, m) * q * p.wingAreaM2) / (p.massKg * G);
-  if (effort === "sustain") return Math.max(1, Math.min(p.gLimit, liftG, sustainedG(p, j)));
+  // Hold Spd turns as if level while climbing: the turn comes first, and the climb only gets the
+  // power the turn leaves over (see climbLimits). Diving, gravity helps hold the speed.
+  if (effort === "sustain")
+    return Math.max(1, Math.min(p.gLimit, liftG, sustainedG(p, { ...j, gamma: Math.min(0, j.gamma) })));
   return Math.max(1, Math.min(effort === "max" ? p.gLimit : p.normalG, liftG));
 }
 
@@ -134,11 +147,10 @@ export function dragN(p: AircraftParams, altM: number, speed: number, n: number)
   return qS * (interp(p.tableMach, p.cd0, m) + p.inducedK * cl * cl);
 }
 
-/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as IAS and stays >= 1g stall speed. */
+/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as calibrated airspeed and stays >= 1g stall speed. */
 export function minSpeedMs(p: AircraftParams, altM: number): number {
   const rho = Math.max(airDensity(altM), 1e-4);
-  const sigma = rho / RHO0;
-  const iasFloor = (p.minSpeedKt * KT) / Math.sqrt(sigma);
+  const iasFloor = tasFromCas(p.minSpeedKt * KT, altM);
   const m = iasFloor / speedOfSoundMs(altM);
   const cl1g = Math.max(interp(p.tableMach, p.clMax, m), 0.1);
   const stall1g = Math.sqrt((2 * p.massKg * G) / (rho * Math.max(p.wingAreaM2, 1) * cl1g));
@@ -161,22 +173,118 @@ export function desiredHeading(j: Jet, threatPos: V3 | null): number {
 
 /** Heading gain: desired turn rate per radian of heading error (1/s). */
 const HEADING_GAIN = 1.5;
+/** Altitude hold: wanted vertical speed per metre of altitude error (1/s). */
+const ALT_GAIN = 0.08;
+/** Flight-path angle gain: wanted γ rate per radian of γ error (1/s). */
+const GAMMA_GAIN = 1.2;
+/** Share of the g above 1 that pitching (starting or ending a climb or dive) may use; the rest stays for turning. */
+const PITCH_G_SHARE = 0.6;
+/** Low-speed protection: full climb angle above CLIMB_FULL × minimum speed, no climbing below CLIMB_NONE ×. */
+const CLIMB_NONE = 1.15;
+const CLIMB_FULL = 1.6;
+/**
+ * Change of true airspeed per metre of climb at constant Mach (1/s): the speed of sound falls with
+ * temperature in the troposphere and is constant above 11 km.
+ */
+function machHoldDvDh(altM: number, speed: number): number {
+  const dadh = (speedOfSoundMs(altM + 50) - speedOfSoundMs(altM - 50)) / 100;
+  return (speed / speedOfSoundMs(altM)) * dadh;
+}
+
+/** Hold Spd dives no steeper than this (deg). */
+const SUSTAIN_DIVE_DEG = 10;
+/** γ never goes beyond this (rad): no loops. */
+const GAMMA_MAX = 70 * DEG;
+
+/** Lowest (hard deck) and highest altitude (m) a jet can be ordered to. */
+export function altLimitsM(p: AircraftParams): { min: number; max: number } {
+  const min = Math.max(0, p.minAltFt) * FT;
+  return { min, max: Math.max(min, p.ceilingFt * FT) };
+}
+
+export const clampAltCmd = (p: AircraftParams, altM: number): number => {
+  const { min, max } = altLimitsM(p);
+  return Math.max(min, Math.min(max, altM));
+};
+
+/**
+ * Steepest climb and dive (rad, both ≥ 0) the autopilot flies right now. Hold Spd climbs only as
+ * steeply as excess power allows while holding Mach: (T − D)/W = sin γ · (1 + V·(dV/dh)_M / g), so
+ * below 11 km the slight fall in true airspeed at constant Mach goes into height too.
+ * Climbs fade out near minimum speed (a zoom tops out instead of stalling); dives are never refused.
+ */
+export function climbLimits(
+  p: AircraftParams,
+  j: Pick<Jet, "pos" | "speed" | "throttle" | "g" | "bank">,
+  effort: Effort,
+): { up: number; down: number } {
+  const angle = (effort === "max" ? p.maxClimbDeg : p.normalClimbDeg) * DEG;
+  let up = angle;
+  let down = angle;
+  if (effort === "sustain") {
+    // Excess power left after the current turn (its horizontal load only, not the brief pull of
+    // starting or ending the climb): turning hard leaves nothing to climb with.
+    const weight = Math.max(p.massKg, 1) * G;
+    const t = thrustN(p, j.throttle, j.pos.z, j.speed / speedOfSoundMs(j.pos.z));
+    const nTurn = Math.hypot(1, j.g * Math.sin(j.bank));
+    const share = 1 + (j.speed * machHoldDvDh(j.pos.z, j.speed)) / G;
+    const sinG = (t - dragN(p, j.pos.z, j.speed, nTurn)) / weight / Math.max(share, 0.5);
+    up = Math.asin(Math.max(0, Math.min(Math.sin(angle), sinG)));
+    down = Math.min(angle, SUSTAIN_DIVE_DEG * DEG);
+  }
+  const f = (j.speed / minSpeedMs(p, j.pos.z) - CLIMB_NONE) / (CLIMB_FULL - CLIMB_NONE);
+  up *= Math.max(0, Math.min(1, f));
+  return { up, down };
+}
+
+/** Energy height Es = h + V²/2g (m): the altitude the jet could zoom to by trading all its speed. */
+export const energyHeightM = (j: Pick<Jet, "pos" | "speed">): number =>
+  j.pos.z + (j.speed * j.speed) / (2 * G);
+
+/** Vertical speed (m/s, up positive). */
+export const verticalSpeed = (j: Pick<Jet, "speed" | "gamma">): number => j.speed * Math.sin(j.gamma);
 
 export function stepJet(p: AircraftParams, j: Jet, desiredHdg: number, dt: number): void {
   if (!j.alive) return;
+  const v = Math.max(j.speed, 1);
+  const cosG = Math.cos(j.gamma);
+  const aMax = availableG(p, j, j.effort) * G;
+
+  // Vertical: altitude error → wanted vertical speed (inside the climb/dive limits) → wanted γ →
+  // vertical lift. Level flight needs exactly 1 g·cos γ of it.
+  const lim = climbLimits(p, j, j.effort);
+  const vzWant = Math.max(
+    -v * Math.sin(lim.down),
+    Math.min(v * Math.sin(lim.up), ALT_GAIN * (j.altCmd - j.pos.z)),
+  );
+  const gammaWant = Math.asin(Math.max(-1, Math.min(1, vzWant / v)));
+  const pitchBudget = Math.max(0.5 * G, PITCH_G_SHARE * (aMax - G));
+  const pitchAccel = Math.max(-pitchBudget, Math.min(pitchBudget, GAMMA_GAIN * (gammaWant - j.gamma) * v));
+  const lv = Math.max(-G, Math.min(aMax, G * cosG + pitchAccel));
+
+  // Horizontal: heading error → wanted turn rate → horizontal lift, with the g left over.
   const err = wrapPi(desiredHdg - j.hdg);
-  const nAvail = availableG(p, j, j.effort);
-  const bankMax = Math.acos(1 / nAvail);
-  // Bank needed for the turn rate we want, limited by the g available.
-  const wantRate = HEADING_GAIN * err;
-  let wantBank = Math.atan((wantRate * j.speed) / G);
-  wantBank = Math.max(-bankMax, Math.min(bankMax, wantBank));
-  const rollStep = p.rollRateDegS * DEG * dt;
-  j.bank += Math.max(-rollStep, Math.min(rollStep, wantBank - j.bank));
-  j.bank = Math.max(-bankMax, Math.min(bankMax, j.bank));
-  j.g = 1 / Math.cos(j.bank);
-  const turnRate = (G * Math.tan(j.bank)) / j.speed;
-  j.hdg = (j.hdg + turnRate * dt + 2 * Math.PI) % (2 * Math.PI);
+  const lhMax = Math.sqrt(Math.max(0, aMax * aMax - lv * lv));
+  const lhWant = Math.max(-lhMax, Math.min(lhMax, HEADING_GAIN * err * v * Math.max(cosG, 0.2)));
+  let lh: number;
+  if (lv > 0.2 * G) {
+    // Roll onset: bank (the angle of the lift vector) changes at most at the roll rate.
+    const bankMax = Math.atan2(lhMax, lv);
+    const wantBank = Math.atan2(lhWant, lv);
+    const rollStep = p.rollRateDegS * DEG * dt;
+    let bank = j.bank + Math.max(-rollStep, Math.min(rollStep, wantBank - j.bank));
+    bank = Math.max(-bankMax, Math.min(bankMax, bank));
+    lh = lv * Math.tan(bank);
+  } else {
+    // Unloaded (pushing over): little lift to point, so the turn simply follows.
+    lh = lhWant;
+  }
+  // Bank is the lift vector's angle from vertical; pushing below 0 g must not read as inverted
+  // (atan2 would give 180°, and the roll logic would turn that into a turn nobody asked for).
+  j.bank = Math.atan2(lh, Math.max(lv, 0.01));
+  j.g = Math.hypot(lh, lv) / G;
+  j.hdg = (j.hdg + (lh / (v * Math.max(cosG, 0.2))) * dt + 2 * Math.PI) % (2 * Math.PI);
+  j.gamma = Math.max(-GAMMA_MAX, Math.min(GAMMA_MAX, j.gamma + ((lv - G * cosG) / v) * dt));
 
   const m = mach(j);
   const mass = Math.max(p.massKg, 1);
