@@ -77,17 +77,24 @@ function headOn(params: GameParams, altFt: number, seed: number, rangeNm: number
   return { w, blue, red };
 }
 
-/** Two flights facing each other `rangeNm` apart, `n` jets per side spread 5 nm abreast. */
-function flights(params: GameParams, altFt: number, seed: number, rangeNm: number, n: number) {
+/** Two flights facing each other `rangeNm` apart, jets on each side spread 5 nm abreast. */
+function flights(
+  params: GameParams,
+  altFt: number,
+  seed: number,
+  rangeNm: number,
+  blueCount: number,
+  redCount = blueCount,
+) {
   const w = makeWorld(params, seed);
   const alt = altFt * FT;
-  const make = (side: Side, i: number): Jet => {
+  const make = (side: Side, i: number, count: number): Jet => {
     const blue = side === "blue";
     const j = makeJet(params.aircraft, {
       id: `${blue ? "B" : "R"}${i + 1}`,
       side,
       callsign: `${blue ? "Viper" : "Bandit"} ${i + 1}`,
-      x: (i - (n - 1) / 2) * 5 * NM,
+      x: (i - (count - 1) / 2) * 5 * NM,
       y: blue ? 0 : rangeNm * NM,
       altM: alt,
       hdgDeg: blue ? 0 : 180,
@@ -97,8 +104,8 @@ function flights(params: GameParams, altFt: number, seed: number, rangeNm: numbe
     j.flares = Math.max(0, Math.round(params.countermeasures.flares));
     return j;
   };
-  for (let i = 0; i < n; i++) w.jets.push(make("blue", i));
-  for (let i = 0; i < n; i++) w.jets.push(make("red", i));
+  for (let i = 0; i < blueCount; i++) w.jets.push(make("blue", i, blueCount));
+  for (let i = 0; i < redCount; i++) w.jets.push(make("red", i, redCount));
   return w;
 }
 
@@ -235,6 +242,20 @@ export const SCENARIOS: Scenario[] = [
     npc: true,
     build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
       const w = flights(params, altFt, seed, 60, 1);
+      crewNpcs(w, opts);
+      if (!opts.blueAi) preTargetBlue(w);
+      return w;
+    },
+  },
+  {
+    id: "2v1",
+    title: "Two-ship vs one",
+    summary: "2v1 from 60 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
+    lesson:
+      "Two ships against one let you bracket the bandit: split your wingmen to force it to defend one side while the other presses in. Click a jet to select it, Shift+click to add the other, and give orders to both at once.",
+    npc: true,
+    build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
+      const w = flights(params, altFt, seed, 60, 2, 1);
       crewNpcs(w, opts);
       if (!opts.blueAi) preTargetBlue(w);
       return w;

@@ -184,6 +184,17 @@ describe("game: NPC vs NPC", () => {
     expect(blueWins).toBeGreaterThanOrEqual(5);
   }, 60_000);
 
+  it("2v1 spawns two blue jets against one red jet and finishes cleanly", () => {
+    const human = scenarioById("2v1").build(P(), 25000, 1, { redSkill: "normal", blueAi: null });
+    expect(human.jets.filter((j) => j.side === "blue").map((j) => j.id)).toEqual(["B1", "B2"]);
+    expect(human.jets.filter((j) => j.side === "red").map((j) => j.id)).toEqual(["R1"]);
+    expect(must(jetById(human, "B1")).targetId).toBe("R1");
+    expect(must(jetById(human, "B2")).targetId).toBe("R1");
+
+    const w = fight("2v1", "normal", "normal", 1);
+    expect(w.outcome?.reason).not.toMatch(/Time limit/);
+  }, 60_000);
+
   it("2v2 NPC fights end in a result, not the time limit", () => {
     for (const seed of [1, 2]) {
       const w = fight("2v2", "normal", "normal", seed);
