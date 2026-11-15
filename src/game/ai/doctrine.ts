@@ -91,6 +91,10 @@ const ZONE_EVERY_S = 2;
 const POSTURE_MISSILES_MIN = 8;
 /** Only fire a posture shot when the target is not already cold/running away (aspect <= 95 deg). */
 const POSTURE_MAX_ASPECT_RAD = 95 * DEG;
+/** Treat an enemy still facing within crank angles (<= 70 deg) as head-on-capable so cranks don't lock out follow-ups. */
+const CRANK_ASPECT_RAD = 70 * DEG;
+/** Fraction of Rne..Rmax span for the final missile so engagements resolve cleanly inside WEZ. */
+const LAST_MISSILE_FRAC = 0.03;
 /** A dead-reckoned track that should be inside our radar coverage but is not seen is dropped. */
 const STALE_TRACK_S = 4;
 /** Re-steer only when the wanted heading moved this much (avoids a command every step). */
@@ -148,6 +152,7 @@ export class DoctrineBot implements Controller {
   private postureScale = 1;
   private reactionScale = 1;
   private initialMissiles: number | null = null;
+  private postureShotsFired = 0;
 
   constructor(skill: AiSkill, preferredCrankDir: 1 | -1 | null = null) {
     this.skill = skill;
@@ -295,12 +300,13 @@ export class DoctrineBot implements Controller {
         this.headOnRmaxNm = this.skill.postureShot ? headOnRmaxNm(w.params.missile, me, enemy) : 0;
       }
       const rangeNm = len(sub(enemy.pos, me.pos)) / NM;
-      const normalRange = this.rmaxNm > 0 ? this.shotRangeNm(me) : 0;
+      const normalRange = this.rmaxNm > 0 ? this.shotRangeNm(me, enemy) : 0;
       const postureActive = this.headOnRmaxNm > 0 && this.canPostureShot(me, enemy);
       const postureRange = postureActive ? this.headOnRmaxNm * this.postureScale : 0;
       const fireRangeNm = Math.max(normalRange, postureRange);
       const usingPosture = postureActive && postureRange > normalRange;
       if (fireRangeNm > 0 && rangeNm <= fireRangeNm) {
+        if (usingPosture) this.postureShotsFired++;
         this.actionDetail = usingPosture
           ? `Firing posture shot at ${rangeNm.toFixed(1)} nm`
           : `Firing at ${rangeNm.toFixed(1)} nm`;
@@ -341,14 +347,23 @@ export class DoctrineBot implements Controller {
   }
 
   /**
-   * Range to shoot at: between Rne and Rmax, and closer with every missile already used. The first
-   * shot is long (it forces the enemy defensive); later ones get toward the no-escape range.
+   * Range to shoot at: between Rne and Rmax, and closer with every non-posture missile used.
+   * Opening posture shots don't prematurely shrink the combat timeline; the final missile holds
+   * until near Rne so fights resolve cleanly instead of stalemating.
    */
-  private shotRangeNm(me: Jet): number {
-    const used = Math.max(0, (this.initialMissiles ?? me.missiles) - me.missiles);
-    const frac = Math.min(1, this.skill.shotFrac * this.shotScale) * SHOT_CLOSER_PER_MISSILE ** used;
-    const rne = Math.min(this.rneNm, this.rmaxNm);
-    return rne + frac * (this.rmaxNm - rne);
+  private shotRangeNm(me: Jet, enemy: Jet): number {
+    const totalUsed = Math.max(0, (this.initialMissiles ?? me.missiles) - me.missiles);
+    const combatUsed = Math.max(0, totalUsed - this.postureShotsFired);
+    let frac = Math.min(1, this.skill.shotFrac * this.shotScale) * SHOT_CLOSER_PER_MISSILE ** combatUsed;
+    if (me.missiles === 1) frac = Math.min(frac, LAST_MISSILE_FRAC);
+    const aspect = angleBetween(velocity(enemy), sub(me.pos, enemy.pos));
+    // Cranking keeps the enemy inside our threat envelope; don't let their temporary crank lock out follow-ups.
+    const rmax =
+      this.headOnRmaxNm > 0 && aspect <= CRANK_ASPECT_RAD
+        ? Math.max(this.rmaxNm, this.headOnRmaxNm)
+        : this.rmaxNm;
+    const rne = Math.min(this.rneNm, rmax);
+    return rne + frac * (rmax - rne);
   }
 
   /** Known enemies: detected by our side's radars now, else dead-reckoned from the last detection. */

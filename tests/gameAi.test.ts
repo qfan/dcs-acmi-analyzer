@@ -181,9 +181,18 @@ describe("game: NPC vs NPC", () => {
     expect(wFull.missiles).toHaveLength(1);
     const b1 = must(jetById(wFull, "B1"));
     const r1 = must(jetById(wFull, "R1"));
+    const cooldown = (
+      w: World,
+      b: { pos: { x: number; y: number; z: number } },
+      r: { pos: { y: number } },
+    ) => {
+      r.pos.y = b.pos.y + 68 * NM; // stay inside radar track range while holding outside WEZ during pump cooldown
+      for (let i = 0; i < 900; i++) step(w);
+    };
+
     must(wFull.missiles[0]).end = "spent";
-    for (let i = 0; i < 900; i++) step(wFull); // clear pump/re-commit back toward cranking R1
-    r1.pos = { x: b1.pos.x, y: b1.pos.y + 38 * NM, z: b1.pos.z };
+    cooldown(wFull, b1, r1);
+    r1.pos = { x: b1.pos.x, y: b1.pos.y + 45 * NM, z: b1.pos.z };
     b1.hdg = 0;
     for (let i = 0; i < 50; i++) step(wFull); // refresh zone cache (> ZONE_EVERY_S)
     expect(wFull.missiles).toHaveLength(1); // still 1: does not posture-shot with 3/4 left
@@ -192,20 +201,44 @@ describe("game: NPC vs NPC", () => {
     const wHeavy = setup("hard", 9, 130);
     step(wHeavy);
     expect(must(jetById(wHeavy, "B1")).missiles).toBe(8);
-    must(wHeavy.missiles[0]).end = "spent";
-    for (let i = 0; i < 900; i++) step(wHeavy);
     const hb = must(jetById(wHeavy, "B1"));
     const hr = must(jetById(wHeavy, "R1"));
-    hr.pos = { x: hb.pos.x, y: hb.pos.y + 38 * NM, z: hb.pos.z };
+    must(wHeavy.missiles[0]).end = "spent";
+    cooldown(wHeavy, hb, hr);
+    hr.pos = { x: hb.pos.x, y: hb.pos.y + 45 * NM, z: hb.pos.z };
     hb.hdg = 0;
     for (let i = 0; i < 50; i++) step(wHeavy);
     expect(hb.missiles).toBe(7); // fired posture shot #2 while 8 were onboard
     must(wHeavy.missiles[1]).end = "spent";
-    for (let i = 0; i < 900; i++) step(wHeavy);
-    hr.pos = { x: hb.pos.x, y: hb.pos.y + 38 * NM, z: hb.pos.z };
+    cooldown(wHeavy, hb, hr);
+    hr.pos = { x: hb.pos.x, y: hb.pos.y + 45 * NM, z: hb.pos.z };
     hb.hdg = 0;
     for (let i = 0; i < 50; i++) step(wHeavy);
     expect(hb.missiles).toBe(7); // stops posture-shooting once below 8
+  });
+
+  it("Hard NPC fires follow-up round inside WEZ even if opponent cranks after posture round", () => {
+    const p = P();
+    const w = scenarioById("duel").build(p, 25000, 1, { redSkill: "hard", blueAi: "hard" });
+    w.controllers.delete("R1");
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos.y = 45 * NM;
+    r1.hdg = (130 * Math.PI) / 180;
+    command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
+    step(w);
+    expect(w.missiles).toHaveLength(1); // posture shot #1
+
+    must(w.missiles[0]).end = "spent";
+    r1.pos.y = b1.pos.y + 68 * NM;
+    for (let i = 0; i < 900; i++) step(w);
+    // Re-stage round 2 with cranking opponent at 28 nm: well within WEZ, should shoot promptly.
+    r1.pos = { x: b1.pos.x, y: b1.pos.y + 28 * NM, z: b1.pos.z };
+    r1.hdg = (130 * Math.PI) / 180;
+    command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
+    b1.hdg = 0;
+    for (let i = 0; i < 50; i++) step(w);
+    expect(w.missiles).toHaveLength(2);
   });
 
   it("both Hard NPCs fire on the opening merge instead of getting crank-locked out", () => {
