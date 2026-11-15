@@ -90,9 +90,17 @@ export interface MissileParams {
 }
 
 export interface RadarParams {
-  /** Radar scan / track limit either side of the nose (deg). */
+  /** Radar scan limit either side of the nose (deg), for both detecting and locking. */
   gimbalDeg: number;
-  /** Tracking range against a fighter (nm). */
+  /**
+   * Detection range against a fighter (nm): inside it (and the gimbal) the radar sees the target,
+   * which shows it to you under fog of war and shows the scan on the target's RWR.
+   */
+  detectRangeNm: number;
+  /**
+   * TWS lock range (nm), the only lock in this game: needed to fire and for a missile's datalink.
+   * Kept long so lofted long-range shots are possible.
+   */
   rangeNm: number;
 }
 
@@ -162,7 +170,8 @@ export const DEFAULT_MISSILE: MissileParams = {
 
 export const DEFAULT_RADAR: RadarParams = {
   gimbalDeg: 60,
-  rangeNm: 40,
+  detectRangeNm: 80,
+  rangeNm: 70,
 };
 
 export const DEFAULT_COUNTERMEASURES: CountermeasureParams = {
@@ -293,7 +302,8 @@ export const PARAM_FIELDS: ParamField[] = [
   { group: "aircraft", key: "cd0", label: "Zero-lift drag coefficient", kind: "numbers" },
   { group: "aircraft", key: "inducedK", label: "Induced drag factor", kind: "number", step: 0.01 },
   { group: "radar", key: "gimbalDeg", label: "Radar gimbal limit", unit: "°", kind: "number" },
-  { group: "radar", key: "rangeNm", label: "Radar tracking range", unit: "nm", kind: "number" },
+  { group: "radar", key: "detectRangeNm", label: "Radar detection range", unit: "nm", kind: "number" },
+  { group: "radar", key: "rangeNm", label: "TWS lock range (fire and datalink)", unit: "nm", kind: "number" },
   { group: "countermeasures", key: "chaff", label: "Chaff bundles per jet", kind: "number" },
   { group: "countermeasures", key: "flares", label: "Flares per jet", kind: "number" },
 ];

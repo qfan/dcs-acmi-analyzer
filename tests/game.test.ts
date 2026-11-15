@@ -249,18 +249,39 @@ describe("game: RWR, decoys and fog of war", () => {
     expect(command(w, { type: "chaff", jetId: "B1" })).toMatch(/chaff/);
   });
 
-  it("fog of war hides a bandit outside your radar and keeps its last-seen position", () => {
+  it("fog of war: detect at 80 nm, TWS lock at 70 nm, last-seen position when lost", () => {
     const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.world.controllers.clear();
     s.fog = true;
-    expect(s.sees("R1")).toBe(false); // 45 nm: beyond the 40 nm radar
-    while (s.world.t < 20) s.advance(0.25);
-    expect(s.sees("R1")).toBe(true);
     const b = must(jetById(s.world, "B1"));
+    const r = must(jetById(s.world, "R1"));
+    const placeRed = (nm: number) => {
+      r.pos.y = b.pos.y + nm * NM;
+      r.pos.x = b.pos.x;
+      s.advance(0.02);
+    };
+    placeRed(85);
+    expect(s.sees("R1")).toBe(false);
+    placeRed(75);
+    expect(s.sees("R1")).toBe(true);
+    expect(command(s.world, { type: "fire", jetId: "B1", targetId: "R1" })).toMatch(/TWS/);
+    placeRed(65);
+    expect(command(s.world, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
     b.hdg = Math.PI; // turn the radar away
     s.advance(0.02);
     expect(s.sees("R1")).toBe(false);
     expect(s.lastSeen.has("R1")).toBe(true);
     s.fog = false;
     expect(s.sees("R1")).toBe(true);
+  });
+
+  it("fog of war never shows enemy missiles or launches, even inside your radar", () => {
+    const s = new GameSession("defend", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.fog = true;
+    while (s.world.t < 5) s.advance(0.25);
+    expect(s.sees("R1")).toBe(true);
+    const launch = must(s.world.events.find((e) => e.type === "launch"));
+    expect(s.showsEvent(launch)).toBe(false);
+    expect(s.world.missiles.some((m) => m.side === "red" && !m.end)).toBe(true);
   });
 });

@@ -113,17 +113,27 @@ export function makeWorld(params: GameParams, seed = 1): World {
 export const jetById = (w: World | null | undefined, id: string | null | undefined): Jet | undefined =>
   w && id ? w.jets.find((j) => j.id === id) : undefined;
 
-/** True when `shooter`'s radar can track `target`: alive, in range and inside the gimbal limits. */
-export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
+function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): boolean {
   if (!shooter.alive || !target.alive) return false;
   const los = sub(target.pos, shooter.pos);
-  if (len(los) > w.params.radar.rangeNm * NM) return false;
+  if (len(los) > rangeNm * NM) return false;
   return angleBetween(los, headingVec(shooter.hdg, shooter.gamma)) <= w.params.radar.gimbalDeg * DEG;
+}
+
+/** True when `shooter`'s radar sees `target` (detection range and gimbal). Missiles are never seen. */
+export function radarCanDetect(w: World, shooter: Jet, target: Jet): boolean {
+  return radarCovers(w, shooter, target, Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm));
+}
+
+/** True when `shooter` can hold a TWS lock on `target`: needed to fire and for datalink support. */
+export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
+  return radarCovers(w, shooter, target, w.params.radar.rangeNm);
 }
 
 /**
  * What a jet's radar warning receiver shows: bearing only, no range.
- *  - "radar": an enemy jet's radar scan covers this jet. Datalink support of a missile in flight
+ *  - "radar": an enemy jet's radar scan covers this jet (detection range and gimbal). A TWS lock
+ *    and datalink support of a missile in flight
  *    looks the same as a normal scan, so there is no separate lock or launch warning.
  *  - "missile": an enemy missile's own seeker is active and this jet is inside its field of view.
  *    lock = the seeker is tracking this jet.
@@ -140,7 +150,7 @@ export function rwrContacts(w: World, j: Jet): RwrContact[] {
   if (!j.alive) return [];
   const out: RwrContact[] = [];
   for (const e of w.jets) {
-    if (e.side === j.side || !e.alive || !radarCanTrack(w, e, j)) continue;
+    if (e.side === j.side || !e.alive || !radarCanDetect(w, e, j)) continue;
     out.push({ sourceId: e.id, kind: "radar", bearing: bearing(j.pos, e.pos), lock: false });
   }
   const mp = w.params.missile;
@@ -221,7 +231,7 @@ export function command(w: World, c: Command): string | null {
       const tgt = jetById(w, c.targetId ?? j.targetId);
       if (!tgt?.alive || tgt.side === j.side) return "No hostile target selected.";
       if (j.missiles <= 0) return "Winchester: no missiles left.";
-      if (!radarCanTrack(w, j, tgt)) return "Target is outside radar coverage (range or gimbal).";
+      if (!radarCanTrack(w, j, tgt)) return "Target is outside TWS lock range or the radar gimbal.";
       j.targetId = tgt.id;
       j.missiles--;
       const m = launchMissile(w.params.missile, {

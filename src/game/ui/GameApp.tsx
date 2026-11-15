@@ -638,9 +638,15 @@ export function GameApp() {
               <kbd>Insert</kbd> chaff · <kbd>Delete</kbd> flare · <kbd>V</kbd> follow
             </p>
             <p className="g-muted">
-              Map: shaded wedges are radar coverage (±{w?.params.radar.gimbalDeg ?? 60}°,{" "}
-              {w?.params.radar.rangeNm ?? 40} nm). A dotted line from a missile means datalink; dashed with ×
-              is where a missile <i>thinks</i> the target is.
+              Map: radar wedges are ±{w?.params.radar.gimbalDeg ?? 60}°. Shaded out to{" "}
+              {w?.params.radar.rangeNm ?? 70} nm is TWS lock range (fire and datalink); the dashed band out to{" "}
+              {w?.params.radar.detectRangeNm ?? 80} nm only detects. A dotted line from a missile means
+              datalink; dashed with × is where a missile <i>thinks</i> the target is.
+            </p>
+            <p className="g-muted">
+              Fog of war hides enemy jets your radars do not detect (a dashed outline marks where they were
+              last seen), and always hides enemy missiles and launches: missiles do not show on radar, only on
+              your RWR once their seekers go active.
             </p>
             <p className="g-muted">
               RWR ring around your jets: amber tick = an enemy radar is scanning you (datalink support looks

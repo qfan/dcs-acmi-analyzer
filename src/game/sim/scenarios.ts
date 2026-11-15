@@ -60,11 +60,11 @@ export const SCENARIOS: Scenario[] = [
   {
     id: "duel",
     title: "Head-on duel",
-    summary: "1v1 from 45 nm against a scripted bandit that shoots, cranks and defends.",
+    summary: "1v1 from 60 nm against a scripted bandit that shoots, cranks and defends.",
     lesson:
-      "The bandit fires at about 70% of its maximum range (radar range permitting), cranks 50° to keep supporting its missile, and turns cold when your missile's seeker locks it. Take a good shot, support it to pitbull, and defend his.",
+      "The bandit fires at about 70% of its maximum range (TWS lock range permitting), cranks 50° to keep supporting its missile, and turns cold when your missile's seeker locks it. Take a good shot, support it to pitbull, and defend his.",
     build(params, altFt, seed) {
-      const { w, red } = headOn(params, altFt, seed, 45);
+      const { w, red } = headOn(params, altFt, seed, 60);
       w.controllers.set(red.id, new ScriptedBot());
       return w;
     },

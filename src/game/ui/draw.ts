@@ -82,7 +82,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, v: View) {
   label(ctx, `${Number((barM / NM).toPrecision(3))} nm`, 16 + px / 2, v.h - 26, COLORS.gridText, "center");
 }
 
-/** Wedge of a jet's radar coverage: ± gimbal limit out to tracking range. */
+/** Radar coverage: shaded ± gimbal out to the TWS lock range, dashed out to detection range. */
 function drawRadar(ctx: CanvasRenderingContext2D, v: View, w: World, j: Jet, strong: boolean) {
   const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
   const r = w.params.radar.rangeNm * NM * v.scale;
@@ -102,6 +102,19 @@ function drawRadar(ctx: CanvasRenderingContext2D, v: View, w: World, j: Jet, str
     j.side === "blue" ? `rgba(79,157,255,${strong ? 0.45 : 0.18})` : `rgba(255,90,95,${strong ? 0.4 : 0.18})`;
   ctx.lineWidth = 1;
   ctx.stroke();
+  // Detection reaches further than the TWS lock: a faint dashed outer band.
+  const rd = Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm) * NM * v.scale;
+  if (rd > r + 1) {
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.arc(sx, sy, rd, a - g, a + g);
+    ctx.moveTo(sx + Math.cos(a - g) * r, sy + Math.sin(a - g) * r);
+    ctx.lineTo(sx + Math.cos(a - g) * rd, sy + Math.sin(a - g) * rd);
+    ctx.moveTo(sx + Math.cos(a + g) * r, sy + Math.sin(a + g) * r);
+    ctx.lineTo(sx + Math.cos(a + g) * rd, sy + Math.sin(a + g) * rd);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function drawTrail(

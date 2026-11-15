@@ -7,7 +7,7 @@ import type { Jet } from "../sim/aircraft.ts";
 import type { GameParams } from "../sim/params.ts";
 import { scenarioById } from "../sim/scenarios.ts";
 import { type LaunchZone, launchZone } from "../sim/wez.ts";
-import { type GameEvent, jetById, radarCanTrack, SIM_DT, step, type World } from "../sim/world.ts";
+import { type GameEvent, jetById, radarCanDetect, SIM_DT, step, type World } from "../sim/world.ts";
 
 export const PLAYER_SIDE = "blue";
 
@@ -60,11 +60,12 @@ export class GameSession {
   trails = new Map<string, TrailPoint[]>();
   zone: { jetId: string; targetId: string; zone: LaunchZone; at: number; simT: number } | null = null;
   /**
-   * Fog of war: show only what your side knows. Enemy jets appear while one of your radars covers
-   * them, otherwise as a ghost where they were last seen; enemy missiles show only as RWR strobes.
+   * Fog of war: show only what your side knows. Enemy jets appear while one of your radars detects
+   * them, otherwise as a ghost where they were last seen. Missiles never show on radar (as in DCS):
+   * enemy missiles appear only as RWR strobes once their seekers go active.
    */
   fog = false;
-  /** Enemy jets your side's radars cover right now. */
+  /** Enemy jets your side's radars detect right now. */
   known = new Set<string>();
   lastSeen = new Map<string, { x: number; y: number; hdg: number; t: number }>();
   private acc = 0;
@@ -180,7 +181,7 @@ export class GameSession {
     const mine = w.jets.filter((j) => j.side === PLAYER_SIDE && j.alive);
     for (const e of w.jets) {
       if (e.side === PLAYER_SIDE || !e.alive) continue;
-      if (mine.some((j) => radarCanTrack(w, j, e))) {
+      if (mine.some((j) => radarCanDetect(w, j, e))) {
         this.known.add(e.id);
         this.lastSeen.set(e.id, { x: e.pos.x, y: e.pos.y, hdg: e.hdg, t: w.t });
       }
