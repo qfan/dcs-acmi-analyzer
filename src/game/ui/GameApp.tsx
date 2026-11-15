@@ -34,6 +34,11 @@ export function GameApp() {
   const [fog, setFog] = useState(false);
   const fogRef = useRef(fog);
   fogRef.current = fog;
+  const toggleFog = (on: boolean) => {
+    setFog(on);
+    fogRef.current = on;
+    if (session) session.fog = on;
+  };
   const [flash, setFlash] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
@@ -340,6 +345,18 @@ export function GameApp() {
             </div>
           </>
         )}
+        <button
+          type="button"
+          className={`g-fog ${fog ? "on" : ""}`}
+          aria-pressed={fog}
+          onClick={(e) => {
+            toggleFog(!fog);
+            e.currentTarget.blur(); // keep Space and the game keys working
+          }}
+          title="Fog of war: show only what your radar and RWR tell you"
+        >
+          {fog ? "◐ Fog of war: ON" : "○ Fog of war: OFF"}
+        </button>
         <button type="button" onClick={() => setShowStart(true)}>
           Scenarios
         </button>
@@ -399,18 +416,6 @@ export function GameApp() {
                 }}
               />{" "}
               Labels
-            </label>
-            <label title="Show only what your radar and RWR tell you">
-              <input
-                type="checkbox"
-                checked={fog}
-                onChange={(e) => {
-                  setFog(e.target.checked);
-                  e.target.blur(); // keep Space and the game keys working
-                  if (session) session.fog = e.target.checked;
-                }}
-              />{" "}
-              Fog of war
             </label>
           </div>
         </div>
@@ -655,6 +660,8 @@ export function GameApp() {
           onAlt={setAltFt}
           onStart={() => start()}
           onClose={session ? () => setShowStart(false) : null}
+          fog={fog}
+          onFog={toggleFog}
         />
       )}
       {showParams && (
@@ -746,6 +753,8 @@ function StartDialog({
   onAlt,
   onStart,
   onClose,
+  fog,
+  onFog,
 }: {
   scenarioId: string;
   altFt: number;
@@ -753,6 +762,8 @@ function StartDialog({
   onAlt: (a: number) => void;
   onStart: () => void;
   onClose: (() => void) | null;
+  fog: boolean;
+  onFog: (on: boolean) => void;
 }) {
   const sel = scenarioById(scenarioId);
   return (
@@ -787,6 +798,17 @@ function StartDialog({
                 {(a / 1000).toFixed(0)}k ft
               </button>
             ))}
+          </div>
+        </div>
+        <div className="g-row">
+          <span className="g-label">Fog of war</span>
+          <div className="g-seg">
+            <button type="button" className={fog ? "" : "on"} onClick={() => onFog(false)}>
+              Off: see everything
+            </button>
+            <button type="button" className={fog ? "on" : ""} onClick={() => onFog(true)}>
+              On: radar and RWR only
+            </button>
           </div>
         </div>
         <div className="g-row g-end">
