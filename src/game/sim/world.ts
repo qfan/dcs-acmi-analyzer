@@ -90,6 +90,8 @@ export interface World {
   timeLimitS: number;
   /** "survive": the blue side wins by outliving every red missile. */
   objective: "kill" | "survive";
+  /** When a settled result will be called (sim time), or null while the fight is still open. */
+  callAt: number | null;
 }
 
 export function makeWorld(params: GameParams, seed = 1): World {
@@ -108,6 +110,7 @@ export function makeWorld(params: GameParams, seed = 1): World {
     outcome: null,
     timeLimitS: 900,
     objective: "kill",
+    callAt: null,
   };
 }
 
@@ -389,6 +392,20 @@ export function waitingOnMissiles(w: World): boolean {
   return (!alive("blue") || !alive("red")) && w.missiles.some((m) => missileThreatens(w, m));
 }
 
+/**
+ * The fight is decided (or about to be) but not called yet: a side is wiped out, or a result is
+ * waiting out its random delay. The UI shows a banner; with fog of war it must not say why.
+ */
+export function awaitingCall(w: World): boolean {
+  if (w.outcome) return false;
+  const alive = (s: Side) => w.jets.some((j) => j.side === s && j.alive);
+  return !alive("blue") || !alive("red") || w.callAt !== null;
+}
+
+/** Random wait (s) between a result being settled and it being called, so the timing gives nothing away. */
+const CALL_DELAY_MIN_S = 5;
+const CALL_DELAY_SPAN_S = 5;
+
 function checkOutcome(w: World): void {
   const alive = (s: Side) => w.jets.some((j) => j.side === s && j.alive);
   const inFlight = (s: Side) => w.missiles.some((m) => m.side === s && missileThreatens(w, m));
@@ -412,6 +429,12 @@ function checkOutcome(w: World): void {
     o = { winner: "blue", kind: "win", reason: "You defeated every missile fired at you." };
   else if (!armed("blue") && !armed("red"))
     o = { winner: null, kind: "draw", reason: "Both sides are out of missiles." };
+  // A settled result is called only after a random 5–10 s, so the moment the game ends does not
+  // reveal that the last missile just died (with fog of war you could not know that).
+  if (o) {
+    if (w.callAt === null) w.callAt = w.t + CALL_DELAY_MIN_S + w.rng() * CALL_DELAY_SPAN_S;
+    if (w.t < w.callAt) o = null;
+  } else w.callAt = null;
   if (!o && w.t >= w.timeLimitS) o = { winner: null, kind: "draw", reason: "Time limit reached." };
   if (o) {
     w.outcome = o;

@@ -5,7 +5,15 @@ import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
 import { ALTITUDES_FT, SCENARIOS, scenarioById } from "../sim/scenarios.ts";
-import { type Command, command, jetById, rwrContacts, type World, waitingOnMissiles } from "../sim/world.ts";
+import {
+  awaitingCall,
+  type Command,
+  command,
+  jetById,
+  rwrContacts,
+  type World,
+  waitingOnMissiles,
+} from "../sim/world.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { type AutoPause, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
@@ -393,13 +401,9 @@ export function GameApp() {
               <span>⏸ {session.pauseReason}</span>
             </div>
           )}
-          {w && waitingOnMissiles(w) && !session?.paused && (
+          {w && session && awaitingCall(w) && !session.paused && (
             <div className="g-banner g-banner-wait">
-              <span>
-                {w.jets.some((j) => j.side === PLAYER_SIDE && j.alive)
-                  ? "All hostiles down, but missiles may still be in the air: keep defending."
-                  : "You are down. Your missiles in the air can still score a trade."}
-              </span>
+              <span>{waitBanner(w, session.fog)}</span>
             </div>
           )}
           {flash && <div className="g-flash">{flash}</div>}
@@ -716,6 +720,24 @@ export function GameApp() {
       )}
     </div>
   );
+}
+
+/**
+ * Banner while a fight is waiting to be called. With fog of war it says the same thing whether or
+ * not a missile is still coming, and the call itself comes after a random 5–10 s, so neither the
+ * text nor the timing tells you what your RWR cannot.
+ */
+function waitBanner(w: World, fog: boolean): string {
+  const meAlive = w.jets.some((j) => j.side === PLAYER_SIDE && j.alive);
+  if (fog)
+    return meAlive
+      ? "All known hostiles down. Stay defensive until the fight is called."
+      : "You are down. Waiting for the fight to be called.";
+  if (waitingOnMissiles(w))
+    return meAlive
+      ? "All hostiles down, but missiles are still in the air: keep defending."
+      : "You are down. Your missiles in the air can still score a trade.";
+  return "No missile can still kill anyone. Calling the fight…";
 }
 
 const OUTCOME_TITLE = { win: "Victory", loss: "Defeat", trade: "Trade", draw: "Draw" } as const;

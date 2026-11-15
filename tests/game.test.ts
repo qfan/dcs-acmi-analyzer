@@ -377,3 +377,35 @@ describe("game: the fight ends only when no missile can still kill", () => {
     expect(finish(lastShot("B1")).kind).toBe("trade");
   });
 });
+
+describe("game: the result is called after a random 5–10 s", () => {
+  it("waits 5–10 s after the bandit dies with nothing in the air, and the wait varies", () => {
+    const delays = [1, 2, 3, 4, 5].map((seed) => {
+      const w = scenarioById("duel").build(P(), 25000, seed);
+      w.controllers.clear();
+      must(jetById(w, "R1")).alive = false;
+      const t0 = w.t;
+      for (let i = 0; i < 2000 && !w.outcome; i++) step(w);
+      expect(must(w.outcome).kind).toBe("win");
+      return w.t - t0;
+    });
+    for (const d of delays) {
+      expect(d).toBeGreaterThanOrEqual(5);
+      expect(d).toBeLessThanOrEqual(10.05);
+    }
+    expect(new Set(delays.map((d) => d.toFixed(1))).size).toBeGreaterThan(1);
+  });
+
+  it("after the last missile is defeated, still waits 5–10 s before the victory", () => {
+    const w = scenarioById("defend").build(P(), 25000, 4);
+    command(w, { type: "steer", jetId: "B1", steer: cold });
+    for (let i = 0; i < 50000 && !w.outcome; i++) step(w);
+    expect(must(w.outcome).kind).toBe("win");
+    // The moment the missile stopped being a threat: lost its target, missed, or self-destructed.
+    const settled = must(
+      w.events.find((e) => e.missileId && ["seeker-lost", "miss", "spent"].includes(e.type)),
+    ).t;
+    expect(w.t - settled).toBeGreaterThanOrEqual(4.9);
+    expect(w.t - settled).toBeLessThanOrEqual(10.1);
+  });
+});
