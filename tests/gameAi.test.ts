@@ -147,4 +147,81 @@ describe("game: NPC vs NPC", () => {
       expect(w.events.filter((e) => e.type === "launch").length).toBeGreaterThan(1);
     }
   }, 60_000);
+
+  it("Hard NPC employs posture shots only when abundant (full load or >=8) and target is not cold", () => {
+    const setup = (skill: AiSkillId, missiles: number, redHdgDeg: number) => {
+      const p = P();
+      p.aircraft.missiles = missiles;
+      const w = scenarioById("duel").build(p, 25000, 1, { redSkill: skill, blueAi: skill });
+      w.controllers.delete("R1");
+      const r1 = must(jetById(w, "R1"));
+      r1.pos.y = 40 * NM;
+      r1.hdg = (redHdgDeg * Math.PI) / 180;
+      command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
+      return w;
+    };
+
+    // Normal does not posture-shot a 50°-cranking enemy at 40 nm (collapsed Rmax ~18 nm).
+    const wNorm = setup("normal", 4, 130);
+    step(wNorm);
+    expect(wNorm.missiles).toHaveLength(0);
+
+    // Hard with last missile (1) does not posture-shot, nor against a cold enemy (hdg 0°).
+    const wLast = setup("hard", 1, 130);
+    step(wLast);
+    expect(wLast.missiles).toHaveLength(0);
+
+    const wCold = setup("hard", 4, 0);
+    step(wCold);
+    expect(wCold.missiles).toHaveLength(0);
+
+    // Hard with full 4 missiles posture-shots shot #1 vs cranking enemy, then saves shot #2 (3 left).
+    const wFull = setup("hard", 4, 130);
+    step(wFull);
+    expect(wFull.missiles).toHaveLength(1);
+    const b1 = must(jetById(wFull, "B1"));
+    const r1 = must(jetById(wFull, "R1"));
+    must(wFull.missiles[0]).end = "spent";
+    for (let i = 0; i < 900; i++) step(wFull); // clear pump/re-commit back toward cranking R1
+    r1.pos = { x: b1.pos.x, y: b1.pos.y + 38 * NM, z: b1.pos.z };
+    b1.hdg = 0;
+    for (let i = 0; i < 50; i++) step(wFull); // refresh zone cache (> ZONE_EVERY_S)
+    expect(wFull.missiles).toHaveLength(1); // still 1: does not posture-shot with 3/4 left
+
+    // Hard carrying >= 8 missiles keeps posture-shotting down to 8, then conserves from 7.
+    const wHeavy = setup("hard", 9, 130);
+    step(wHeavy);
+    expect(must(jetById(wHeavy, "B1")).missiles).toBe(8);
+    must(wHeavy.missiles[0]).end = "spent";
+    for (let i = 0; i < 900; i++) step(wHeavy);
+    const hb = must(jetById(wHeavy, "B1"));
+    const hr = must(jetById(wHeavy, "R1"));
+    hr.pos = { x: hb.pos.x, y: hb.pos.y + 38 * NM, z: hb.pos.z };
+    hb.hdg = 0;
+    for (let i = 0; i < 50; i++) step(wHeavy);
+    expect(hb.missiles).toBe(7); // fired posture shot #2 while 8 were onboard
+    must(wHeavy.missiles[1]).end = "spent";
+    for (let i = 0; i < 900; i++) step(wHeavy);
+    hr.pos = { x: hb.pos.x, y: hb.pos.y + 38 * NM, z: hb.pos.z };
+    hb.hdg = 0;
+    for (let i = 0; i < 50; i++) step(wHeavy);
+    expect(hb.missiles).toBe(7); // stops posture-shooting once below 8
+  });
+
+  it("both Hard NPCs fire on the opening merge instead of getting crank-locked out", () => {
+    for (const seed of [1, 2, 3]) {
+      const w = scenarioById("duel").build(P(), 25000, seed, { redSkill: "hard", blueAi: "hard" });
+      let bShot = false;
+      let rShot = false;
+      for (let i = 0; i < 2000 && !w.outcome; i++) {
+        step(w);
+        for (const m of w.missiles) {
+          if (m.shooterId === "B1") bShot = true;
+          if (m.shooterId === "R1") rShot = true;
+        }
+        if (bShot && rShot) break;
+      }
+      expect(bShot && rShot).toBe(true);
+    }
+  }, 30_000);
 });

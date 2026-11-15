@@ -16,8 +16,8 @@ import { type Jet, type Steer, velocity } from "../sim/aircraft.ts";
 import { DEG, NM } from "../sim/atmosphere.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import { type Rng, randNormal } from "../sim/rng.ts";
-import { bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
-import { launchZone } from "../sim/wez.ts";
+import { angleBetween, bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
+import { headOnRmaxNm, launchZone } from "../sim/wez.ts";
 import {
   type Command,
   type Controller,
@@ -42,6 +42,8 @@ export interface AiSkill {
   pumpS: number;
   /** Keeps defending this long (s) after the missile leaves the RWR. */
   defendHoldS: number;
+  /** Fires a posture shot near head-on Rmax when carrying plenty of missiles (even if the enemy cranks). */
+  postureShot: boolean;
 }
 
 export type AiSkillId = "easy" | "normal" | "hard";
@@ -55,6 +57,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: false,
     pumpS: 0,
     defendHoldS: 3,
+    postureShot: false,
   },
   normal: {
     label: "Normal",
@@ -64,6 +67,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 15,
     defendHoldS: 6,
+    postureShot: false,
   },
   hard: {
     label: "Hard",
@@ -73,6 +77,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 20,
     defendHoldS: 8,
+    postureShot: true,
   },
 };
 
@@ -82,6 +87,10 @@ export const AI_SKILL_ORDER: AiSkillId[] = ["easy", "normal", "hard"];
 const SHOT_CLOSER_PER_MISSILE = 0.35;
 /** How often (s) the NPC re-estimates its Rmax against its target (the flyouts cost a few ms). */
 const ZONE_EVERY_S = 2;
+/** Minimum missiles remaining to keep firing posture shots regardless of initial load. */
+const POSTURE_MISSILES_MIN = 8;
+/** Only fire a posture shot when the target is not already cold/running away (aspect <= 95 deg). */
+const POSTURE_MAX_ASPECT_RAD = 95 * DEG;
 /** A dead-reckoned track that should be inside our radar coverage but is not seen is dropped. */
 const STALE_TRACK_S = 4;
 /** Re-steer only when the wanted heading moved this much (avoids a command every step). */
@@ -122,12 +131,14 @@ export class DoctrineBot implements Controller {
   private zoneFor: string | null = null;
   private rmaxNm = 0;
   private rneNm = 0;
+  private headOnRmaxNm = 0;
   /** Optional initial formation crank bias (wingmen split opposite ways on first merge). */
   private preferredCrankDir: 1 | -1 | null;
   private crankDir: 1 | -1 = 1;
   private supportTarget: string | null = null;
   /** This pilot's own spread around the skill (set on the first update from the world's seed). */
   private shotScale = 1;
+  private postureScale = 1;
   private reactionScale = 1;
   private initialMissiles: number | null = null;
 
@@ -142,6 +153,7 @@ export class DoctrineBot implements Controller {
       // Capped normal spread around the skill so mirrored pilots diverge without leaving their tier.
       this.initialMissiles = me.missiles;
       this.shotScale = clamp(sampleScale(w.rng, 0.075), 0.85, 1.15);
+      this.postureScale = clamp(sampleScale(w.rng, 0.03), 0.94, 1.06);
       this.reactionScale = clamp(sampleScale(w.rng, 0.12), 0.76, 1.24);
     }
     this.lastT = w.t;
@@ -266,9 +278,13 @@ export class DoctrineBot implements Controller {
         const zone = launchZone(w.params.missile, me, enemy);
         this.rmaxNm = zone.rmaxNm;
         this.rneNm = zone.rneNm;
+        this.headOnRmaxNm = this.skill.postureShot ? headOnRmaxNm(w.params.missile, me, enemy) : 0;
       }
       const rangeNm = len(sub(enemy.pos, me.pos)) / NM;
-      if (this.rmaxNm > 0 && rangeNm <= this.shotRangeNm(me))
+      let fireRangeNm = this.rmaxNm > 0 ? this.shotRangeNm(me) : 0;
+      if (this.headOnRmaxNm > 0 && this.canPostureShot(me, enemy))
+        fireRangeNm = Math.max(fireRangeNm, this.headOnRmaxNm * this.postureScale);
+      if (fireRangeNm > 0 && rangeNm <= fireRangeNm)
         out.push({ type: "fire", jetId: me.id, targetId: target });
     }
     return out;
@@ -277,6 +293,14 @@ export class DoctrineBot implements Controller {
   /** Current state, for display. */
   describe(): string {
     return this.state;
+  }
+
+  private canPostureShot(me: Jet, enemy: Jet): boolean {
+    if (!this.skill.postureShot || me.missiles <= 1) return false;
+    const initial = this.initialMissiles ?? me.missiles;
+    if (me.missiles < POSTURE_MISSILES_MIN && me.missiles < initial) return false;
+    // Only posture-shot enemies that are hot/cranking/beaming, not already running away cold.
+    return angleBetween(velocity(enemy), sub(me.pos, enemy.pos)) <= POSTURE_MAX_ASPECT_RAD;
   }
 
   /**
