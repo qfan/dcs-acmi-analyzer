@@ -5,7 +5,6 @@
  */
 import { desiredHeading, type Jet, type Side, stepJet, velocity } from "./aircraft.ts";
 import { DEG, NM } from "./atmosphere.ts";
-import { chanceInStep, inNotch } from "./countermeasures.ts";
 import { launchMissile, type Missile, type MissileEvent, stepMissile, type TargetTruth } from "./missile.ts";
 import type { GameParams } from "./params.ts";
 import { makeRng, type Rng } from "./rng.ts";
@@ -28,7 +27,6 @@ export type GameEventType =
   | "spent"
   | "radar-lost"
   | "radar-gained"
-  | "seeker-notched"
   | "seeker-chaffed"
   | "rwr-missile"
   | "chaff"
@@ -90,7 +88,7 @@ export interface World {
   decoys: Decoy[];
   /** "missileId>jetId" pairs already announced on that jet's RWR. */
   rwrSeen: Set<string>;
-  /** "radarJetId>targetJetId" → sim time until which that radar cannot lock the target (notch, chaff). */
+  /** "radarJetId>targetJetId" → sim time until which that radar cannot lock the target (chaff). */
   radarBreak: Map<string, number>;
   outcome: Outcome | null;
   /** The fight ends as a draw after this long (s). */
@@ -134,12 +132,12 @@ function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): bool
 
 const detectRange = (w: World) => Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm);
 
-/** True when `shooter`'s radar scan covers `target` (what the target's RWR sees), notched or not. */
+/** True when `shooter`'s radar scan covers `target` (what the target's RWR sees), even while chaff holds it off. */
 export function radarScans(w: World, shooter: Jet, target: Jet): boolean {
   return radarCovers(w, shooter, target, detectRange(w));
 }
 
-/** True while a notch or chaff break keeps `shooter`'s radar off `target`. */
+/** True while a chaff break keeps `shooter`'s radar off `target`. */
 export function radarBroken(w: World, shooter: Jet, target: Jet): boolean {
   return w.t < (w.radarBreak.get(`${shooter.id}>${target.id}`) ?? Number.NEGATIVE_INFINITY);
 }
@@ -155,23 +153,16 @@ export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
 }
 
 /**
- * Notch and chaff against radars, once per step. A target in a radar's notch has a small chance per
- * second of breaking its lock; while it stays in the notch the radar cannot get it back. A fresh
- * chaff bundle has a small chance to pull each radar scanning the jet off it for a moment.
+ * Chaff against radars, once per step: a fresh chaff bundle has a small chance to pull each radar
+ * scanning the jet off it for a moment.
  */
-function updateRadarBreaks(w: World, dt: number, freshChaff: Map<string, Decoy>): void {
+function updateRadarBreaks(w: World, freshChaff: Map<string, Decoy>): void {
   const cm = w.params.countermeasures;
   for (const radar of w.jets) {
     if (!radar.alive) continue;
     for (const tgt of w.jets) {
       if (tgt.side === radar.side || !tgt.alive || !radarScans(w, radar, tgt)) continue;
       const key = `${radar.id}>${tgt.id}`;
-      const until = w.radarBreak.get(key) ?? Number.NEGATIVE_INFINITY;
-      if (inNotch(radar.pos, truthOf(tgt), cm.notchGateKt)) {
-        if (w.t < until) w.radarBreak.set(key, w.t + cm.notchReacquireS);
-        else if (w.rng() < chanceInStep(cm.radarNotchPerS, dt))
-          w.radarBreak.set(key, w.t + cm.notchReacquireS);
-      }
       if (freshChaff.has(tgt.id) && w.rng() < cm.chaffPullChance)
         w.radarBreak.set(key, Math.max(w.radarBreak.get(key) ?? 0, w.t + cm.chaffPullS));
     }
@@ -314,7 +305,6 @@ const MISSILE_TEXT: Partial<Record<MissileEvent, [GameEventType, string]>> = {
   "datalink-lost": ["datalink-lost", "datalink lost: flying to last known position"],
   "datalink-regained": ["datalink-regained", "datalink regained"],
   "seeker-lost": ["seeker-lost", "seeker lost the target"],
-  "seeker-notched": ["seeker-notched", "seeker lost lock in the notch"],
   "seeker-chaffed": ["seeker-chaffed", "seeker pulled onto chaff"],
   miss: ["miss", "missed"],
   spent: ["spent", "self-destructed (flight time or speed limit)"],
@@ -341,7 +331,7 @@ export function step(w: World, dt = SIM_DT): void {
       d.rolled = true;
       freshChaff.set(d.jetId, d);
     }
-  updateRadarBreaks(w, dt, freshChaff);
+  updateRadarBreaks(w, freshChaff);
 
   for (const j of w.jets) {
     const tgt = jetById(w, j.targetId);

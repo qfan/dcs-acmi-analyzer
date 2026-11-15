@@ -105,27 +105,14 @@ export interface RadarParams {
 }
 
 /**
- * Notch and chaff, as simple game rules with deliberately weak defaults.
- *
- * Notch: a target counts as "in the notch" of a radar or missile seeker while its own speed along
- * the line of sight is below notchGateKt (it is beaming the observer) AND the observer is level with
- * or above it (look-down; same altitude counts). While that holds, the observer has a small chance
- * per second of losing it. A seeker cannot lock a target that is in its notch.
- *
- * Chaff: each bundle has a small chance to pull a radar or seeker off the jet for a moment; it then
- * usually finds the jet again. Flares do nothing against these radar-guided missiles.
+ * Chaff, as a simple game rule with a deliberately weak default: each bundle has a small chance to
+ * pull a radar or seeker off the jet for a moment. Flares do nothing against these radar-guided
+ * missiles. There is no notch rule: beaming only changes the geometry.
  */
 export interface CountermeasureParams {
   /** Chaff bundles and flares per jet. */
   chaff: number;
   flares: number;
-  notchGateKt: number;
-  /** Chance per second that a radar's lock breaks while the target sits in its notch. */
-  radarNotchPerS: number;
-  /** Chance per second that a tracking missile seeker breaks lock while the target sits in its notch. */
-  seekerNotchPerS: number;
-  /** After a notch break, how long (s) before the radar or seeker can lock again. */
-  notchReacquireS: number;
   /** Chance that one chaff bundle pulls a radar or seeker off the jet. */
   chaffPullChance: number;
   /** How long (s) that lasts before it looks for the jet again. */
@@ -199,10 +186,6 @@ export const DEFAULT_RADAR: RadarParams = {
 export const DEFAULT_COUNTERMEASURES: CountermeasureParams = {
   chaff: 60,
   flares: 30,
-  notchGateKt: 60,
-  radarNotchPerS: 0.05,
-  seekerNotchPerS: 0.07,
-  notchReacquireS: 2,
   chaffPullChance: 0.05,
   chaffPullS: 1,
 };
@@ -337,36 +320,6 @@ export const PARAM_FIELDS: ParamField[] = [
     group: "countermeasures",
     key: "flares",
     label: "Flares per jet (no effect on radar missiles)",
-    kind: "number",
-  },
-  {
-    group: "countermeasures",
-    key: "notchGateKt",
-    label: "Notch: beam within (speed along line of sight)",
-    unit: "kt",
-    kind: "number",
-  },
-  {
-    group: "countermeasures",
-    key: "radarNotchPerS",
-    label: "Notch: radar loses lock",
-    unit: "chance/s",
-    kind: "number",
-    step: 0.01,
-  },
-  {
-    group: "countermeasures",
-    key: "seekerNotchPerS",
-    label: "Notch: missile seeker loses lock",
-    unit: "chance/s",
-    kind: "number",
-    step: 0.01,
-  },
-  {
-    group: "countermeasures",
-    key: "notchReacquireS",
-    label: "Notch: time before it can lock again",
-    unit: "s",
     kind: "number",
   },
   {

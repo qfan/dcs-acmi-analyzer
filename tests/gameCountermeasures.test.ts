@@ -1,16 +1,14 @@
 /**
- * Statistical checks of the notch and chaff rules: over many seeds the measured break rates must
- * match the parameters, the rules must not fire when their conditions do not hold, and with the
- * default (deliberately weak) values a tracking missile must still usually hit.
+ * Statistical checks of the chaff rule: over many seeds the measured pull rate must match the
+ * parameter, and with the default (deliberately weak) value a tracking missile must still usually hit.
+ * There is no notch rule in the game: beaming only changes the geometry.
  */
 import { describe, expect, it } from "vitest";
 import { FT, NM } from "../src/game/sim/atmosphere.ts";
 import { launchMissile, type Missile, type MissileEvent, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams } from "../src/game/sim/params.ts";
 import { makeRng } from "../src/game/sim/rng.ts";
-import { scenarioById } from "../src/game/sim/scenarios.ts";
-import { add, len, norm, scale, sub, type V3 } from "../src/game/sim/vec.ts";
-import { jetById, radarBroken, step } from "../src/game/sim/world.ts";
+import { add, norm, scale, type V3 } from "../src/game/sim/vec.ts";
 
 const DT = 0.02;
 const ALT = 25000 * FT;
@@ -46,7 +44,7 @@ type Manoeuvre = "beam" | "hot";
 
 /**
  * Flies one shot for `seconds`. "beam" keeps the target exactly perpendicular to the missile's line
- * of sight (what the Notch button does); "hot" flies straight at the missile. `chaffEveryS` releases
+ * of sight (what the Notch button steers to); "hot" flies straight at the missile. `chaffEveryS` releases
  * a bundle that often (0 = never, -1 = once at the start). Returns the missile's events.
  */
 function fly(
@@ -92,34 +90,6 @@ function rate(n: number, run: (seed: number) => MissileEvent[], event: MissileEv
 /** Allowed deviation: four standard errors of a proportion, at least 0.02. */
 const tolerance = (prob: number, n: number) => Math.max(0.02, 4 * Math.sqrt((prob * (1 - prob)) / n));
 
-describe("notch against a missile seeker", () => {
-  it("breaks lock at the configured rate per second while beaming at the same altitude", () => {
-    const p = cloneParams(DEFAULT_PARAMS);
-    const seconds = 5;
-    const n = 600;
-    const expected = 1 - Math.exp(-p.countermeasures.seekerNotchPerS * seconds);
-    const got = rate(n, (seed) => fly(p, trackingShot(p, 15 * NM), seed, seconds, "beam"), "seeker-notched");
-    expect(Math.abs(got - expected)).toBeLessThan(tolerance(expected, n));
-  });
-
-  it("follows the parameter (twice the rate, roughly twice the early breaks)", () => {
-    const p = cloneParams(DEFAULT_PARAMS);
-    p.countermeasures.seekerNotchPerS = 0.3;
-    const seconds = 3;
-    const n = 400;
-    const expected = 1 - Math.exp(-0.3 * seconds);
-    const got = rate(n, (seed) => fly(p, trackingShot(p, 15 * NM), seed, seconds, "beam"), "seeker-notched");
-    expect(Math.abs(got - expected)).toBeLessThan(tolerance(expected, n));
-  });
-
-  it("never fires against a target above the missile (looking up) or flying hot", () => {
-    const p = cloneParams(DEFAULT_PARAMS);
-    p.countermeasures.seekerNotchPerS = 5; // would almost surely fire if the conditions held
-    expect(rate(100, (s) => fly(p, trackingShot(p, 15 * NM, 1500), s, 5, "beam"), "seeker-notched")).toBe(0);
-    expect(rate(100, (s) => fly(p, trackingShot(p, 15 * NM), s, 5, "hot"), "seeker-notched")).toBe(0);
-  });
-});
-
 describe("chaff against a missile seeker", () => {
   it("pulls the lock with the configured chance per bundle", () => {
     const p = cloneParams(DEFAULT_PARAMS);
@@ -153,38 +123,10 @@ describe("with the default (weak) values", () => {
       shot.m.vel = { x: 0, y: 800, z: 0 };
       const ev = fly(p, shot, seed, 60, "beam", 1);
       if (shot.m.end === "hit") hits++;
-      if (ev.includes("seeker-notched") || ev.includes("seeker-chaffed")) breaks++;
+      if (ev.includes("seeker-chaffed")) breaks++;
     }
-    // Notch and chaff do something, but are far from a sure defence.
+    // Chaff does something, but is far from a sure defence.
     expect(breaks / n).toBeGreaterThan(0.1);
     expect(hits / n).toBeGreaterThan(0.6);
-  });
-});
-
-describe("notch against a jet's radar", () => {
-  it("breaks the lock at the configured rate while the bandit beams it at the same altitude", () => {
-    const n = 300;
-    const seconds = 10;
-    let broken = 0;
-    for (let seed = 1; seed <= n; seed++) {
-      const w = scenarioById("duel").build(cloneParams(DEFAULT_PARAMS), 25000, seed);
-      w.controllers.clear();
-      const blue = jetById(w, "B1");
-      const red = jetById(w, "R1");
-      if (!blue || !red) throw new Error("missing jets");
-      red.pos.y = blue.pos.y + 30 * NM;
-      red.hdg = Math.PI / 2; // flying east: beam to the radar to its south
-      red.steer = { mode: "heading", hdg: Math.PI / 2 };
-      let hit = false;
-      while (w.t < seconds) {
-        step(w);
-        if (radarBroken(w, blue, red)) hit = true;
-      }
-      if (hit) broken++;
-      // Sanity: the geometry stays a beam for the whole run.
-      expect(len(sub(red.pos, blue.pos))).toBeGreaterThan(25 * NM);
-    }
-    const expected = 1 - Math.exp(-DEFAULT_PARAMS.countermeasures.radarNotchPerS * seconds);
-    expect(Math.abs(broken / n - expected)).toBeLessThan(tolerance(expected, n));
   });
 });

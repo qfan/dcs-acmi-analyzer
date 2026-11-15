@@ -12,7 +12,7 @@ const GROUP_TITLES: Record<keyof GameParams, string> = {
   missile: "Missile",
   aircraft: "Aircraft",
   radar: "Radar",
-  countermeasures: "Notch, chaff & flares",
+  countermeasures: "Chaff & flares",
 };
 
 type Draft = Record<string, string | boolean>;
