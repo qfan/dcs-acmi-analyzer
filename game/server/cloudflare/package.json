@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "check": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "deploy": "wrangler deploy"
   },

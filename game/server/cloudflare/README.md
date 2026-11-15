@@ -71,8 +71,9 @@ curl https://bvr-mini-game-server-cf.qfan.ca/healthz
 ```
 
 **Automatic deploys** (optional): in the dashboard, create a Worker from this repository with
-root directory `game/server/cloudflare`, build command `pnpm install --frozen-lockfile`, deploy
-command `pnpm run deploy`, and build watch paths `game/server/**`. Add `game/server/**` to the
+root directory `game/server/cloudflare`, build command `pnpm run build` (bundles without uploading;
+the build system runs `pnpm install --frozen-lockfile` first), deploy command `pnpm run deploy`
+(the pinned wrangler, no npm), and build watch paths `game/server/**`. Add `game/server/**` to the
 viewer Worker's excluded watch paths so each only rebuilds for its own changes.
 
 **Kill switch:** set the variable `RELAY_ENABLED` to `0` (dashboard: the Worker's Settings →
@@ -83,7 +84,8 @@ wrangler delete` removes the Worker entirely.
 
 Only `wrangler` (bundling, local runtime, deploy), pinned to an exact version and installed with
 pnpm under this folder's `pnpm-workspace.yaml`: no package version younger than 24 hours, no
-install scripts. The install scripts of `esbuild` and `workerd` are left blocked; both get their
+install scripts. The install scripts of `esbuild` and `workerd` are left blocked, listed as `false`
+under `allowBuilds` (pnpm 12 fails an install when a script has no decision); both get their
 binaries from their platform packages, and `pnpm run check` and `pnpm dev` work without them. Wrangler's
 usage telemetry is off for this project (`send_metrics` in `wrangler.jsonc`).
 
