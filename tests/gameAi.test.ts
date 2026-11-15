@@ -372,4 +372,30 @@ describe("game: 6v6 infinite demo mode", () => {
     expect(replacement3.pos.y).toBeCloseTo(startY, 3);
     expect(replacement3.hdg).toBeCloseTo(startHdg, 5);
   });
+
+  it("assigns mixed NPC difficulties per spawn and re-rolls on respawn when random is chosen", () => {
+    const p = P();
+    const w = scenarioById("infinite").build(p, 25000, 11, { redSkill: "random", blueAi: "random" });
+    const initialLabels = w.jets.map((j) => npcOf(w, j.id).skill.label);
+    expect(initialLabels.every((l) => l === "Easy" || l === "Normal" || l === "Hard")).toBe(true);
+    expect(new Set(initialLabels).size).toBeGreaterThan(1);
+
+    // Repeatedly kill R1's slot replacement and confirm newly spawned NPCs can differ from their predecessor.
+    const respawnLabels = new Set<string>();
+    let currentId = "R1";
+    for (let i = 0; i < 10; i++) {
+      must(jetById(w, currentId)).alive = false;
+      step(w);
+      const next = must(w.jets.find((j) => j.side === "red" && j.id === `R${7 + i}`));
+      respawnLabels.add(npcOf(w, next.id).skill.label);
+      currentId = next.id;
+    }
+    expect(respawnLabels.size).toBeGreaterThan(1);
+
+    // Also works in standard NPC scenarios (e.g., 2v2 across both sides).
+    const w2 = scenarioById("2v2").build(p, 25000, 7, { redSkill: "random", blueAi: "random" });
+    const labels2 = w2.jets.map((j) => npcOf(w2, j.id).skill.label);
+    expect(labels2.every((l) => l === "Easy" || l === "Normal" || l === "Hard")).toBe(true);
+    expect(new Set(labels2).size).toBeGreaterThan(1);
+  });
 });

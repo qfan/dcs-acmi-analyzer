@@ -1,6 +1,6 @@
 /** Per-browser conveniences: edited parameters, auto-pause settings and the last scenario. */
 
-import { AI_SKILL_ORDER, type AiSkillId } from "../ai/doctrine.ts";
+import { AI_SKILL_CHOICES, type AiSkillChoice } from "../ai/doctrine.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../sim/params.ts";
 import { DEFAULT_OPTIONS, type ScenarioOptions } from "../sim/scenarios.ts";
 import { type AutoPause, DEFAULT_AUTOPAUSE } from "./session.ts";
@@ -58,8 +58,8 @@ export function loadLast(): { scenarioId: string; altFt: number; options: Scenar
     options?: Partial<ScenarioOptions>;
   } | null;
   if (!v || typeof v.scenarioId !== "string" || typeof v.altFt !== "number") return null;
-  const isSkill = (x: unknown): x is AiSkillId =>
-    typeof x === "string" && (AI_SKILL_ORDER as string[]).includes(x);
+  const isSkill = (x: unknown): x is AiSkillChoice =>
+    typeof x === "string" && (AI_SKILL_CHOICES as readonly string[]).includes(x);
   const o = v.options ?? {};
   return {
     scenarioId: v.scenarioId,

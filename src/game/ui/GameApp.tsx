@@ -3,7 +3,7 @@ import { toWorld, type View } from "../../map/render.ts";
 import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
-import { AI_SKILL_ORDER, AI_SKILLS, DoctrineBot, type NpcStatus } from "../ai/doctrine.ts";
+import { AI_SKILL_CHOICES, DoctrineBot, type NpcStatus, skillChoiceLabel } from "../ai/doctrine.ts";
 import { availableG, type Jet, mach, type Throttle } from "../sim/aircraft.ts";
 import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
@@ -1024,14 +1024,15 @@ function StartDialog({
             <div className="g-row">
               <span className="g-label">Bandits</span>
               <div className="g-seg">
-                {AI_SKILL_ORDER.map((k) => (
+                {AI_SKILL_CHOICES.map((k) => (
                   <button
                     type="button"
                     key={k}
                     className={options.redSkill === k ? "on" : ""}
                     onClick={() => onOptions({ ...options, redSkill: k })}
+                    title={k === "random" ? "Pick Easy, Normal, or Hard per NPC at spawn time" : undefined}
                   >
-                    {AI_SKILLS[k].label}
+                    {skillChoiceLabel(k)}
                   </button>
                 ))}
               </div>
@@ -1048,7 +1049,7 @@ function StartDialog({
                     You fly
                   </button>
                 )}
-                {AI_SKILL_ORDER.map((k) => {
+                {AI_SKILL_CHOICES.map((k) => {
                   const activeBlue = sel.allNpc ? (options.blueAi ?? options.redSkill) : options.blueAi;
                   return (
                     <button
@@ -1056,9 +1057,13 @@ function StartDialog({
                       key={k}
                       className={activeBlue === k ? "on" : ""}
                       onClick={() => onOptions({ ...options, blueAi: k })}
-                      title="The NPC flies blue too: watch NPC vs NPC"
+                      title={
+                        k === "random"
+                          ? "Pick Easy, Normal, or Hard per Blue NPC at spawn time"
+                          : "The NPC flies blue too: watch NPC vs NPC"
+                      }
                     >
-                      NPC {AI_SKILLS[k].label}
+                      NPC {skillChoiceLabel(k)}
                     </button>
                   );
                 })}

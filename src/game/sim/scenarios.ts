@@ -1,5 +1,11 @@
 /** Scenarios: fights against the NPC (1v1, 2v2) and drills. Each builds a fresh world. */
-import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../ai/doctrine.ts";
+import {
+  AI_SKILL_ORDER,
+  AI_SKILLS,
+  type AiSkillChoice,
+  type AiSkillId,
+  DoctrineBot,
+} from "../ai/doctrine.ts";
 import { type Jet, makeJet, type Side } from "./aircraft.ts";
 import { FT, NM } from "./atmosphere.ts";
 import { ScriptedBot } from "./bot.ts";
@@ -9,10 +15,10 @@ import { makeWorld, type World } from "./world.ts";
 
 /** Who flies what. Drills ignore these (their opponents are scripted). */
 export interface ScenarioOptions {
-  /** NPC skill on the red side. */
-  redSkill: AiSkillId;
+  /** NPC skill choice on the red side ("random" picks per NPC at spawn time). */
+  redSkill: AiSkillChoice;
   /** null: you fly blue. Otherwise the NPC flies blue too (watch mode: NPC vs NPC). */
-  blueAi: AiSkillId | null;
+  blueAi: AiSkillChoice | null;
 }
 
 export const DEFAULT_OPTIONS: ScenarioOptions = { redSkill: "normal", blueAi: null };
@@ -126,13 +132,19 @@ function spawnJet(
   return j;
 }
 
+/** Resolves a skill choice to a concrete NPC skill for one spawned jet. */
+function pickSkill(w: World, choice: AiSkillChoice): AiSkillId {
+  if (choice !== "random") return choice;
+  return AI_SKILL_ORDER[Math.floor(w.rng() * AI_SKILL_ORDER.length)] ?? "normal";
+}
+
 /** Puts NPC pilots in the jets the options say (multi-ship wingmen split on first merge; singletons randomize). */
 function crewNpcs(w: World, opts: ScenarioOptions): void {
-  const crew = (side: Side, skill: AiSkillId) => {
+  const crew = (side: Side, choice: AiSkillChoice) => {
     const jets = w.jets.filter((x) => x.side === side);
     let dir: 1 | -1 | null = jets.length > 1 ? (w.rng() < 0.5 ? 1 : -1) : null;
     for (const j of jets) {
-      w.controllers.set(j.id, new DoctrineBot(AI_SKILLS[skill], dir));
+      w.controllers.set(j.id, new DoctrineBot(AI_SKILLS[pickSkill(w, choice)], dir));
       if (dir !== null) dir = dir === 1 ? -1 : 1;
     }
   };
@@ -146,7 +158,7 @@ interface SpawnSlot {
   y: number;
   altM: number;
   hdgDeg: number;
-  skill: AiSkillId;
+  choice: AiSkillChoice;
   dir: 1 | -1;
 }
 
@@ -159,12 +171,12 @@ function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts
   const w = makeWorld(params, seed);
   w.infinite = true;
   const altM = altFt * FT;
-  const blueSkill = opts.blueAi ?? opts.redSkill;
-  const redSkill = opts.redSkill;
+  const blueChoice = opts.blueAi ?? opts.redSkill;
+  const redChoice = opts.redSkill;
   const slots = new Map<string, SpawnSlot>();
   const spawned: Record<Side, number> = { blue: 0, red: 0 };
 
-  const addSide = (side: Side, skill: AiSkillId) => {
+  const addSide = (side: Side, choice: AiSkillChoice) => {
     const blue = side === "blue";
     const hdgDeg = blue ? 0 : 180;
     let dir: 1 | -1 = w.rng() < 0.5 ? 1 : -1;
@@ -175,19 +187,19 @@ function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts
         const n = ++spawned[side];
         const id = `${blue ? "B" : "R"}${n}`;
         const callsign = `${blue ? "Viper" : "Bandit"} ${n}`;
-        const slot: SpawnSlot = { side, x, y, altM, hdgDeg, skill, dir };
+        const slot: SpawnSlot = { side, x, y, altM, hdgDeg, choice, dir };
         slots.set(id, slot);
         w.jets.push(spawnJet(params, { id, side, callsign, x, y, altM, hdgDeg }));
-        w.controllers.set(id, new DoctrineBot(AI_SKILLS[skill], dir));
+        w.controllers.set(id, new DoctrineBot(AI_SKILLS[pickSkill(w, choice)], dir));
         dir = dir === 1 ? -1 : 1;
       }
     }
   };
 
-  addSide("blue", blueSkill);
-  addSide("red", redSkill);
+  addSide("blue", blueChoice);
+  addSide("red", redChoice);
 
-  w.respawn = (_world, dead) => {
+  w.respawn = (world, dead) => {
     const slot = slots.get(dead.id);
     if (!slot) return null;
     slots.delete(dead.id);
@@ -206,7 +218,7 @@ function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts
         altM: slot.altM,
         hdgDeg: slot.hdgDeg,
       }),
-      controller: new DoctrineBot(AI_SKILLS[slot.skill], slot.dir),
+      controller: new DoctrineBot(AI_SKILLS[pickSkill(world, slot.choice)], slot.dir),
     };
   };
 

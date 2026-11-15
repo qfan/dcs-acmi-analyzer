@@ -82,6 +82,10 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
 };
 
 export const AI_SKILL_ORDER: AiSkillId[] = ["easy", "normal", "hard"];
+export type AiSkillChoice = AiSkillId | "random";
+export const AI_SKILL_CHOICES: readonly AiSkillChoice[] = [...AI_SKILL_ORDER, "random"];
+export const skillChoiceLabel = (c: AiSkillChoice): string =>
+  c === "random" ? "Random" : AI_SKILLS[c].label;
 
 /** Each missile already used moves the next shot this much closer (fraction of the Rne..Rmax span). */
 const SHOT_CLOSER_PER_MISSILE = 0.35;
