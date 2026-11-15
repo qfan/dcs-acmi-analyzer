@@ -1,5 +1,8 @@
 /** Per-browser conveniences: edited parameters, auto-pause settings and the last scenario. */
+
+import { AI_SKILL_ORDER, type AiSkillId } from "../ai/doctrine.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../sim/params.ts";
+import { DEFAULT_OPTIONS, type ScenarioOptions } from "../sim/scenarios.ts";
 import { type AutoPause, DEFAULT_AUTOPAUSE } from "./session.ts";
 
 const PARAMS_KEY = "bvr-trainer.params.v1";
@@ -48,13 +51,26 @@ export function saveAutoPause(a: AutoPause): void {
   write(AUTOPAUSE_KEY, a);
 }
 
-export function loadLast(): { scenarioId: string; altFt: number } | null {
-  const v = read(LAST_KEY) as { scenarioId?: unknown; altFt?: unknown } | null;
-  if (v && typeof v.scenarioId === "string" && typeof v.altFt === "number")
-    return { scenarioId: v.scenarioId, altFt: v.altFt };
-  return null;
+export function loadLast(): { scenarioId: string; altFt: number; options: ScenarioOptions } | null {
+  const v = read(LAST_KEY) as {
+    scenarioId?: unknown;
+    altFt?: unknown;
+    options?: Partial<ScenarioOptions>;
+  } | null;
+  if (!v || typeof v.scenarioId !== "string" || typeof v.altFt !== "number") return null;
+  const isSkill = (x: unknown): x is AiSkillId =>
+    typeof x === "string" && (AI_SKILL_ORDER as string[]).includes(x);
+  const o = v.options ?? {};
+  return {
+    scenarioId: v.scenarioId,
+    altFt: v.altFt,
+    options: {
+      redSkill: isSkill(o.redSkill) ? o.redSkill : DEFAULT_OPTIONS.redSkill,
+      blueAi: isSkill(o.blueAi) ? o.blueAi : null,
+    },
+  };
 }
 
-export function saveLast(scenarioId: string, altFt: number): void {
-  write(LAST_KEY, { scenarioId, altFt });
+export function saveLast(scenarioId: string, altFt: number, options: ScenarioOptions): void {
+  write(LAST_KEY, { scenarioId, altFt, options });
 }

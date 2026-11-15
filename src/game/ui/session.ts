@@ -7,7 +7,7 @@ import { AcmiRecorder } from "../acmi.ts";
 import { type Jet, velocity } from "../sim/aircraft.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import type { GameParams } from "../sim/params.ts";
-import { scenarioById } from "../sim/scenarios.ts";
+import { DEFAULT_OPTIONS, type ScenarioOptions, scenarioById } from "../sim/scenarios.ts";
 import { type LaunchZone, launchZone } from "../sim/wez.ts";
 import {
   type GameEvent,
@@ -106,10 +106,25 @@ export class GameSession {
   private nextTrailAt = 0;
   private nextTurnAt: number;
 
-  constructor(scenarioId: string, altFt: number, params: GameParams, autoPause: AutoPause, seed = 1) {
+  /** Who flies what (NPC skills; blue by you or by the NPC). */
+  readonly options: ScenarioOptions;
+  /** The NPC flies blue: you only watch (orders are ignored). */
+  readonly watch: boolean;
+
+  constructor(
+    scenarioId: string,
+    altFt: number,
+    params: GameParams,
+    autoPause: AutoPause,
+    seed = 1,
+    options: ScenarioOptions = DEFAULT_OPTIONS,
+  ) {
     this.scenarioId = scenarioId;
     this.altFt = altFt;
-    this.world = scenarioById(scenarioId).build(params, altFt, seed);
+    const scenario = scenarioById(scenarioId);
+    this.options = options;
+    this.watch = scenario.npc && options.blueAi !== null;
+    this.world = scenario.build(params, altFt, seed, options);
     this.recorder = new AcmiRecorder({
       title: `BVR Trainer: ${scenarioById(scenarioId).title}, ${altFt.toLocaleString("en-US")} ft`,
       startedAt: this.startedAt,

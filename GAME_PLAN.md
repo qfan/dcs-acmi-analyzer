@@ -10,6 +10,42 @@ Branch: `game` (from `master` at `d60854f`). Written 2026-11-14.
 
 ---
 
+## Status (updated 2026-11-14)
+
+Where things stand, and decisions made since this plan was written. The sections below are the
+original plan and are kept as written.
+
+**Done**
+- **Phases 0–1:** fixed-step sim, point-mass jet and AIM-120C models with every number editable
+  (Parameters dialog), launch zone (Rmax/Rne count only "likely lethal" arrivals, Mach 0.9 by default),
+  three scenarios, top-down page with RTS-style orders.
+- **Phase 2 (parts):**
+  - **RWR:** a ring on each own jet. Radar scans and active missiles only; no launch warning.
+  - **Fog of war:** a toggle, off by default. Missiles never show on radar.
+  - **Missile timers:** onboard TTP/TTI estimates instead of reading the missile.
+  - **Radar:** 80 nm detection, 70 nm TWS lock (needed to fire and for datalink).
+  - **Missile shutdown:** at 120 s, or below 200 kt true airspeed.
+  - **End of fight:** waits while a missile can still kill, then calls the result after a random 5–10 s.
+  - **`.acmi` export:** download, open in the viewer, or both. The viewer keeps the last file across refreshes.
+- **Phase 3 (first pass):**
+  - **NPC (`src/game/ai/doctrine.ts`):** flies doctrine from its side's own radar picture, RWR and
+    missile timers. Easy, Normal and Hard skills.
+  - **Scenarios:** 1v1 and 2v2 against the NPC, or NPC vs NPC (watch mode).
+  - **Tuning:** `node scripts/botmatch.ts` runs headless NPC-vs-NPC batches.
+
+**Decisions that change the plan**
+- **Time:** real time with manual pause by default. Auto-pause and turn mode are optional settings.
+- **Notch and chaff:** off. The notch rule was removed and chaff's effect defaults to 0; chaff and
+  flares are visual only, to be revisited.
+- **Dropped:** enemy Rmax/Rne overlays (too cluttered).
+- **Later:** the end-of-fight debrief (after n-vs-n); scored drills.
+
+**Next**
+- **Phase 3:** tune NPC skills with the batch runner (Hard currently beats Normal ~95%).
+- **Then:** Phase 4 (altitude and energy) or Phase 5 (multiplayer).
+
+---
+
 ## 1. Verdict: viable, and most of the hard parts already exist
 
 | Question | Answer |

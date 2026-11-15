@@ -2,11 +2,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toWorld, type View } from "../../map/render.ts";
 import { saveLastFile } from "../../ui/lastFile.ts";
 import { acmiFileName } from "../acmi.ts";
+import { AI_SKILL_ORDER, AI_SKILLS, DoctrineBot } from "../ai/doctrine.ts";
 import { availableG, type Jet, mach, type Steer, type Throttle } from "../sim/aircraft.ts";
 import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
-import { ALTITUDES_FT, SCENARIOS, scenarioById } from "../sim/scenarios.ts";
+import {
+  ALTITUDES_FT,
+  DEFAULT_OPTIONS,
+  SCENARIOS,
+  type ScenarioOptions,
+  scenarioById,
+} from "../sim/scenarios.ts";
 import {
   awaitingCall,
   type Command,
@@ -34,6 +41,7 @@ export function GameApp() {
   const last = loadLast();
   const [scenarioId, setScenarioId] = useState(last?.scenarioId ?? SCENARIOS[0]?.id ?? "duel");
   const [altFt, setAltFt] = useState<number>(last?.altFt ?? 25000);
+  const [options, setOptions] = useState<ScenarioOptions>(last?.options ?? DEFAULT_OPTIONS);
   const [session, setSession] = useState<GameSession | null>(null);
   const [showStart, setShowStart] = useState(true);
   const [showParams, setShowParams] = useState(false);
@@ -63,20 +71,24 @@ export function GameApp() {
 
   const start = useCallback(
     (id = scenarioId, alt = altFt) => {
-      const s = new GameSession(id, alt, params, autoPause, Math.floor(Math.random() * 1e9));
+      const s = new GameSession(id, alt, params, autoPause, Math.floor(Math.random() * 1e9), options);
       s.fog = fogRef.current;
       setSession(s);
       setShowStart(false);
       setEndSeen(false);
-      saveLast(id, alt);
+      saveLast(id, alt, options);
       fitView(viewRef.current, s);
     },
-    [scenarioId, altFt, params, autoPause],
+    [scenarioId, altFt, params, autoPause, options],
   );
 
   const issue = useCallback(
     (make: (j: Jet) => Command | null) => {
       if (!session) return;
+      if (session.watch) {
+        setFlash("Watch mode: the NPC flies blue. Start the scenario with Blue: You fly to give orders.");
+        return;
+      }
       let err: string | null = null;
       for (const id of session.selected) {
         const j = jetById(session.world, id);
@@ -354,6 +366,7 @@ export function GameApp() {
         <strong className="g-title">BVR Trainer</strong>
         <span className="g-muted g-hide-narrow">
           {scenario.title} · {(session?.altFt ?? altFt).toLocaleString()} ft
+          {session?.watch ? " · watching NPC vs NPC" : ""}
         </span>
         <span className="g-grow" />
         {session && (
@@ -495,7 +508,7 @@ export function GameApp() {
                 <Stat
                   k="Heading"
                   v={`${String(deg(p.hdg)).padStart(3, "0")}°`}
-                  sub={p.steer.mode === "relative" ? p.steer.label : "heading"}
+                  sub={npcState(session, p.id) ?? (p.steer.mode === "relative" ? p.steer.label : "heading")}
                 />
                 <Stat k="Missiles" v={`${p.missiles}`} sub={`chaff ${p.chaff} · flare ${p.flares}`} />
                 <Stat
@@ -722,6 +735,8 @@ export function GameApp() {
           altFt={altFt}
           onScenario={setScenarioId}
           onAlt={setAltFt}
+          options={options}
+          onOptions={setOptions}
           onStart={() => start()}
           onClose={session ? () => setShowStart(false) : null}
           fog={fog}
@@ -872,6 +887,8 @@ function StartDialog({
   altFt,
   onScenario,
   onAlt,
+  options,
+  onOptions,
   onStart,
   onClose,
   fog,
@@ -881,6 +898,8 @@ function StartDialog({
   altFt: number;
   onScenario: (id: string) => void;
   onAlt: (a: number) => void;
+  options: ScenarioOptions;
+  onOptions: (o: ScenarioOptions) => void;
   onStart: () => void;
   onClose: (() => void) | null;
   fog: boolean;
@@ -921,6 +940,48 @@ function StartDialog({
             ))}
           </div>
         </div>
+        {sel.npc && (
+          <>
+            <div className="g-row">
+              <span className="g-label">Bandits</span>
+              <div className="g-seg">
+                {AI_SKILL_ORDER.map((k) => (
+                  <button
+                    type="button"
+                    key={k}
+                    className={options.redSkill === k ? "on" : ""}
+                    onClick={() => onOptions({ ...options, redSkill: k })}
+                  >
+                    {AI_SKILLS[k].label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="g-row">
+              <span className="g-label">Blue</span>
+              <div className="g-seg">
+                <button
+                  type="button"
+                  className={options.blueAi === null ? "on" : ""}
+                  onClick={() => onOptions({ ...options, blueAi: null })}
+                >
+                  You fly
+                </button>
+                {AI_SKILL_ORDER.map((k) => (
+                  <button
+                    type="button"
+                    key={k}
+                    className={options.blueAi === k ? "on" : ""}
+                    onClick={() => onOptions({ ...options, blueAi: k })}
+                    title="The NPC flies blue too: watch NPC vs NPC"
+                  >
+                    NPC {AI_SKILLS[k].label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
         <div className="g-row">
           <span className="g-label">Fog of war</span>
           <div className="g-seg">
@@ -1029,6 +1090,12 @@ function RwrLine({ session, jet }: { session: GameSession; jet: Jet }) {
       ))}
     </div>
   );
+}
+
+/** "NPC: support" when an NPC flies this jet, else null. */
+function npcState(session: GameSession, jetId: string): string | null {
+  const c = session.world.controllers.get(jetId);
+  return c instanceof DoctrineBot ? `NPC ${c.skill.label}: ${c.describe()}` : null;
 }
 
 function nearestEnemy(s: GameSession | null, j: Jet): Jet | undefined {
