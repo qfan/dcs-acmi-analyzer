@@ -563,3 +563,117 @@ button.g-fog.on {
   padding-left: 8px;
   margin: 6px 0 10px;
 }
+
+.g-watch-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.g-watch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.g-watch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.g-watch-mode {
+  color: var(--g-warn);
+  font-weight: 600;
+}
+.g-watch-jets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.g-watch-jet {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  font-size: 12px;
+  background: var(--g-bg);
+  border: 1px solid var(--g-border);
+}
+.g-watch-jet.on {
+  border-color: var(--g-accent);
+  background: rgba(59, 130, 246, 0.16);
+}
+.g-watch-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.g-npc-panel {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--g-bg);
+  border: 1px solid var(--g-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.g-npc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.g-npc-detail {
+  font-size: 12px;
+  color: var(--g-text);
+  line-height: 1.35;
+}
+.g-npc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--g-muted);
+}
+.g-npc-meta b {
+  color: var(--g-text);
+  font-weight: 600;
+}
+.g-ai-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--g-surface-2);
+  color: var(--g-text);
+}
+.g-ai-pill-commit {
+  color: var(--g-rmax);
+  background: rgba(52, 211, 153, 0.14);
+}
+.g-ai-pill-support {
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.14);
+}
+.g-ai-pill-pump {
+  color: var(--g-warn);
+  background: rgba(251, 191, 36, 0.14);
+}
+.g-ai-pill-defend {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.18);
+}
+.g-ai-pill-egress {
+  color: var(--g-muted);
+  background: rgba(135, 150, 171, 0.15);
+}

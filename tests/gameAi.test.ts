@@ -224,4 +224,19 @@ describe("game: NPC vs NPC", () => {
       expect(bShot && rShot).toBe(true);
     }
   }, 30_000);
+
+  it("reports structured NPC behaviour state and action detail for watch-mode UI", () => {
+    const w = scenarioById("duel").build(P(), 25000, 1, { redSkill: "hard", blueAi: "hard" });
+    const bot = npcOf(w, "B1");
+    expect(bot.status()).toMatchObject({ skill: "Hard", state: "commit" });
+    step(w);
+    expect(bot.status().detail).toMatch(/Closing to posture-shot range/);
+
+    // Advance until B1 fires its posture shot and enters cranking support.
+    for (let i = 0; i < 2000 && bot.state === "commit"; i++) step(w);
+    expect(bot.state).toBe("support");
+    const sup = bot.status();
+    expect(sup.state).toBe("support");
+    expect(sup.detail).toMatch(/Cranking 55° [LR]/);
+  });
 });

@@ -111,9 +111,16 @@ function sampleScale(rng: Rng, sigma: number, cap = 2): number {
 
 export type AiState = "commit" | "support" | "pump" | "defend" | "egress";
 
+export interface NpcStatus {
+  skill: string;
+  state: AiState;
+  detail: string;
+}
+
 export class DoctrineBot implements Controller {
   readonly skill: AiSkill;
   state: AiState = "commit";
+  private actionDetail = "Ready — committing hot";
   private readonly tracks = new Map<string, TargetTrack>();
   private readonly timers = new Map<string, MissileTimer>();
   private readonly rwrFirstSeen = new Map<string, number>();
@@ -197,6 +204,9 @@ export class DoctrineBot implements Controller {
       out.push(...this.fly(me, "ab", "max"));
       const rwrThreat = missiles.find((c) => c.sourceId === this.defendFrom);
       const offsetDeg = rwrThreat ? this.coldOffsetDeg(me, rwrThreat.bearing) : 180;
+      this.actionDetail = rwrThreat
+        ? `Turning cold from active missile (${rwrThreat.lock ? "locked" : "searching"})`
+        : `Holding cold evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
       // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
       out.push(
         ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
@@ -218,6 +228,7 @@ export class DoctrineBot implements Controller {
       const brg = this.trackBearing(me, target);
       if (this.state !== "pump") this.pumpDir = brg === null ? 1 : this.chooseSide(w, me, brg);
       this.state = "pump";
+      this.actionDetail = `Pumping cold after pitbull (${Math.max(0, Math.ceil(this.pumpUntil - t))} s left)`;
       out.push(...this.fly(me, "ab", "normal"));
       const offsetDeg = brg === null ? 180 : this.coldOffsetDeg(me, brg);
       out.push(...this.steerVsTrack(me, target, offsetDeg, this.pumpDir ?? 1));
@@ -229,6 +240,7 @@ export class DoctrineBot implements Controller {
       const brg = target ? this.trackBearing(me, target) : null;
       if (this.state !== "egress") this.egressDir = brg === null ? 1 : this.chooseSide(w, me, brg);
       this.state = "egress";
+      this.actionDetail = "Out of missiles — leaving cold";
       out.push(...this.fly(me, "mil", "normal"));
       if (target) {
         const offsetDeg = brg === null ? 180 : this.coldOffsetDeg(me, brg);
@@ -241,6 +253,7 @@ export class DoctrineBot implements Controller {
     out.push(...this.fly(me, "mil", "normal"));
     if (!target) {
       this.state = "commit";
+      this.actionDetail = "Searching — no radar track";
       return out; // nothing known: hold heading until something shows up
     }
     if (me.targetId !== target) out.push({ type: "target", jetId: me.id, targetId: target });
@@ -257,6 +270,7 @@ export class DoctrineBot implements Controller {
         this.supportTarget = target;
       }
       this.state = "support";
+      this.actionDetail = `Cranking ${s.crankDeg}° ${this.crankDir > 0 ? "R" : "L"} — supporting ${supporting[0]?.missileId ?? "missile"} to pitbull`;
       out.push(...this.steerVsTrack(me, target, s.crankDeg, this.crankDir));
       return out;
     }
@@ -281,11 +295,29 @@ export class DoctrineBot implements Controller {
         this.headOnRmaxNm = this.skill.postureShot ? headOnRmaxNm(w.params.missile, me, enemy) : 0;
       }
       const rangeNm = len(sub(enemy.pos, me.pos)) / NM;
-      let fireRangeNm = this.rmaxNm > 0 ? this.shotRangeNm(me) : 0;
-      if (this.headOnRmaxNm > 0 && this.canPostureShot(me, enemy))
-        fireRangeNm = Math.max(fireRangeNm, this.headOnRmaxNm * this.postureScale);
-      if (fireRangeNm > 0 && rangeNm <= fireRangeNm)
+      const normalRange = this.rmaxNm > 0 ? this.shotRangeNm(me) : 0;
+      const postureActive = this.headOnRmaxNm > 0 && this.canPostureShot(me, enemy);
+      const postureRange = postureActive ? this.headOnRmaxNm * this.postureScale : 0;
+      const fireRangeNm = Math.max(normalRange, postureRange);
+      const usingPosture = postureActive && postureRange > normalRange;
+      if (fireRangeNm > 0 && rangeNm <= fireRangeNm) {
+        this.actionDetail = usingPosture
+          ? `Firing posture shot at ${rangeNm.toFixed(1)} nm`
+          : `Firing at ${rangeNm.toFixed(1)} nm`;
         out.push({ type: "fire", jetId: me.id, targetId: target });
+      } else if (fireRangeNm > 0) {
+        this.actionDetail = usingPosture
+          ? `Closing to posture-shot range (${fireRangeNm.toFixed(1)} nm)`
+          : `Closing to shot range (${fireRangeNm.toFixed(1)} nm)`;
+      } else {
+        this.actionDetail = "Closing hot — target outside WEZ";
+      }
+    } else if (me.missiles === 0) {
+      this.actionDetail = "Waiting on active missile in flight";
+    } else if (onTarget) {
+      this.actionDetail = "Tracking active missile — holding next shot";
+    } else {
+      this.actionDetail = "Turning hot — acquiring TWS lock";
     }
     return out;
   }
@@ -293,6 +325,11 @@ export class DoctrineBot implements Controller {
   /** Current state, for display. */
   describe(): string {
     return this.state;
+  }
+
+  /** Structured behaviour state and action summary for read-only UI inspection. */
+  status(): NpcStatus {
+    return { skill: this.skill.label, state: this.state, detail: this.actionDetail };
   }
 
   private canPostureShot(me: Jet, enemy: Jet): boolean {
