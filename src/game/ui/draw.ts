@@ -369,14 +369,21 @@ function drawGhost(
   return { id: j.id, sx, sy };
 }
 
-export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession, labels: boolean): Hit[] {
+export function drawScene(
+  ctx: CanvasRenderingContext2D,
+  v: View,
+  s: GameSession,
+  labels: boolean,
+  radarSectors = true,
+): Hit[] {
   const w = s.world;
   const hits: Hit[] = [];
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, v.w, v.h);
   drawGrid(ctx, v);
 
-  for (const j of w.jets) if (j.alive && s.sees(j.id)) drawRadar(ctx, v, w, j, s.selected.has(j.id));
+  if (radarSectors)
+    for (const j of w.jets) if (j.alive && s.sees(j.id)) drawRadar(ctx, v, w, j, s.selected.has(j.id));
 
   for (const j of w.jets) {
     const tr = s.trails.get(j.id);

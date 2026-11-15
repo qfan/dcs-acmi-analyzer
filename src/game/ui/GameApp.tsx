@@ -48,6 +48,7 @@ export function GameApp() {
   const [showParams, setShowParams] = useState(false);
   const [endSeen, setEndSeen] = useState(false);
   const [labels, setLabels] = useState(true);
+  const [radarSectors, setRadarSectors] = useState(true);
   const [follow, setFollow] = useState(true);
   /** Fog of war: off by default each time the page opens. */
   const [fog, setFog] = useState(false);
@@ -70,6 +71,8 @@ export function GameApp() {
   followRef.current = follow;
   const labelsRef = useRef(labels);
   labelsRef.current = labels;
+  const radarSectorsRef = useRef(radarSectors);
+  radarSectorsRef.current = radarSectors;
 
   const start = useCallback(
     (id = scenarioId, alt = altFt) => {
@@ -213,7 +216,7 @@ export function GameApp() {
         if (followRef.current) centerOnFight(v, session);
         if (ctx) {
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          hitsRef.current = drawScene(ctx, v, session, labelsRef.current);
+          hitsRef.current = drawScene(ctx, v, session, labelsRef.current, radarSectorsRef.current);
         }
       }
       if (now - lastHud > HUD_MS) {
@@ -532,6 +535,17 @@ export function GameApp() {
                 }}
               />{" "}
               Labels
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={radarSectors}
+                onChange={(e) => {
+                  setRadarSectors(e.target.checked);
+                  e.target.blur();
+                }}
+              />{" "}
+              Radar sectors
             </label>
           </div>
         </div>
