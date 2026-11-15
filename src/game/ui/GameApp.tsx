@@ -1,0 +1,774 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toWorld, type View } from "../../map/render.ts";
+import { availableG, type Jet, mach, type Steer, type Throttle } from "../sim/aircraft.ts";
+import { FT, KT, NM } from "../sim/atmosphere.ts";
+import { missileMach } from "../sim/missile.ts";
+import type { GameParams } from "../sim/params.ts";
+import { ALTITUDES_FT, SCENARIOS, scenarioById } from "../sim/scenarios.ts";
+import { type Command, command, jetById } from "../sim/world.ts";
+import { drawScene, type Hit, sideCol } from "./draw.ts";
+import { ParamEditor } from "./ParamEditor.tsx";
+import { type AutoPause, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
+import { loadAutoPause, loadLast, loadParams, saveAutoPause, saveLast, saveParams } from "./storage.ts";
+
+/** Crank keeps the threat just inside the 60° radar gimbal. */
+const CRANK_DEG = 50;
+const HUD_MS = 100;
+
+const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const deg = (r: number) => Math.round(((r * 180) / Math.PI + 360) % 360);
+
+export function GameApp() {
+  const [params, setParams] = useState<GameParams>(loadParams);
+  const [autoPause, setAutoPauseState] = useState<AutoPause>(loadAutoPause);
+  const last = loadLast();
+  const [scenarioId, setScenarioId] = useState(last?.scenarioId ?? SCENARIOS[0]?.id ?? "duel");
+  const [altFt, setAltFt] = useState<number>(last?.altFt ?? 25000);
+  const [session, setSession] = useState<GameSession | null>(null);
+  const [showStart, setShowStart] = useState(true);
+  const [showParams, setShowParams] = useState(false);
+  const [endSeen, setEndSeen] = useState(false);
+  const [labels, setLabels] = useState(true);
+  const [follow, setFollow] = useState(true);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const viewRef = useRef<View>({ cx: 0, cy: 0, scale: 0.01, w: 800, h: 600 });
+  const hitsRef = useRef<Hit[]>([]);
+  const followRef = useRef(follow);
+  followRef.current = follow;
+  const labelsRef = useRef(labels);
+  labelsRef.current = labels;
+
+  const start = useCallback(
+    (id = scenarioId, alt = altFt) => {
+      const s = new GameSession(id, alt, params, autoPause, Math.floor(Math.random() * 1e9));
+      setSession(s);
+      setShowStart(false);
+      setEndSeen(false);
+      saveLast(id, alt);
+      fitView(viewRef.current, s);
+    },
+    [scenarioId, altFt, params, autoPause],
+  );
+
+  const issue = useCallback(
+    (make: (j: Jet) => Command | null) => {
+      if (!session) return;
+      let err: string | null = null;
+      for (const id of session.selected) {
+        const j = jetById(session.world, id);
+        if (!j?.alive) continue;
+        const c = make(j);
+        if (c) err = command(session.world, c) ?? err;
+      }
+      if (err) setFlash(err);
+      setTick((t) => t + 1);
+    },
+    [session],
+  );
+
+  const steerRel = useCallback(
+    (offsetDeg: number, dir: 1 | -1, label: string) =>
+      issue((j) => {
+        const threat = jetById(session?.world ?? null, j.targetId) ?? nearestEnemy(session, j);
+        if (!threat) return null;
+        const steer: Steer = { mode: "relative", threatId: threat.id, offsetDeg, dir, label };
+        return { type: "steer", jetId: j.id, steer };
+      }),
+    [issue, session],
+  );
+
+  const togglePause = useCallback(() => {
+    if (!session) return;
+    if (session.paused) session.play();
+    else session.pause("Paused.");
+    setTick((t) => t + 1);
+  }, [session]);
+
+  const setScale = useCallback(
+    (k: number) => {
+      if (!session) return;
+      session.timeScale = k;
+      setTick((t) => t + 1);
+    },
+    [session],
+  );
+
+  // Main loop: advance the sim, refresh the launch zone, draw.
+  useEffect(() => {
+    if (!session) return;
+    let raf = 0;
+    let lastT = performance.now();
+    let lastHud = 0;
+    const frame = (now: number) => {
+      const dt = (now - lastT) / 1000;
+      lastT = now;
+      session.advance(dt);
+      session.refreshZone(now);
+      const c = canvasRef.current;
+      if (c) {
+        const ctx = c.getContext("2d");
+        const v = viewRef.current;
+        const dpr = window.devicePixelRatio || 1;
+        const w = c.clientWidth;
+        const h = c.clientHeight;
+        if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+          c.width = Math.round(w * dpr);
+          c.height = Math.round(h * dpr);
+        }
+        v.w = w;
+        v.h = h;
+        if (followRef.current) centerOnFight(v, session);
+        if (ctx) {
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          hitsRef.current = drawScene(ctx, v, session, labelsRef.current);
+        }
+      }
+      if (now - lastHud > HUD_MS) {
+        lastHud = now;
+        setTick((t) => t + 1);
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [session]);
+
+  // Keyboard
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (showParams || showStart) {
+        if (e.key === "Escape") {
+          setShowParams(false);
+          if (session) setShowStart(false);
+        }
+        return;
+      }
+      if ((e.target as HTMLElement)?.closest("input, select, textarea")) return;
+      const k = e.key.toLowerCase();
+      if (k === " ") togglePause();
+      else if (k >= "1" && k <= "5") setScale(TIME_SCALES[Number(k) - 1] ?? 1);
+      else if (k === "f") issue((j) => ({ type: "fire", jetId: j.id }));
+      else if (k === "h") steerRel(0, 1, "hot");
+      else if (k === "q") steerRel(CRANK_DEG, -1, "crank left");
+      else if (k === "e") steerRel(CRANK_DEG, 1, "crank right");
+      else if (k === "a") steerRel(90, -1, "notch left");
+      else if (k === "d") steerRel(90, 1, "notch right");
+      else if (k === "c") steerRel(180, 1, "cold");
+      else if (k === "t")
+        issue((j) => ({
+          type: "throttle",
+          jetId: j.id,
+          throttle: ({ idle: "mil", mil: "ab", ab: "idle" } as const)[j.throttle],
+        }));
+      else if (k === "g")
+        issue((j) => ({ type: "effort", jetId: j.id, effort: j.effort === "max" ? "normal" : "max" }));
+      else if (k === "arrowleft" || k === "arrowright")
+        issue((j) => ({
+          type: "steer",
+          jetId: j.id,
+          steer: {
+            mode: "heading",
+            hdg:
+              (j.steer.mode === "heading" ? j.steer.hdg : j.hdg) +
+              ((k === "arrowleft" ? -10 : 10) * Math.PI) / 180,
+          },
+        }));
+      else if (k === "v") setFollow(true);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [issue, steerRel, togglePause, setScale, showParams, showStart, session]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const id = setTimeout(() => setFlash(null), 3000);
+    return () => clearTimeout(id);
+  }, [flash]);
+
+  // Mouse: left click selects / designates, left drag pans, right click sets heading, wheel zooms.
+  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const pickAt = (sx: number, sy: number): string | null => {
+    let best: string | null = null;
+    let bd = 16;
+    for (const h of hitsRef.current) {
+      const d = Math.hypot(h.sx - sx, h.sy - sy);
+      if (d < bd) {
+        bd = d;
+        best = h.id;
+      }
+    }
+    return best;
+  };
+  const local = (e: { clientX: number; clientY: number }) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    return r ? [e.clientX - r.left, e.clientY - r.top] : [0, 0];
+  };
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    drag.current = { x: e.clientX, y: e.clientY, moved: false };
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.moved && Math.hypot(dx, dy) < 4) return;
+    d.moved = true;
+    setFollow(false);
+    const v = viewRef.current;
+    v.cx -= dx / v.scale;
+    v.cy += dy / v.scale;
+    d.x = e.clientX;
+    d.y = e.clientY;
+  };
+  const onMouseUp = (e: React.MouseEvent) => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d || d.moved || !session || e.button !== 0) return;
+    const [sx, sy] = local(e);
+    const id = pickAt(sx ?? 0, sy ?? 0);
+    const j = jetById(session.world, id);
+    if (!j) return;
+    if (j.side === PLAYER_SIDE) {
+      if (!e.shiftKey) session.selected.clear();
+      if (e.shiftKey && session.selected.has(j.id)) session.selected.delete(j.id);
+      else session.selected.add(j.id);
+      setTick((t) => t + 1);
+    } else if (j.alive) issue((mine) => ({ type: "target", jetId: mine.id, targetId: j.id }));
+  };
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!session) return;
+    const [sx, sy] = local(e);
+    const [wx, wy] = toWorld(viewRef.current, sx ?? 0, sy ?? 0);
+    issue((j) => ({
+      type: "steer",
+      jetId: j.id,
+      steer: { mode: "heading", hdg: Math.atan2(wx - j.pos.x, wy - j.pos.y) },
+    }));
+  };
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const v = viewRef.current;
+      const r = c.getBoundingClientRect();
+      const sx = e.clientX - r.left;
+      const sy = e.clientY - r.top;
+      const [wx, wy] = toWorld(v, sx, sy);
+      const k = Math.exp(-e.deltaY * 0.0015);
+      v.scale = Math.max(2e-4, Math.min(0.2, v.scale * k));
+      if (!followRef.current) {
+        const [wx2, wy2] = toWorld(v, sx, sy);
+        v.cx += wx - wx2;
+        v.cy += wy - wy2;
+      }
+    };
+    c.addEventListener("wheel", onWheel, { passive: false });
+    return () => c.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const w = session?.world;
+  const p = session?.primary();
+  const tgt = p ? jetById(w ?? null, p.targetId) : undefined;
+  const ended = !!w?.outcome;
+  const scenario = scenarioById(session?.scenarioId ?? scenarioId);
+
+  const updateAutoPause = (a: AutoPause) => {
+    setAutoPauseState(a);
+    saveAutoPause(a);
+    session?.setAutoPause(a);
+  };
+
+  return (
+    <div className="g-app">
+      <header className="g-top">
+        <strong className="g-title">BVR Trainer</strong>
+        <span className="g-muted g-hide-narrow">
+          {scenario.title} · {(session?.altFt ?? altFt).toLocaleString()} ft
+        </span>
+        <span className="g-grow" />
+        {session && (
+          <>
+            <span className="g-clock">{fmtTime(w?.t ?? 0)}</span>
+            <button
+              type="button"
+              className="g-primary g-play"
+              onClick={togglePause}
+              disabled={ended}
+              title="Space"
+            >
+              {session.paused ? "▶ Play" : "❚❚ Pause"}
+            </button>
+            <div className="g-seg" title="Time compression">
+              {TIME_SCALES.map((k, i) => (
+                <button
+                  type="button"
+                  key={k}
+                  className={session.timeScale === k ? "on" : ""}
+                  onClick={() => setScale(k)}
+                  title={`Key ${i + 1}`}
+                >
+                  {k}×
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <button type="button" onClick={() => setShowStart(true)}>
+          Scenarios
+        </button>
+        <button
+          type="button"
+          onClick={() => session && start(session.scenarioId, session.altFt)}
+          disabled={!session}
+        >
+          Restart
+        </button>
+        <button type="button" onClick={() => setShowParams(true)}>
+          Parameters
+        </button>
+        <a className="g-link g-hide-narrow" href="./index.html">
+          ACMI viewer
+        </a>
+      </header>
+
+      <div className="g-body">
+        <div className="g-stage">
+          <canvas
+            ref={canvasRef}
+            className="g-canvas"
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={onMouseUp}
+            onMouseLeave={() => {
+              drag.current = null;
+            }}
+            onContextMenu={onContextMenu}
+          />
+          {session?.paused && session.pauseReason && !ended && (
+            <div className="g-banner">
+              <span>⏸ {session.pauseReason}</span>
+            </div>
+          )}
+          {flash && <div className="g-flash">{flash}</div>}
+          <div className="g-stage-tools">
+            <label>
+              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow
+              fight
+            </label>
+            <label>
+              <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Labels
+            </label>
+          </div>
+        </div>
+
+        <aside className="g-side">
+          {session && p && w && (
+            <section className="g-card">
+              <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
+              <div className="g-stats">
+                <Stat k="Speed" v={`${Math.round(p.speed / KT)} kt`} sub={`M${mach(p).toFixed(2)}`} />
+                <Stat k="Altitude" v={`${Math.round(p.pos.z / FT).toLocaleString()} ft`} />
+                <Stat
+                  k="Load"
+                  v={`${p.g.toFixed(1)} g`}
+                  sub={`max ${availableG(w.params.aircraft, p, p.effort).toFixed(1)}`}
+                />
+                <Stat
+                  k="Heading"
+                  v={`${String(deg(p.hdg)).padStart(3, "0")}°`}
+                  sub={p.steer.mode === "relative" ? p.steer.label : "heading"}
+                />
+                <Stat k="Missiles" v={`${p.missiles}`} />
+                <Stat
+                  k="Radar"
+                  v={tgt?.alive ? (w.radarTrack.get(p.id) ? "TRACK" : "no track") : "—"}
+                  sub={tgt?.alive ? tgt.callsign : "no target"}
+                />
+              </div>
+              <div className="g-row">
+                <span className="g-label">Throttle</span>
+                <div className="g-seg">
+                  {(["idle", "mil", "ab"] as Throttle[]).map((t) => (
+                    <button
+                      type="button"
+                      key={t}
+                      className={p.throttle === t ? "on" : ""}
+                      onClick={() => issue((j) => ({ type: "throttle", jetId: j.id, throttle: t }))}
+                    >
+                      {t.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="g-row">
+                <span className="g-label">Turns</span>
+                <div className="g-seg">
+                  {(["normal", "max"] as const).map((t) => (
+                    <button
+                      type="button"
+                      key={t}
+                      className={p.effort === t ? "on" : ""}
+                      onClick={() => issue((j) => ({ type: "effort", jetId: j.id, effort: t }))}
+                    >
+                      {t === "normal"
+                        ? `Normal ${w.params.aircraft.normalG} g`
+                        : `Max ${w.params.aircraft.gLimit} g`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="g-maneuvers">
+                <button type="button" onClick={() => steerRel(CRANK_DEG, -1, "crank left")} title="Q">
+                  ↖ Crank L
+                </button>
+                <button type="button" onClick={() => steerRel(0, 1, "hot")} title="H">
+                  ↑ Hot
+                </button>
+                <button type="button" onClick={() => steerRel(CRANK_DEG, 1, "crank right")} title="E">
+                  Crank R ↗
+                </button>
+                <button type="button" onClick={() => steerRel(90, -1, "notch left")} title="A">
+                  ← Notch L
+                </button>
+                <button type="button" onClick={() => steerRel(180, 1, "cold")} title="C">
+                  ↓ Cold
+                </button>
+                <button type="button" onClick={() => steerRel(90, 1, "notch right")} title="D">
+                  Notch R →
+                </button>
+              </div>
+              <ZoneBox session={session} />
+              <button
+                type="button"
+                className="g-fire"
+                disabled={!tgt?.alive || p.missiles <= 0}
+                onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
+                title="F"
+              >
+                FOX 3 {tgt?.alive ? `→ ${tgt.callsign}` : ""}
+              </button>
+            </section>
+          )}
+
+          {w && (
+            <section className="g-card">
+              <h3>Missiles</h3>
+              {w.missiles.filter((m) => !m.end).length === 0 && <p className="g-muted">None in flight.</p>}
+              <table className="g-table">
+                <tbody>
+                  {w.missiles
+                    .filter((m) => !m.end)
+                    .map((m) => {
+                      const t = jetById(w, m.targetId);
+                      const r = t
+                        ? Math.hypot(t.pos.x - m.pos.x, t.pos.y - m.pos.y, t.pos.z - m.pos.z) / NM
+                        : 0;
+                      return (
+                        <tr key={m.id}>
+                          <td style={{ color: sideCol(m.side) }}>{m.id}</td>
+                          <td>→ {t?.callsign}</td>
+                          <td>
+                            <span className={`g-phase g-phase-${m.phase}`}>{PHASE_LABEL[m.phase]}</span>
+                          </td>
+                          <td>M{missileMach(m).toFixed(1)}</td>
+                          <td>{r.toFixed(1)} nm</td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {w && (
+            <section className="g-card">
+              <h3>Events</h3>
+              <ol className="g-log">
+                {w.events
+                  .map((e, seq) => ({ e, seq }))
+                  .filter(({ e }) => e.type !== "radar-gained" && e.type !== "radar-lost")
+                  .slice(-14)
+                  .reverse()
+                  .map(({ e, seq }) => (
+                    <li key={seq}>
+                      <span className="g-muted">{fmtTime(e.t)}</span>{" "}
+                      <span style={{ color: sideCol(e.side) }}>{e.text}</span>
+                    </li>
+                  ))}
+              </ol>
+            </section>
+          )}
+
+          <details className="g-card">
+            <summary>
+              <b>Auto-pause</b> <span className="g-muted">(optional, off by default)</span>
+            </summary>
+            {(
+              [
+                ["enemyLaunch", "Missile fired at you"],
+                ["seekerLock", "Missile seeker locks you"],
+                ["pitbull", "Your / incoming missile goes active"],
+                ["datalinkLost", "Your missile loses datalink"],
+                ["missileEnd", "Missile hits, misses or is spent"],
+                ["radarChange", "Your radar loses / regains target"],
+              ] as const
+            ).map(([k, text]) => (
+              <label key={k} className="g-check">
+                <input
+                  type="checkbox"
+                  checked={autoPause[k]}
+                  onChange={(e) => updateAutoPause({ ...autoPause, [k]: e.target.checked })}
+                />{" "}
+                {text}
+              </label>
+            ))}
+            <label className="g-check">
+              Turn mode: pause every{" "}
+              <select
+                value={autoPause.turnEveryS}
+                onChange={(e) => updateAutoPause({ ...autoPause, turnEveryS: Number(e.target.value) })}
+              >
+                {[0, 5, 10, 15, 30].map((s) => (
+                  <option key={s} value={s}>
+                    {s === 0 ? "off" : `${s} s`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </details>
+
+          <section className="g-card g-help">
+            <h3>Controls</h3>
+            <p>
+              <b>Click</b> your jet to select (Shift adds) · <b>click</b> a bandit to target it ·{" "}
+              <b>right-click</b> map to set heading · <b>drag</b> to pan · <b>wheel</b> to zoom
+            </p>
+            <p>
+              <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd> hot
+              · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold ·{" "}
+              <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> max-g turns ·{" "}
+              <kbd>V</kbd> follow
+            </p>
+            <p className="g-muted">
+              Map: shaded wedges are radar coverage (±{w?.params.radar.gimbalDeg ?? 60}°,{" "}
+              {w?.params.radar.rangeNm ?? 40} nm). A dotted line from a missile means datalink; dashed with ×
+              is where a missile <i>thinks</i> the target is.
+            </p>
+          </section>
+        </aside>
+      </div>
+
+      {showStart && (
+        <StartDialog
+          scenarioId={scenarioId}
+          altFt={altFt}
+          onScenario={setScenarioId}
+          onAlt={setAltFt}
+          onStart={() => start()}
+          onClose={session ? () => setShowStart(false) : null}
+        />
+      )}
+      {showParams && (
+        <ParamEditor
+          params={params}
+          onClose={() => setShowParams(false)}
+          onSave={(np) => {
+            if (!np) return;
+            setParams(np);
+            saveParams(np);
+            setShowParams(false);
+            setFlash("Parameters saved. They apply from the next start or restart.");
+          }}
+        />
+      )}
+      {ended && !endSeen && w?.outcome && (
+        <div className="g-modal-back">
+          <div className="g-modal g-end-dialog" role="dialog" aria-label="Result">
+            <h2>{w.outcome.winner === PLAYER_SIDE ? "Victory" : w.outcome.winner ? "Defeat" : "Draw"}</h2>
+            <p>{w.outcome.reason}</p>
+            <p className="g-muted">Fight time {fmtTime(w.t)}.</p>
+            <div className="g-row g-end">
+              <button type="button" onClick={() => setEndSeen(true)}>
+                Look at the map
+              </button>
+              <button type="button" onClick={() => setShowStart(true)}>
+                Scenarios
+              </button>
+              <button
+                type="button"
+                className="g-primary"
+                onClick={() => start(session?.scenarioId, session?.altFt)}
+              >
+                Restart
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PHASE_LABEL = {
+  datalink: "datalink",
+  inertial: "no datalink",
+  search: "active, searching",
+  tracking: "tracking",
+  lost: "lost",
+};
+
+function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
+  return (
+    <div className="g-stat">
+      <span className="g-muted">{k}</span>
+      <b>{v}</b>
+      {sub && <span className="g-muted">{sub}</span>}
+    </div>
+  );
+}
+
+function ZoneBox({ session }: { session: GameSession }) {
+  const z = session.zone?.zone;
+  if (!z) return <div className="g-zone g-muted">Target a bandit to see the launch zone.</div>;
+  const inMax = z.rangeNm <= z.rmaxNm;
+  const inNe = z.rangeNm <= z.rneNm;
+  return (
+    <div className="g-zone">
+      <div>
+        Range <b>{z.rangeNm.toFixed(1)}</b> nm · <span className="g-rmax">Rmax {z.rmaxNm.toFixed(1)}</span> ·{" "}
+        <span className="g-rne">Rne {z.rneNm.toFixed(1)}</span>
+      </div>
+      <div className={inNe ? "g-rne" : inMax ? "g-rmax" : "g-muted"}>
+        {inNe
+          ? "Inside no-escape range: it cannot outrun a shot now."
+          : inMax
+            ? "In range if it holds course; it can still turn cold and escape."
+            : "Out of range."}
+        {z.now.hit && ` Shot now: ~${Math.round(z.now.tofS)} s, arriving M${z.now.arrivalMach.toFixed(1)}.`}
+      </div>
+    </div>
+  );
+}
+
+function StartDialog({
+  scenarioId,
+  altFt,
+  onScenario,
+  onAlt,
+  onStart,
+  onClose,
+}: {
+  scenarioId: string;
+  altFt: number;
+  onScenario: (id: string) => void;
+  onAlt: (a: number) => void;
+  onStart: () => void;
+  onClose: (() => void) | null;
+}) {
+  const sel = scenarioById(scenarioId);
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: clicking the backdrop closes the dialog; Escape does too
+    <div className="g-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
+      <div className="g-modal g-start" role="dialog" aria-label="Choose a scenario">
+        <h2>BVR Trainer</h2>
+        <p className="g-muted">
+          F/A-18C with AIM-120C on both sides. Jets hold their altitude for now; missiles loft and dive.
+          Numbers are rough estimates you can change under Parameters.
+        </p>
+        <div className="g-scenarios">
+          {SCENARIOS.map((s) => (
+            <label key={s.id} className={`g-scn ${s.id === scenarioId ? "on" : ""}`}>
+              <input
+                type="radio"
+                name="scn"
+                checked={s.id === scenarioId}
+                onChange={() => onScenario(s.id)}
+              />
+              <b>{s.title}</b>
+              <span className="g-muted">{s.summary}</span>
+            </label>
+          ))}
+        </div>
+        <p className="g-lesson">{sel.lesson}</p>
+        <div className="g-row">
+          <span className="g-label">Altitude</span>
+          <div className="g-seg">
+            {ALTITUDES_FT.map((a) => (
+              <button type="button" key={a} className={a === altFt ? "on" : ""} onClick={() => onAlt(a)}>
+                {(a / 1000).toFixed(0)}k ft
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="g-row g-end">
+          {onClose && (
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+          )}
+          <button type="button" className="g-primary" onClick={onStart}>
+            Start
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function nearestEnemy(s: GameSession | null, j: Jet): Jet | undefined {
+  if (!s) return undefined;
+  let best: Jet | undefined;
+  let bd = Number.POSITIVE_INFINITY;
+  for (const o of s.world.jets) {
+    if (o.side === j.side || !o.alive) continue;
+    const d = Math.hypot(o.pos.x - j.pos.x, o.pos.y - j.pos.y);
+    if (d < bd) {
+      bd = d;
+      best = o;
+    }
+  }
+  return best;
+}
+
+function fightBox(s: GameSession) {
+  const pts = s.world.jets.filter((j) => j.alive).map((j) => j.pos);
+  const all = pts.length > 0 ? pts : s.world.jets.map((j) => j.pos);
+  let x0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
+  for (const p of all) {
+    x0 = Math.min(x0, p.x);
+    x1 = Math.max(x1, p.x);
+    y0 = Math.min(y0, p.y);
+    y1 = Math.max(y1, p.y);
+  }
+  return { x0, x1, y0, y1 };
+}
+
+function centerOnFight(v: View, s: GameSession) {
+  const b = fightBox(s);
+  if (!Number.isFinite(b.x0)) return;
+  v.cx = (b.x0 + b.x1) / 2;
+  v.cy = (b.y0 + b.y1) / 2;
+}
+
+function fitView(v: View, s: GameSession) {
+  const b = fightBox(s);
+  if (!Number.isFinite(b.x0)) return;
+  const span = Math.max(b.x1 - b.x0, b.y1 - b.y0, 25 * NM) * 1.5;
+  const c = document.querySelector(".g-canvas") as HTMLCanvasElement | null;
+  const w = c?.clientWidth || v.w;
+  const h = c?.clientHeight || v.h;
+  v.scale = Math.min(w, h) / span;
+  v.cx = (b.x0 + b.x1) / 2;
+  v.cy = (b.y0 + b.y1) / 2;
+}
