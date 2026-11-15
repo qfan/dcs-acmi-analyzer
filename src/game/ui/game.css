@@ -518,3 +518,19 @@ button.g-fog.on {
   border-color: #f87171;
   color: #fca5a5;
 }
+
+.g-menu {
+  position: relative;
+}
+.g-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  background: var(--g-surface);
+  border: 1px solid var(--g-border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toWorld, type View } from "../../map/render.ts";
+import { saveLastFile } from "../../ui/lastFile.ts";
+import { acmiFileName } from "../acmi.ts";
 import { availableG, type Jet, mach, type Steer, type Throttle } from "../sim/aircraft.ts";
 import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
@@ -48,6 +50,7 @@ export function GameApp() {
     if (session) session.fog = on;
   };
   const [flash, setFlash] = useState<string | null>(null);
+  const [showExport, setShowExport] = useState(false);
   const [, setTick] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -108,6 +111,33 @@ export function GameApp() {
         return { type: "steer", jetId: j.id, steer };
       }),
     [issue, session],
+  );
+
+  /**
+   * Saves the fight so far as an .acmi file: download it, open it in this site's viewer, or both.
+   * "Open in viewer" stores it as the viewer's last file (IndexedDB, this browser only) and opens
+   * the viewer in a new tab, which picks it up and keeps it across refreshes.
+   */
+  const exportFight = useCallback(
+    async (mode: ExportMode) => {
+      setShowExport(false);
+      if (!session) return;
+      const name = acmiFileName(session.scenarioId, session.altFt, session.startedAt);
+      const blob = new Blob([session.recorder.text()], { type: "text/plain" });
+      if (mode !== "viewer") downloadBlob(blob, name);
+      if (mode === "download") return;
+      // Open the tab now, while the click still counts as a user action (pop-up blockers).
+      const tab = window.open("", "_blank");
+      const stored = await saveLastFile(blob, name, "game");
+      if (!stored) {
+        tab?.close();
+        setFlash("This browser would not store the recording (storage blocked?). Use Download instead.");
+        return;
+      }
+      if (tab) tab.location.href = "./index.html";
+      else setFlash("Pop-up blocked. Open the ACMI viewer page: it will show this fight.");
+    },
+    [session],
   );
 
   const togglePause = useCallback(() => {
@@ -378,6 +408,23 @@ export function GameApp() {
         <button type="button" onClick={() => setShowParams(true)}>
           Parameters
         </button>
+        <div className="g-menu">
+          <button
+            type="button"
+            disabled={!session}
+            aria-haspopup="menu"
+            aria-expanded={showExport}
+            onClick={() => setShowExport((v) => !v)}
+            title="Save this fight as a Tacview .acmi recording (works mid-fight too)"
+          >
+            Export .acmi ▾
+          </button>
+          {showExport && session && (
+            <div className="g-menu-list" role="menu">
+              <ExportButtons onExport={exportFight} />
+            </div>
+          )}
+        </div>
         <a className="g-link g-hide-narrow" href="./index.html">
           ACMI viewer
         </a>
@@ -700,6 +747,10 @@ export function GameApp() {
             <h2>{OUTCOME_TITLE[w.outcome.kind]}</h2>
             <p>{w.outcome.reason}</p>
             <p className="g-muted">Fight time {fmtTime(w.t)}.</p>
+            <div className="g-row">
+              <span className="g-label">Recording</span>
+              <ExportButtons onExport={exportFight} />
+            </div>
             <div className="g-row g-end">
               <button type="button" onClick={() => setEndSeen(true)}>
                 Look at the map
@@ -738,6 +789,39 @@ function waitBanner(w: World, fog: boolean): string {
       ? "All hostiles down, but missiles are still in the air: keep defending."
       : "You are down. Your missiles in the air can still score a trade.";
   return "No missile can still kill anyone. Calling the fight…";
+}
+
+type ExportMode = "download" | "viewer" | "both";
+
+function ExportButtons({ onExport }: { onExport: (mode: ExportMode) => void }) {
+  return (
+    <div className="g-seg">
+      <button type="button" onClick={() => onExport("download")} title="Save the .acmi file to your computer">
+        Download
+      </button>
+      <button
+        type="button"
+        onClick={() => onExport("viewer")}
+        title="Open it in this site's ACMI viewer (new tab)"
+      >
+        Open in viewer
+      </button>
+      <button type="button" onClick={() => onExport("both")}>
+        Both
+      </button>
+    </div>
+  );
+}
+
+function downloadBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 const OUTCOME_TITLE = { win: "Victory", loss: "Defeat", trade: "Trade", draw: "Draw" } as const;

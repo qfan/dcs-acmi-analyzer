@@ -3,6 +3,7 @@
  * automatic pauses at decision points (events) and an optional "turn every N seconds" mode. The
  * same world runs under any of these policies; only when time moves differs.
  */
+import { AcmiRecorder } from "../acmi.ts";
 import { type Jet, velocity } from "../sim/aircraft.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import type { GameParams } from "../sim/params.ts";
@@ -98,6 +99,9 @@ export class GameSession {
   lastTrack = new Map<string, TargetTrack>();
   /** Onboard time-to-pitbull / time-to-impact estimate for each of your missiles. */
   timers = new Map<string, MissileTimer>();
+  /** The fight so far, for .acmi export. */
+  readonly recorder: AcmiRecorder;
+  readonly startedAt = new Date();
   private acc = 0;
   private seenEvents = 0;
   private nextTrailAt = 0;
@@ -107,12 +111,17 @@ export class GameSession {
     this.scenarioId = scenarioId;
     this.altFt = altFt;
     this.world = scenarioById(scenarioId).build(params, altFt, seed);
+    this.recorder = new AcmiRecorder({
+      title: `BVR Trainer: ${scenarioById(scenarioId).title}, ${altFt.toLocaleString("en-US")} ft`,
+      startedAt: this.startedAt,
+    });
     this.autoPause = autoPause;
     this.nextTurnAt = autoPause.turnEveryS > 0 ? autoPause.turnEveryS : Number.POSITIVE_INFINITY;
     const mine = this.world.jets.find((j) => j.side === PLAYER_SIDE);
     if (mine) this.selected.add(mine.id);
     this.updateKnowledge();
     this.updateTimers(0);
+    this.recorder.update(this.world);
     this.recordTrails();
   }
 
@@ -142,6 +151,7 @@ export class GameSession {
       step(this.world);
       this.updateKnowledge();
       this.updateTimers(SIM_DT);
+      this.recorder.update(this.world);
       if (this.world.t >= this.nextTrailAt) this.recordTrails();
       this.checkEvents();
       if (this.world.t >= this.nextTurnAt - 1e-9) {

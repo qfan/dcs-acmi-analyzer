@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchSample, SAMPLES, sampleFromUrl } from "../samples.ts";
 import { type ParseOutcome, parseInWorker } from "../worker/client.ts";
+import { type CachedFile, forgetLastFile, loadLastFile, saveLastFile } from "./lastFile.ts";
 import { SettingsPanel } from "./SettingsPanel.tsx";
 import { SiteFooter } from "./SiteFooter.tsx";
 import { Summary } from "./Summary.tsx";
@@ -8,7 +9,7 @@ import { Summary } from "./Summary.tsx";
 type State =
   | { phase: "idle" }
   | { phase: "loading"; name: string; progress: number }
-  | { phase: "done"; name: string; file: Blob; outcome: ParseOutcome }
+  | { phase: "done"; name: string; file: Blob; outcome: ParseOutcome; restored: CachedFile["source"] | null }
   | { phase: "error"; name: string; message: string };
 
 export function App() {
@@ -18,7 +19,11 @@ export function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const settingsDialog = useRef<HTMLDialogElement>(null);
 
-  const open = useCallback(async (file: Blob, name: string) => {
+  /**
+   * Opens a recording. Every file opened here is also kept in this browser as "the last file", so a
+   * refresh reopens it; `restored` marks one that came back from that cache (it is not saved again).
+   */
+  const open = useCallback(async (file: Blob, name: string, restored: CachedFile["source"] | null = null) => {
     cancelRef.current?.();
     setState({ phase: "loading", name, progress: 0 });
     const job = parseInWorker(file, name, (progress) =>
@@ -27,7 +32,8 @@ export function App() {
     cancelRef.current = job.cancel;
     try {
       const outcome = await job.promise;
-      setState({ phase: "done", name, file, outcome });
+      setState({ phase: "done", name, file, outcome, restored });
+      if (!restored) void saveLastFile(file, name, "viewer");
     } catch (err) {
       setState({ phase: "error", name, message: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -48,12 +54,31 @@ export function App() {
     [open],
   );
 
-  // Auto-load the built-in sample (dev mode, or ?sample=<id>).
+  // On load: an explicit ?sample=<id> wins; otherwise reopen the last file viewed in this browser
+  // (also how the BVR trainer hands over a fight); otherwise the dev-mode default sample.
   useEffect(() => {
-    const s = sampleFromUrl(window.location.search);
-    if (s) void openSample(s.id);
-    return () => cancelRef.current?.();
-  }, [openSample]);
+    let cancelled = false;
+    const explicit = new URLSearchParams(window.location.search).has("sample");
+    void (async () => {
+      const cached = explicit ? null : await loadLastFile();
+      if (cancelled) return;
+      if (cached) void open(cached.blob, cached.name, cached.source);
+      else {
+        const s = sampleFromUrl(window.location.search);
+        if (s) void openSample(s.id);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cancelRef.current?.();
+    };
+  }, [open, openSample]);
+
+  const closeFile = useCallback(() => {
+    cancelRef.current?.();
+    setState({ phase: "idle" });
+    void forgetLastFile();
+  }, []);
 
   // Accept drops anywhere in the window.
   useEffect(() => {
@@ -112,6 +137,19 @@ export function App() {
           >
             Settings
           </button>
+          {state.phase === "done" && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={closeFile}
+              title="Close this file and forget it, so a refresh does not reopen it"
+            >
+              Close &amp; forget
+            </button>
+          )}
+          <a href="./game.html" className="nav-link-btn" title="Open the BVR trainer game">
+            BVR Trainer
+          </a>
           <a href="./analytics.html" className="nav-link-btn" title="Open the multi-recording Analytics page">
             Multi-File Analytics →
           </a>
@@ -137,6 +175,9 @@ export function App() {
               Zipped and plain-text recordings are both supported. The file is read in your browser and never
               uploaded.
             </p>
+            <p className="muted">
+              The last file you open is kept in this browser, so refreshing the page reopens it.
+            </p>
           </div>
         )}
         {state.phase === "loading" && (
@@ -154,6 +195,16 @@ export function App() {
             </p>
             <p>{state.message}</p>
           </div>
+        )}
+        {state.phase === "done" && state.restored && (
+          <p className="restored-note muted">
+            {state.restored === "game"
+              ? "Fight sent from the BVR Trainer, kept in this browser."
+              : "Reopened the last file you viewed (kept in this browser)."}{" "}
+            <button type="button" className="link-button" onClick={closeFile}>
+              Forget it
+            </button>
+          </p>
         )}
         {state.phase === "done" && <Summary name={state.name} file={state.file} outcome={state.outcome} />}
       </main>
