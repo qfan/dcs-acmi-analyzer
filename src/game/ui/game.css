@@ -232,6 +232,23 @@ input[type="text"] {
   width: 64px;
   color: var(--g-muted);
 }
+/* Flight-control rows: label on the left, controls pinned right so they never move. */
+.g-row.g-ctl {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+}
+.g-row.g-ctl .g-label {
+  flex: 0 1 64px;
+  min-width: 0;
+}
+.g-row.g-ctl .g-seg button {
+  white-space: nowrap;
+}
+/* Fixed width for the ordered altitude, so the arrows around it stay put (9,000 vs 10,000 ft). */
+.g-alt .g-alt-cmd {
+  min-width: 11ch;
+  font-variant-numeric: tabular-nums;
+}
 .g-maneuvers {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

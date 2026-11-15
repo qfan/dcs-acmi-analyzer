@@ -717,7 +717,7 @@ export function GameApp() {
                 <NpcBehaviorPanel session={session} jet={p} ai={pAi} tgt={tgt} params={w.params} />
               ) : (
                 <>
-                  <div className="g-row">
+                  <div className="g-row g-ctl">
                     <span className="g-label">Throttle</span>
                     <div className="g-seg">
                       {(["idle", "mil", "ab"] as Throttle[]).map((t) => (
@@ -735,7 +735,7 @@ export function GameApp() {
                       ))}
                     </div>
                   </div>
-                  <div className="g-row">
+                  <div className="g-row g-ctl">
                     <span className="g-label">Turns</span>
                     <div className="g-seg">
                       {(["sustain", "normal", "max"] as const).map((t) => (
@@ -762,7 +762,7 @@ export function GameApp() {
                       ))}
                     </div>
                   </div>
-                  <div className="g-row">
+                  <div className="g-row g-ctl">
                     <span className="g-label">Altitude</span>
                     <div className="g-seg g-alt">
                       <button
