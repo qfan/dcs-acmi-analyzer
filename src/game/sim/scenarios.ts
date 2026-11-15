@@ -77,17 +77,24 @@ function headOn(params: GameParams, altFt: number, seed: number, rangeNm: number
   return { w, blue, red };
 }
 
-/** Two flights facing each other `rangeNm` apart, `n` jets per side spread 5 nm abreast. */
-function flights(params: GameParams, altFt: number, seed: number, rangeNm: number, n: number) {
+/** Two flights facing each other `rangeNm` apart, jets on each side spread 5 nm abreast. */
+function flights(
+  params: GameParams,
+  altFt: number,
+  seed: number,
+  rangeNm: number,
+  blueCount: number,
+  redCount = blueCount,
+) {
   const w = makeWorld(params, seed);
   const alt = altFt * FT;
-  const make = (side: Side, i: number): Jet => {
+  const make = (side: Side, i: number, count: number): Jet => {
     const blue = side === "blue";
     const j = makeJet(params.aircraft, {
       id: `${blue ? "B" : "R"}${i + 1}`,
       side,
       callsign: `${blue ? "Viper" : "Bandit"} ${i + 1}`,
-      x: (i - (n - 1) / 2) * 5 * NM,
+      x: (i - (count - 1) / 2) * 5 * NM,
       y: blue ? 0 : rangeNm * NM,
       altM: alt,
       hdgDeg: blue ? 0 : 180,
@@ -97,8 +104,8 @@ function flights(params: GameParams, altFt: number, seed: number, rangeNm: numbe
     j.flares = Math.max(0, Math.round(params.countermeasures.flares));
     return j;
   };
-  for (let i = 0; i < n; i++) w.jets.push(make("blue", i));
-  for (let i = 0; i < n; i++) w.jets.push(make("red", i));
+  for (let i = 0; i < blueCount; i++) w.jets.push(make("blue", i, blueCount));
+  for (let i = 0; i < redCount; i++) w.jets.push(make("red", i, redCount));
   return w;
 }
 
@@ -108,7 +115,7 @@ function preTargetBlue(w: World): void {
   const reds = w.jets.filter((j) => j.side === "red");
   for (let i = 0; i < blues.length; i++) {
     const b = blues[i];
-    const r = reds[i] ?? reds[0];
+    const r = reds.length > 0 ? reds[i % reds.length] : undefined;
     if (b && r) b.targetId = r.id;
   }
 }
@@ -241,6 +248,20 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    id: "2v1",
+    title: "Two-ship vs one",
+    summary: "2v1 from 60 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
+    lesson:
+      "Two ships against one let you bracket the bandit: split your wingmen to force it to defend one side while the other presses in. Click a jet to select it, Shift+click to add the other, and give orders to both at once.",
+    npc: true,
+    build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
+      const w = flights(params, altFt, seed, 60, 2, 1);
+      crewNpcs(w, opts);
+      if (!opts.blueAi) preTargetBlue(w);
+      return w;
+    },
+  },
+  {
     id: "2v2",
     title: "Two-ship vs two-ship",
     summary: "2v2 from 60 nm. You fly both blue jets (select one or both), or watch NPC vs NPC.",
@@ -249,6 +270,53 @@ export const SCENARIOS: Scenario[] = [
     npc: true,
     build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
       const w = flights(params, altFt, seed, 60, 2);
+      crewNpcs(w, opts);
+      if (!opts.blueAi) preTargetBlue(w);
+      return w;
+    },
+  },
+  {
+    id: "4v2",
+    title: "Four-ship (2x2) vs two-ship",
+    summary:
+      "4v2 from 60 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
+    lesson:
+      "Lead with the front two-ship to engage and force the bandits defensive while the trailing two-ship 20 nm behind presses the advantage or covers their pump. Click or Shift+click jets to task elements separately.",
+    npc: true,
+    build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
+      const w = makeWorld(params, seed);
+      const altM = altFt * FT;
+      for (let row = 0; row < 2; row++) {
+        const y = row === 0 ? 0 : -row * 20 * NM;
+        for (let col = 0; col < 2; col++) {
+          const n = row * 2 + col + 1;
+          w.jets.push(
+            spawnJet(params, {
+              id: `B${n}`,
+              side: "blue",
+              callsign: `Viper ${n}`,
+              x: (col - 0.5) * 5 * NM,
+              y,
+              altM,
+              hdgDeg: 0,
+            }),
+          );
+        }
+      }
+      for (let col = 0; col < 2; col++) {
+        const n = col + 1;
+        w.jets.push(
+          spawnJet(params, {
+            id: `R${n}`,
+            side: "red",
+            callsign: `Bandit ${n}`,
+            x: (col - 0.5) * 5 * NM,
+            y: 60 * NM,
+            altM,
+            hdgDeg: 180,
+          }),
+        );
+      }
       crewNpcs(w, opts);
       if (!opts.blueAi) preTargetBlue(w);
       return w;

@@ -850,6 +850,7 @@ export function GameApp() {
         <StartDialog
           scenarioId={scenarioId}
           altFt={altFt}
+          missiles={params.aircraft.missiles}
           onScenario={(id) => {
             setScenarioId(id);
             if (scenarioById(id).allNpc && options.blueAi === null) {
@@ -857,6 +858,11 @@ export function GameApp() {
             }
           }}
           onAlt={setAltFt}
+          onMissiles={(n) => {
+            const np: GameParams = { ...params, aircraft: { ...params.aircraft, missiles: n } };
+            setParams(np);
+            saveParams(np);
+          }}
           options={options}
           onOptions={setOptions}
           onStart={() => start()}
@@ -1004,11 +1010,15 @@ function ZoneBox({ session }: { session: GameSession }) {
   );
 }
 
+const LOADOUT_MISSILES = [4, 6, 8, 10] as const;
+
 function StartDialog({
   scenarioId,
   altFt,
+  missiles,
   onScenario,
   onAlt,
+  onMissiles,
   options,
   onOptions,
   onStart,
@@ -1018,8 +1028,10 @@ function StartDialog({
 }: {
   scenarioId: string;
   altFt: number;
+  missiles: number;
   onScenario: (id: string) => void;
   onAlt: (a: number) => void;
+  onMissiles: (n: number) => void;
   options: ScenarioOptions;
   onOptions: (o: ScenarioOptions) => void;
   onStart: () => void;
@@ -1063,6 +1075,22 @@ function StartDialog({
             {ALTITUDES_FT.map((a) => (
               <button type="button" key={a} className={a === altFt ? "on" : ""} onClick={() => onAlt(a)}>
                 {(a / 1000).toFixed(0)}k ft
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="g-row">
+          <span className="g-label">Loadout</span>
+          <div className="g-seg">
+            {LOADOUT_MISSILES.map((n) => (
+              <button
+                type="button"
+                key={n}
+                className={n === missiles ? "on" : ""}
+                onClick={() => onMissiles(n)}
+                title="Missiles per jet for both sides"
+              >
+                {n} missiles
               </button>
             ))}
           </div>
