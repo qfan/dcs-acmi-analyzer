@@ -105,9 +105,10 @@ export interface RadarParams {
 }
 
 /**
- * Chaff, as a simple game rule with a deliberately weak default: each bundle has a small chance to
- * pull a radar or seeker off the jet for a moment. Flares do nothing against these radar-guided
- * missiles. There is no notch rule: beaming only changes the geometry.
+ * Chaff, as a simple game rule: each bundle has a chance to pull a radar or seeker off the jet for
+ * a moment. Off by default for now (chance 0): releasing chaff and flares is visual only. Flares do
+ * nothing against these radar-guided missiles. There is no notch rule: beaming only changes the
+ * geometry.
  */
 export interface CountermeasureParams {
   /** Chaff bundles and flares per jet. */
@@ -186,7 +187,8 @@ export const DEFAULT_RADAR: RadarParams = {
 export const DEFAULT_COUNTERMEASURES: CountermeasureParams = {
   chaff: 60,
   flares: 30,
-  chaffPullChance: 0.05,
+  // Off for now (0): chaff is visual only until this is revisited.
+  chaffPullChance: 0,
   chaffPullS: 1,
 };
 
