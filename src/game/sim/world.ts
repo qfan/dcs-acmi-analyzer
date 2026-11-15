@@ -13,6 +13,9 @@ import { add, angleBetween, bearing, headingVec, len, scale, sub, type V3 } from
 export const SIM_DT = 0.02;
 /** Maximum distance (nm) a jet may travel from its initial position before counting as a loss. */
 export const MAX_ROAM_NM = 500;
+/** In infinite demo mode, winchester jets retire and respawn after staying this far clear (nm) for >10 s. */
+export const EGRESS_RETIRE_NM = 50;
+export const EGRESS_RETIRE_S = 10;
 /** How long a released chaff bundle or flare stays on the map (s). */
 const DECOY_LIFE_S = 4;
 
@@ -33,6 +36,7 @@ export type GameEventType =
   | "rwr-missile"
   | "chaff"
   | "flare"
+  | "rtb"
   | "end";
 
 export interface GameEvent {
@@ -100,6 +104,8 @@ export interface World {
   eventOffset: number;
   /** Infinite demo mode: skips outcome checks, respawns killed jets, and bounds retained history. */
   infinite: boolean;
+  /** In infinite mode: sim time each winchester jet began staying >=50 nm clear of enemies. */
+  egressSafeSince: Map<string, number>;
   /** Optional builder invoked when a jet is lost in infinite mode to spawn its replacement. */
   respawn?: JetRespawner;
   /** The fight ends as a draw after this long (s). */
@@ -127,6 +133,7 @@ export function makeWorld(params: GameParams, seed = 1): World {
     outcome: null,
     eventOffset: 0,
     infinite: false,
+    egressSafeSince: new Map(),
     timeLimitS: 900,
     objective: "kill",
     callAt: null,
@@ -462,11 +469,58 @@ export function step(w: World, dt = SIM_DT): void {
 
 const MAX_INFINITE_EVENTS = 150;
 
+function retireSafeEgressJets(w: World): void {
+  const safeM = EGRESS_RETIRE_NM * NM;
+  const toRetire: Jet[] = [];
+  for (const j of w.jets) {
+    if (!j.alive) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    const winchester = j.missiles === 0 && !w.missiles.some((m) => !m.end && m.shooterId === j.id);
+    if (!winchester) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    const threatened =
+      rwrContacts(w, j).some((c) => c.kind === "missile") ||
+      w.missiles.some((m) => !m.end && m.phase !== "lost" && m.targetId === j.id);
+    if (threatened) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    let nearestM = Number.POSITIVE_INFINITY;
+    for (const e of w.jets) {
+      if (e.side !== j.side && e.alive) nearestM = Math.min(nearestM, len(sub(e.pos, j.pos)));
+    }
+    if (nearestM < safeM) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    const since = w.egressSafeSince.get(j.id);
+    if (since === undefined) w.egressSafeSince.set(j.id, w.t);
+    else if (w.t - since > EGRESS_RETIRE_S) toRetire.push(j);
+  }
+  for (const j of toRetire) {
+    j.alive = false;
+    j.g = 1;
+    w.egressSafeSince.delete(j.id);
+    emit(w, {
+      type: "rtb",
+      side: j.side,
+      jetId: j.id,
+      text: `${j.callsign} RTB (winchester, >${EGRESS_RETIRE_NM} nm clear) — replaced`,
+    });
+  }
+}
+
 function maintainInfiniteWorld(w: World): void {
+  retireSafeEgressJets(w);
   const dead = w.jets.filter((j) => !j.alive);
   if (dead.length > 0) {
     const deadIds = new Set(dead.map((d) => d.id));
     for (const d of dead) {
+      w.egressSafeSince.delete(d.id);
       w.controllers.delete(d.id);
       w.radarTrack.delete(d.id);
       const rep = w.respawn?.(w, d);

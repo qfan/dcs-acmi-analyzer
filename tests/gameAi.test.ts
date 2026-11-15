@@ -374,6 +374,56 @@ describe("game: 6v6 infinite demo mode", () => {
     expect(replacement3.hdg).toBeCloseTo(startHdg, 5);
   });
 
+  it("retires and replaces winchester egressing jets after staying >=50 nm clear for over 10 seconds", () => {
+    const p = P();
+    const w = scenarioById("infinite").build(p, 25000, 5, { redSkill: "normal", blueAi: "normal" });
+    w.controllers.clear(); // hold positions stationary to test timing precisely
+    const b1 = must(jetById(w, "B1"));
+    const startX = b1.pos.x;
+    const startY = b1.pos.y;
+    const startHdg = b1.hdg;
+
+    // Winchester B1 inside 50 nm (< 50 nm from Red): must stay alive past 10 s.
+    b1.missiles = 0;
+    b1.pos = { x: 0, y: 75 * NM, z: b1.pos.z }; // 45 nm south of Red front at y = 120 nm
+    for (let i = 0; i < 600; i++) step(w); // 12 s
+    expect(jetById(w, "B1")?.alive).toBe(true);
+
+    // Move B1 to >= 50 nm clear from nearest Red (60 nm south so closing Red stays > 50 nm over 10 s).
+    b1.pos = { x: 0, y: 60 * NM, z: b1.pos.z };
+    // Step 5 s (250 steps): still flying, timer resets if closer than 50 nm.
+    for (let i = 0; i < 250; i++) {
+      b1.pos.y = 60 * NM;
+      step(w);
+    }
+    expect(jetById(w, "B1")?.alive).toBe(true);
+
+    // Bring nearest enemy briefly inside 50 nm to reset the safe-egress timer.
+    b1.pos.y = 75 * NM;
+    step(w);
+    b1.pos.y = 60 * NM;
+
+    // For full 10.0 s (500 steps at 0.02s), timer has not exceeded 10 s yet; once > 10 s elapses, B1 retires.
+    for (let i = 0; i < 499; i++) {
+      b1.pos.y = 60 * NM;
+      step(w);
+    }
+    expect(jetById(w, "B1")?.alive).toBe(true);
+
+    for (let i = 0; i < 3; i++) {
+      b1.pos.y = 60 * NM;
+      step(w);
+    }
+    expect(jetById(w, "B1")).toBeUndefined();
+    expect(w.jets).toHaveLength(12);
+    const replacement = must(jetById(w, "B7"));
+    expect(replacement.missiles).toBe(p.aircraft.missiles);
+    expect(replacement.pos.x).toBeCloseTo(startX, 3);
+    expect(replacement.pos.y).toBeCloseTo(startY, 3);
+    expect(replacement.hdg).toBeCloseTo(startHdg, 5);
+    expect(w.events.some((e) => e.type === "rtb" && e.jetId === "B1")).toBe(true);
+  });
+
   it("assigns mixed NPC difficulties per spawn and re-rolls on respawn when random is chosen", () => {
     const p = P();
     const w = scenarioById("infinite").build(p, 25000, 11, { redSkill: "random", blueAi: "random" });
