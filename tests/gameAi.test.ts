@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
 import { NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
+import { makeRng, randNormal } from "../src/game/sim/rng.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
+import { bearing, wrapPi } from "../src/game/sim/vec.ts";
 import { command, jetById, step, type World } from "../src/game/sim/world.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
@@ -54,6 +56,56 @@ describe("game: NPC knows only what its side can see", () => {
     expect(must(defendAt) - must(rwrAt)).toBeGreaterThanOrEqual(0);
     expect(must(defendAt) - must(rwrAt)).toBeLessThan(3 * 1.3 + 0.1);
   });
+
+  it("keeps defending while an active missile remains on RWR instead of turning hot after a fixed timer", () => {
+    const w = scenarioById("duel").build(P(), 25000, 3, { redSkill: "normal", blueAi: null });
+    const red = must(jetById(w, "R1"));
+    red.pos.y = 20 * NM;
+    expect(command(w, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    // Advance until R1 sees the active missile and enters defend.
+    for (let i = 0; i < 3000 && npcOf(w, "R1").state !== "defend"; i++) step(w);
+    expect(npcOf(w, "R1").state).toBe("defend");
+    const m = must(w.missiles[0]);
+    // Keep the missile active on R1's RWR for > 30 s (past the old 25 s defendForS cutoff).
+    const holdUntil = w.t + 32;
+    while (w.t < holdUntil) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+      expect(npcOf(w, "R1").state).toBe("defend");
+    }
+    // Never turned hot into the active missile (heading stays cold away from missile bearing).
+    expect(Math.abs(wrapPi(red.hdg - bearing(m.pos, red.pos)))).toBeLessThan(0.25);
+  });
+
+  it("uses capped normal timing variation and breaks mirror symmetry in same-skill duels", () => {
+    const rng = makeRng(42);
+    const samples = Array.from({ length: 500 }, () => randNormal(rng, 2));
+    expect(samples.every((x) => x >= -2 && x <= 2)).toBe(true);
+    expect(samples.some((x) => x > 1)).toBe(true);
+    expect(samples.some((x) => x < -1)).toBe(true);
+
+    const crankXSigns = new Set<number>();
+    const firstLaunchTimes = new Set<number>();
+    for (let seed = 1; seed <= 8; seed++) {
+      const w = scenarioById("duel").build(P(), 25000, seed, { redSkill: "normal", blueAi: "normal" });
+      for (let i = 0; i < 4500 && !w.outcome; i++) {
+        step(w);
+        const b1 = must(jetById(w, "B1"));
+        if (npcOf(w, "B1").state === "support" && Math.abs(b1.pos.x) > 500) {
+          crankXSigns.add(Math.sign(b1.pos.x));
+          break;
+        }
+      }
+      const first = w.events.find((e) => e.type === "launch");
+      if (first) firstLaunchTimes.add(Math.round(first.t));
+    }
+    expect(crankXSigns.size).toBe(2); // Blue cranks both East and West across seeds
+    expect(firstLaunchTimes.size).toBeGreaterThan(2); // shot timing varies across seeds
+  }, 60_000);
 
   it("drops a dead enemy from target selection immediately instead of chasing its ghost", () => {
     const w = scenarioById("2v2").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });

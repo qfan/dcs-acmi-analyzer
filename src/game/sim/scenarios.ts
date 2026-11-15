@@ -105,17 +105,18 @@ function preTargetBlue(w: World): void {
   }
 }
 
-/** Puts NPC pilots in the jets the options say (wingmen crank opposite ways). */
+/** Puts NPC pilots in the jets the options say (multi-ship wingmen split on first merge; singletons randomize). */
 function crewNpcs(w: World, opts: ScenarioOptions): void {
-  const crew = (side: Side, skill: AiSkillId, firstDir: 1 | -1) => {
-    let dir = firstDir;
-    for (const j of w.jets.filter((x) => x.side === side)) {
+  const crew = (side: Side, skill: AiSkillId) => {
+    const jets = w.jets.filter((x) => x.side === side);
+    let dir: 1 | -1 | null = jets.length > 1 ? (w.rng() < 0.5 ? 1 : -1) : null;
+    for (const j of jets) {
       w.controllers.set(j.id, new DoctrineBot(AI_SKILLS[skill], dir));
-      dir = dir === 1 ? -1 : 1;
+      if (dir !== null) dir = dir === 1 ? -1 : 1;
     }
   };
-  crew("red", opts.redSkill, 1);
-  if (opts.blueAi) crew("blue", opts.blueAi, -1);
+  crew("red", opts.redSkill);
+  if (opts.blueAi) crew("blue", opts.blueAi);
 }
 
 export const SCENARIOS: Scenario[] = [
