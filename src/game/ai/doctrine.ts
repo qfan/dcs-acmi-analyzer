@@ -44,6 +44,8 @@ export interface AiSkill {
   defendHoldS: number;
   /** Fires a posture shot near head-on Rmax when carrying plenty of missiles (even if the enemy cranks). */
   postureShot: boolean;
+  /** Takes high-Pk opportunity shots at other TWS-tracked enemies in lethal range. */
+  opportunityShot: boolean;
 }
 
 export type AiSkillId = "easy" | "normal" | "hard";
@@ -58,6 +60,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpS: 0,
     defendHoldS: 3,
     postureShot: false,
+    opportunityShot: false,
   },
   normal: {
     label: "Normal",
@@ -68,6 +71,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpS: 15,
     defendHoldS: 6,
     postureShot: false,
+    opportunityShot: true,
   },
   hard: {
     label: "Hard",
@@ -78,6 +82,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpS: 20,
     defendHoldS: 8,
     postureShot: true,
+    opportunityShot: true,
   },
 };
 
@@ -99,6 +104,17 @@ const POSTURE_MAX_ASPECT_RAD = 95 * DEG;
 const CRANK_ASPECT_RAD = 70 * DEG;
 /** Fraction of Rne..Rmax span for the final missile so engagements resolve cleanly inside WEZ. */
 const LAST_MISSILE_FRAC = 0.03;
+/** Fraction of Rne..Rmax span within which a secondary TWS target qualifies for an opportunity shot. */
+const OPP_SHOT_FRAC = 0.45;
+/** Deconfliction distance penalty per closer/peer friendly targeting the same enemy (m). */
+const SORT_TAKEN_PENALTY_M = 18 * NM;
+/** Peer proximity allowance so rear/respawned friendlies do not push frontline jets off closer targets. */
+const SORT_PEER_MARGIN_M = 8 * NM;
+/** Off-boresight penalty at full 60° gimbal edge so same-lane ahead bandits are preferred. */
+const SORT_ANGLE_WEIGHT_M = 8 * NM;
+/** Target hysteresis bonus for current target vs. a target with an active pre-pitbull missile. */
+const SORT_KEEP_TARGET_M = 4 * NM;
+const SORT_SUPPORT_BONUS_M = 22 * NM;
 /** A dead-reckoned track that should be inside our radar coverage but is not seen is dropped. */
 const STALE_TRACK_S = 4;
 /** Re-steer only when the wanted heading moved this much (avoids a command every step). */
@@ -130,6 +146,7 @@ export class DoctrineBot implements Controller {
   state: AiState = "commit";
   private actionDetail = "Ready — committing hot";
   private readonly tracks = new Map<string, TargetTrack>();
+  private readonly oppZones = new Map<string, { at: number; rmaxNm: number; rneNm: number }>();
   private readonly timers = new Map<string, MissileTimer>();
   private readonly rwrFirstSeen = new Map<string, number>();
   private readonly rwrReactionS = new Map<string, number>();
@@ -212,8 +229,8 @@ export class DoctrineBot implements Controller {
       this.defendUntil = t + this.defendHoldS;
     }
 
-    const target = this.chooseTarget(w, me);
     const myInFlight = [...this.timers.values()].filter((tm) => this.timerActive(tm, t));
+    const target = this.chooseTarget(w, me, myInFlight);
 
     if (t < this.defendUntil && this.defendFrom) {
       this.state = "defend";
@@ -287,6 +304,7 @@ export class DoctrineBot implements Controller {
       }
       this.state = "support";
       this.actionDetail = `Cranking ${s.crankDeg}° ${this.crankDir > 0 ? "R" : "L"} — supporting ${supporting[0]?.missileId ?? "missile"} to pitbull`;
+      this.tryOpportunityShot(w, me, target, myInFlight, out);
       out.push(...this.steerVsTrack(me, target, s.crankDeg, this.crankDir));
       return out;
     }
@@ -301,6 +319,7 @@ export class DoctrineBot implements Controller {
     const onTarget = myInFlight.some(
       (tm) => tm.targetId === target && (!tm.ghost.pitbull || tm.impactAt !== null),
     );
+    let firedPrimary = false;
     if (enemy && me.missiles > 0 && !onTarget && radarCanTrack(w, me, enemy)) {
       if (this.zoneFor !== target || t - this.zoneAt >= ZONE_EVERY_S) {
         this.zoneAt = t;
@@ -322,6 +341,7 @@ export class DoctrineBot implements Controller {
           ? `Firing posture shot at ${rangeNm.toFixed(1)} nm`
           : `Firing at ${rangeNm.toFixed(1)} nm`;
         out.push({ type: "fire", jetId: me.id, targetId: target });
+        firedPrimary = true;
       } else if (fireRangeNm > 0) {
         this.actionDetail = usingPosture
           ? `Closing to posture-shot range (${fireRangeNm.toFixed(1)} nm)`
@@ -336,6 +356,7 @@ export class DoctrineBot implements Controller {
     } else {
       this.actionDetail = "Turning hot — acquiring TWS lock";
     }
+    if (!firedPrimary) this.tryOpportunityShot(w, me, target, myInFlight, out);
     return out;
   }
 
@@ -380,6 +401,7 @@ export class DoctrineBot implements Controller {
   /** Known enemies: detected by our side's radars now, else dead-reckoned from the last detection. */
   private updateTracks(w: World, me: Jet): void {
     for (const id of this.tracks.keys()) if (!jetById(w, id)?.alive) this.tracks.delete(id);
+    for (const id of this.oppZones.keys()) if (!jetById(w, id)?.alive) this.oppZones.delete(id);
     const friends = w.jets.filter((j) => j.side === me.side && j.alive);
     for (const e of w.jets) {
       if (e.side === me.side) continue;
@@ -445,18 +467,87 @@ export class DoctrineBot implements Controller {
     return !tm.ghost.end && tm.ghost.phase !== "lost";
   }
 
-  /** Nearest known enemy, preferring one a wingman is not already targeting. */
-  private chooseTarget(w: World, me: Jet): string | null {
-    const taken = new Set(
-      w.jets
-        .filter((j) => j.side === me.side && j.alive && j.id !== me.id && jetById(w, j.targetId)?.alive)
-        .map((j) => j.targetId),
+  /**
+   * Fires an opportunistic Fox 3 at another TWS-locked enemy inside high-Pk range when carrying
+   * spare missiles, without breaking primary target assignment or missile cranking support.
+   */
+  private tryOpportunityShot(
+    w: World,
+    me: Jet,
+    primaryTarget: string,
+    myInFlight: MissileTimer[],
+    out: Command[],
+  ): void {
+    if (!this.skill.opportunityShot || me.missiles <= 1) return;
+    const t = w.t;
+    const preFilterM = w.params.radar.rangeNm * 0.65 * NM;
+    let bestOther: Jet | null = null;
+    let bestRangeNm = Number.POSITIVE_INFINITY;
+
+    for (const other of w.jets) {
+      if (other.side === me.side || !other.alive || other.id === primaryTarget) continue;
+      if (!radarCanTrack(w, me, other)) continue;
+      const distM = len(sub(other.pos, me.pos));
+      if (distM > preFilterM) continue;
+      const alreadyShot = myInFlight.some(
+        (tm) => tm.targetId === other.id && (!tm.ghost.pitbull || tm.impactAt !== null),
+      );
+      if (alreadyShot) continue;
+
+      let cached = this.oppZones.get(other.id);
+      if (!cached || t - cached.at >= ZONE_EVERY_S) {
+        const zone = launchZone(w.params.missile, me, other);
+        cached = { at: t, rmaxNm: zone.rmaxNm, rneNm: zone.rneNm };
+        this.oppZones.set(other.id, cached);
+      }
+      if (cached.rmaxNm <= 0) continue;
+      const goodRangeNm = cached.rneNm + OPP_SHOT_FRAC * Math.max(0, cached.rmaxNm - cached.rneNm);
+      const rangeNm = distM / NM;
+      if (rangeNm <= goodRangeNm && rangeNm < bestRangeNm) {
+        bestRangeNm = rangeNm;
+        bestOther = other;
+      }
+    }
+
+    if (bestOther) {
+      out.push({ type: "fire", jetId: me.id, targetId: bestOther.id });
+      // `command("fire")` sets `me.targetId = other.id`; restore the sorted primary target immediately.
+      out.push({ type: "target", jetId: me.id, targetId: primaryTarget });
+      this.actionDetail = `Opportunity Fox 3 on ${bestOther.callsign} at ${bestRangeNm.toFixed(1)} nm`;
+    }
+  }
+
+  /**
+   * Selects the best known enemy: favors closer & forward-lane bandits, keeps pre-pitbull missile
+   * support stable, and only applies deconfliction when closer/peer friendlies already claim it.
+   */
+  private chooseTarget(w: World, me: Jet, myInFlight: MissileTimer[]): string | null {
+    const friends = w.jets.filter(
+      (j) => j.side === me.side && j.alive && j.id !== me.id && jetById(w, j.targetId)?.alive,
+    );
+    const gimbalRad = w.params.radar.gimbalDeg * DEG;
+    const prePitbullTargets = new Set(
+      myInFlight.filter((tm) => tm.pitbullAt === null || w.t < tm.pitbullAt).map((tm) => tm.targetId),
     );
     let best: string | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const [id, tr] of this.tracks) {
       const p = trackAt(tr, w.t).pos;
-      const score = len(sub(p, me.pos)) + (taken.has(id) ? 30 * NM : 0);
+      const d = len(sub(p, me.pos));
+      const off = Math.abs(wrapPi(bearing(me.pos, p) - me.hdg));
+      const offPenalty = (off / gimbalRad) * SORT_ANGLE_WEIGHT_M;
+      let takenCount = 0;
+      for (const f of friends) {
+        if (f.targetId !== id) continue;
+        if (len(sub(p, f.pos)) <= d + SORT_PEER_MARGIN_M) takenCount++;
+      }
+      const takenPenalty = Math.min(takenCount, 2) * SORT_TAKEN_PENALTY_M;
+      const keepBonus = prePitbullTargets.has(id)
+        ? SORT_SUPPORT_BONUS_M
+        : me.targetId === id
+          ? SORT_KEEP_TARGET_M
+          : 0;
+      const score = d + offPenalty + takenPenalty - keepBonus;
       if (score < bestScore) {
         bestScore = score;
         best = id;

@@ -1,6 +1,7 @@
 // Whole NPC fights take a few seconds each, hence the longer timeouts below.
 import { describe, expect, it } from "vitest";
-import { type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
+import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
+import { makeJet } from "../src/game/sim/aircraft.ts";
 import { NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
 import { makeRng, randNormal } from "../src/game/sim/rng.ts";
@@ -397,5 +398,114 @@ describe("game: 6v6 infinite demo mode", () => {
     const labels2 = w2.jets.map((j) => npcOf(w2, j.id).skill.label);
     expect(labels2.every((l) => l === "Easy" || l === "Normal" || l === "Hard")).toBe(true);
     expect(new Set(labels2).size).toBeGreaterThan(1);
+  });
+});
+
+describe("game: target sorting and opportunity shots in line-abreast & trailing formations", () => {
+  it("keeps lane sorting in line-abreast and prevents rear/trailing jets from pushing frontline jets to distant targets", () => {
+    const p = P();
+    const w = scenarioById("infinite").build(p, 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    // Stage 3v3 line-abreast front (68 nm: inside 80 nm detection, outside Rmax) + trailing friendly row + far bandits.
+    // Even if trailing friendlies claim front bandits, frontline B1..B3 must stay on their own lanes R1..R3.
+    const r1 = must(jetById(w, "R1"));
+    const r2 = must(jetById(w, "R2"));
+    const r3 = must(jetById(w, "R3"));
+    r1.pos.y = 68 * NM;
+    r2.pos.y = 68 * NM;
+    r3.pos.y = 68 * NM;
+    must(jetById(w, "R4")).pos = { x: -30 * NM, y: 110 * NM, z: r1.pos.z };
+    must(jetById(w, "R5")).pos = { x: 0, y: 110 * NM, z: r1.pos.z };
+    must(jetById(w, "R6")).pos = { x: 30 * NM, y: 110 * NM, z: r1.pos.z };
+
+    for (let i = 0; i < 10; i++) step(w);
+    expect(w.missiles).toHaveLength(0);
+
+    expect(must(jetById(w, "B1")).targetId).toBe("R1");
+    expect(must(jetById(w, "B2")).targetId).toBe("R2");
+    expect(must(jetById(w, "B3")).targetId).toBe("R3");
+
+    // Trailing Blue jets B4..B6 at y = -20 nm see frontline R1..R3 (~88 nm) vs distant R4..R6 (~130 nm):
+    // even with frontline claimed (+18 nm), none of B4..B6 should pick a distant 130 nm flanking target.
+    for (const bid of ["B4", "B5", "B6"]) {
+      const tgt = must(jetById(w, bid)).targetId;
+      expect(["R1", "R2", "R3"]).toContain(tgt);
+    }
+  });
+
+  it("takes an opportunity shot on a second line-abreast bandit inside lethal range while supporting primary", () => {
+    const p = P();
+    const w = scenarioById("2v2").build(p, 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    w.controllers.delete("B2");
+    must(jetById(w, "B2")).alive = false;
+    w.controllers.delete("R1");
+    w.controllers.delete("R2");
+
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    const r2 = must(jetById(w, "R2"));
+    // Place R1 on B1's lane just inside shot range so B1 fires M1 and enters cranking support.
+    b1.pos.x = 0;
+    b1.pos.y = 0;
+    r1.pos = { x: 0, y: 32 * NM, z: b1.pos.z };
+    r2.pos = { x: 5 * NM, y: 65 * NM, z: b1.pos.z };
+
+    for (let i = 0; i < 30 && w.missiles.length === 0; i++) step(w);
+    step(w); // transition to support on next bot tick
+    expect(w.missiles).toHaveLength(1);
+    expect(w.missiles[0]?.targetId).toBe("R1");
+    expect(npcOf(w, "B1").state).toBe("support");
+
+    // Let B1 establish its crank (~3 s), then bring line-abreast R2 into lethal range inside the cranked gimbal.
+    for (let i = 0; i < 150; i++) step(w);
+    const crankSide = b1.hdg < Math.PI ? 1 : -1;
+    r2.pos = { x: b1.pos.x + crankSide * 5 * NM, y: b1.pos.y + 18 * NM, z: b1.pos.z };
+    for (let i = 0; i < 120 && w.missiles.length < 2; i++) step(w);
+
+    expect(w.missiles).toHaveLength(2);
+    expect(w.missiles[1]?.shooterId).toBe("B1");
+    expect(w.missiles[1]?.targetId).toBe("R2");
+    expect(b1.targetId).toBe("R1"); // keeps supporting original target
+    expect(npcOf(w, "B1").state).toBe("support");
+  });
+
+  it("takes an opportunity shot on a trailing bandit closing into lethal range while supporting lead missile", () => {
+    const p = P();
+    const w = scenarioById("duel").build(p, 25000, 2, { redSkill: "hard", blueAi: "hard" });
+    w.controllers.delete("R1");
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos = { x: 0, y: 36 * NM, z: b1.pos.z };
+
+    // Add a trailing bandit R2 in the same lane behind R1, initially farther back.
+    const r2 = makeJet(p.aircraft, {
+      id: "R2",
+      side: "red",
+      callsign: "Bandit 2",
+      x: 1 * NM,
+      y: 62 * NM,
+      altM: b1.pos.z,
+      hdgDeg: 180,
+      mach: 0.9,
+    });
+    w.jets.push(r2);
+
+    // B1 shoots R1 and enters cranking support.
+    for (let i = 0; i < 30 && w.missiles.length === 0; i++) step(w);
+    step(w); // transition to support on next bot tick
+    expect(w.missiles).toHaveLength(1);
+    expect(w.missiles[0]?.targetId).toBe("R1");
+    expect(npcOf(w, "B1").state).toBe("support");
+
+    // Let B1 crank briefly, then advance trailing R2 into lethal range along the lane (inside cranked gimbal).
+    for (let i = 0; i < 150; i++) step(w);
+    r2.pos = { x: b1.pos.x + (b1.hdg < Math.PI ? 1 : -1) * 4 * NM, y: b1.pos.y + 18 * NM, z: b1.pos.z };
+    for (let i = 0; i < 120 && w.missiles.length < 2; i++) step(w);
+
+    expect(w.missiles).toHaveLength(2);
+    expect(w.missiles[1]?.shooterId).toBe("B1");
+    expect(w.missiles[1]?.targetId).toBe("R2");
+    expect(b1.targetId).toBe("R1");
+    expect(npcOf(w, "B1").state).toBe("support");
+    expect(AI_SKILLS.hard.opportunityShot).toBe(true);
   });
 });
