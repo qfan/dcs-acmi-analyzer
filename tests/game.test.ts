@@ -5,7 +5,7 @@ import { launchMissile, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
 import { launchZone } from "../src/game/sim/wez.ts";
-import { command, jetById, rwrContacts, step, type World } from "../src/game/sim/world.ts";
+import { command, jetById, rwrContacts, step, type World, waitingOnMissiles } from "../src/game/sim/world.ts";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
@@ -333,5 +333,47 @@ describe("game: onboard missile timers", () => {
     expect(s.showsEvent(own("acquired"))).toBe(false);
     expect(s.showsEvent(own("pitbull"))).toBe(false);
     expect(s.showsEvent(own("kill"))).toBe(true);
+  });
+});
+
+describe("game: the fight ends only when no missile can still kill", () => {
+  /** Duel at 25k with the bandit `rangeNm` out (30 by default), no scripts; `shooter` fires, then is removed. */
+  function lastShot(shooter: "B1" | "R1", rangeNm = 30) {
+    const w = scenarioById("duel").build(P(), 25000, 2);
+    w.controllers.clear();
+    const r = must(jetById(w, "R1"));
+    r.pos.y = must(jetById(w, "B1")).pos.y + rangeNm * NM;
+    const target = shooter === "B1" ? "R1" : "B1";
+    expect(command(w, { type: "fire", jetId: shooter, targetId: target })).toBeNull();
+    must(jetById(w, shooter)).alive = false;
+    return w;
+  }
+  const finish = (w: World) => {
+    for (let i = 0; i < 20000 && !w.outcome; i++) step(w);
+    return must(w.outcome);
+  };
+
+  it("keeps running after the last bandit dies while its missile is still in the air", () => {
+    const w = lastShot("R1");
+    step(w);
+    expect(w.outcome).toBeNull();
+    expect(waitingOnMissiles(w)).toBe(true);
+  });
+
+  it("you can still be killed after every bandit is down: a trade", () => {
+    const o = finish(lastShot("R1")); // Viper stays hot
+    expect(o.kind).toBe("trade");
+  });
+
+  it("defeating the last missile after the bandits are down is the victory", () => {
+    const w = lastShot("R1", 45); // long enough to turn cold and outrun it
+    command(w, { type: "steer", jetId: "B1", steer: cold });
+    const o = finish(w);
+    expect(o.kind).toBe("win");
+    expect(w.t).toBeGreaterThan(20); // decided when the missile gave up, not when the bandit died
+  });
+
+  it("your last missile can still score a trade after you are down", () => {
+    expect(finish(lastShot("B1")).kind).toBe("trade");
   });
 });

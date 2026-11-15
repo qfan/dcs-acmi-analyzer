@@ -5,7 +5,7 @@ import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
 import { ALTITUDES_FT, SCENARIOS, scenarioById } from "../sim/scenarios.ts";
-import { type Command, command, jetById, rwrContacts, type World } from "../sim/world.ts";
+import { type Command, command, jetById, rwrContacts, type World, waitingOnMissiles } from "../sim/world.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { type AutoPause, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
@@ -393,6 +393,15 @@ export function GameApp() {
               <span>⏸ {session.pauseReason}</span>
             </div>
           )}
+          {w && waitingOnMissiles(w) && !session?.paused && (
+            <div className="g-banner g-banner-wait">
+              <span>
+                {w.jets.some((j) => j.side === PLAYER_SIDE && j.alive)
+                  ? "All hostiles down, but missiles may still be in the air: keep defending."
+                  : "You are down. Your missiles in the air can still score a trade."}
+              </span>
+            </div>
+          )}
           {flash && <div className="g-flash">{flash}</div>}
           <div className="g-stage-tools">
             <label>
@@ -684,7 +693,7 @@ export function GameApp() {
       {ended && !endSeen && w?.outcome && (
         <div className="g-modal-back">
           <div className="g-modal g-end-dialog" role="dialog" aria-label="Result">
-            <h2>{w.outcome.winner === PLAYER_SIDE ? "Victory" : w.outcome.winner ? "Defeat" : "Draw"}</h2>
+            <h2>{OUTCOME_TITLE[w.outcome.kind]}</h2>
             <p>{w.outcome.reason}</p>
             <p className="g-muted">Fight time {fmtTime(w.t)}.</p>
             <div className="g-row g-end">
@@ -708,6 +717,8 @@ export function GameApp() {
     </div>
   );
 }
+
+const OUTCOME_TITLE = { win: "Victory", loss: "Defeat", trade: "Trade", draw: "Draw" } as const;
 
 const PHASE_LABEL = {
   datalink: "datalink",

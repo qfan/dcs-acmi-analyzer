@@ -514,3 +514,7 @@ button.g-fog.on {
 .g-timer {
   padding-bottom: 8px;
 }
+.g-banner-wait {
+  border-color: #f87171;
+  color: #fca5a5;
+}

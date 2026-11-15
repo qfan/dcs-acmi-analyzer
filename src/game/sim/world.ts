@@ -68,7 +68,8 @@ export interface Controller {
   update(world: World, jet: Jet): Command[];
 }
 
-export type Outcome = { winner: Side | null; reason: string };
+/** How a fight ended. "trade": both sides destroyed. "draw": nobody destroyed (out of missiles or time). */
+export type Outcome = { winner: Side | null; kind: "win" | "loss" | "trade" | "draw"; reason: string };
 
 export interface World {
   t: number;
@@ -171,13 +172,14 @@ export function rwrContacts(w: World, j: Jet): RwrContact[] {
 
 /**
  * Position of what a "relative" steering order is flown against: a jet, or a missile (defending
- * against the missile itself). null when it is gone, and the jet then holds its heading.
+ * against the missile itself). null when a missile is gone, and the jet then holds its heading.
  */
 export function steerThreatPos(w: World, j: Jet): V3 | null {
   if (j.steer.mode !== "relative") return null;
   const id = j.steer.threatId;
   const jet = jetById(w, id);
-  if (jet) return jet.alive ? jet.pos : null;
+  // A dead jet stays where it went down: "cold" still means away from where the threat was.
+  if (jet) return jet.pos;
   const m = w.missiles.find((x) => x.id === id);
   return m && !m.end ? m.pos : null;
 }
@@ -368,19 +370,49 @@ export function step(w: World, dt = SIM_DT): void {
   checkOutcome(w);
 }
 
+/**
+ * A missile that can still kill someone: flying, not given up (lost), and its target alive. Every
+ * missile stops being one within maxTofS, so a fight waiting on missiles always ends.
+ */
+export function missileThreatens(w: World, m: Missile): boolean {
+  if (m.end || m.phase === "lost") return false;
+  return !!jetById(w, m.targetId)?.alive;
+}
+
+/**
+ * A side is wiped out but missiles that can still kill are in the air: the fight goes on until
+ * they hit or are defeated (you can still die after the last bandit falls, or trade with your last shot).
+ */
+export function waitingOnMissiles(w: World): boolean {
+  if (w.outcome) return false;
+  const alive = (s: Side) => w.jets.some((j) => j.side === s && j.alive);
+  return (!alive("blue") || !alive("red")) && w.missiles.some((m) => missileThreatens(w, m));
+}
+
 function checkOutcome(w: World): void {
   const alive = (s: Side) => w.jets.some((j) => j.side === s && j.alive);
-  const armed = (s: Side) =>
-    w.jets.some((j) => j.side === s && j.alive && j.missiles > 0) ||
-    w.missiles.some((m) => m.side === s && !m.end);
+  const inFlight = (s: Side) => w.missiles.some((m) => m.side === s && missileThreatens(w, m));
+  const armed = (s: Side) => w.jets.some((j) => j.side === s && j.alive && j.missiles > 0) || inFlight(s);
+  const blue = alive("blue");
+  const red = alive("red");
   let o: Outcome | null = null;
-  if (!alive("blue") && !alive("red")) o = { winner: null, reason: "Both sides destroyed." };
-  else if (!alive("red")) o = { winner: "blue", reason: "All hostiles destroyed." };
-  else if (!alive("blue")) o = { winner: "red", reason: "You were shot down." };
-  else if (w.objective === "survive" && !armed("red"))
-    o = { winner: "blue", reason: "You defeated every missile fired at you." };
-  else if (!armed("blue") && !armed("red")) o = { winner: null, reason: "Both sides are out of missiles." };
-  else if (w.t >= w.timeLimitS) o = { winner: null, reason: "Time limit reached." };
+  if (!blue || !red) {
+    // Nobody wins while a missile that can still kill is in the air.
+    if (!inFlight("blue") && !inFlight("red")) {
+      if (!blue && !red) o = { winner: null, kind: "trade", reason: "Trade: both sides were destroyed." };
+      else if (!red)
+        o = {
+          winner: "blue",
+          kind: "win",
+          reason: "All hostiles destroyed, and you survived every missile in the air.",
+        };
+      else o = { winner: "red", kind: "loss", reason: "You were shot down." };
+    }
+  } else if (w.objective === "survive" && !armed("red"))
+    o = { winner: "blue", kind: "win", reason: "You defeated every missile fired at you." };
+  else if (!armed("blue") && !armed("red"))
+    o = { winner: null, kind: "draw", reason: "Both sides are out of missiles." };
+  if (!o && w.t >= w.timeLimitS) o = { winner: null, kind: "draw", reason: "Time limit reached." };
   if (o) {
     w.outcome = o;
     emit(w, { type: "end", side: o.winner ?? "blue", text: o.reason });
