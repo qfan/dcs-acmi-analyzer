@@ -5,7 +5,15 @@ import { launchMissile, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
 import { launchZone } from "../src/game/sim/wez.ts";
-import { command, jetById, rwrContacts, step, type World, waitingOnMissiles } from "../src/game/sim/world.ts";
+import {
+  command,
+  jetById,
+  rwrContacts,
+  steerThreatPos,
+  step,
+  type World,
+  waitingOnMissiles,
+} from "../src/game/sim/world.ts";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
@@ -407,5 +415,74 @@ describe("game: the result is called after a random 5–10 s", () => {
     ).t;
     expect(w.t - settled).toBeGreaterThanOrEqual(4.9);
     expect(w.t - settled).toBeLessThanOrEqual(10.1);
+  });
+});
+
+describe("game: review fixes", () => {
+  it("cold steering vs a missile holds heading once the missile misses (lost)", () => {
+    const w = scenarioById("duel").build(P(), 25000, 1);
+    w.controllers.clear();
+    const b = must(jetById(w, "B1"));
+    const r = must(jetById(w, "R1"));
+    r.pos.y = 20 * NM;
+    expect(command(w, { type: "fire", jetId: "R1", targetId: "B1" })).toBeNull();
+    const m = must(w.missiles[0]);
+    command(w, {
+      type: "steer",
+      jetId: "B1",
+      steer: { mode: "relative", threatId: m.id, offsetDeg: 180, dir: 1, label: "cold" },
+    });
+    expect(steerThreatPos(w, b)).not.toBeNull();
+    m.phase = "lost";
+    m.pos = { x: 0, y: -5 * NM, z: b.pos.z }; // flew past south of B1
+    expect(steerThreatPos(w, b)).toBeNull();
+  });
+
+  it("fog of war: scanning a last-seen position clears it, and relative steering freezes on loss", () => {
+    const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.world.controllers.clear();
+    s.fog = true;
+    const b = must(jetById(s.world, "B1"));
+    const r = must(jetById(s.world, "R1"));
+    r.pos.y = 30 * NM;
+    s.advance(0.02);
+    expect(s.sees("R1")).toBe(true);
+    command(s.world, {
+      type: "steer",
+      jetId: "B1",
+      steer: { mode: "relative", threatId: "R1", offsetDeg: 50, dir: 1, label: "crank" },
+    });
+    // Turn radar away so R1 drops off radar -> relative steer freezes to heading.
+    b.hdg = Math.PI;
+    b.steer = { mode: "relative", threatId: "R1", offsetDeg: 50, dir: 1, label: "crank" };
+    s.advance(0.02);
+    expect(s.sees("R1")).toBe(false);
+    expect(s.lastSeen.has("R1")).toBe(true);
+    expect(b.steer.mode).toBe("heading");
+    expect(s.knownEnemyPos("R1")).not.toBeNull();
+
+    // Move R1 elsewhere (still out of sight), then turn B1 back toward where R1 was last seen: clears ghost.
+    r.pos = { x: 100 * NM, y: 100 * NM, z: r.pos.z };
+    b.hdg = 0;
+    b.steer = { mode: "heading", hdg: 0 };
+    for (let i = 0; i < 30; i++) s.advance(0.02);
+    expect(s.lastSeen.has("R1")).toBe(false);
+    expect(s.knownEnemyPos("R1")).toBeNull();
+  });
+
+  it("missile timer starts immediately on fire and stays synchronized without double-stepping", () => {
+    const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.world.controllers.clear();
+    must(jetById(s.world, "R1")).pos.y = 30 * NM;
+    s.advance(0.02);
+    s.pause("Paused.");
+    expect(s.applyCommand({ type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    const tm0 = must(s.timers.get("M1"));
+    const m = must(s.world.missiles[0]);
+    expect(tm0.ghost.tof).toBeCloseTo(m.tof, 9);
+    expect(tm0.impactAt).not.toBeNull();
+    s.play();
+    s.advance(0.02);
+    expect(tm0.ghost.tof).toBeCloseTo(m.tof, 9);
   });
 });

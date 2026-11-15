@@ -123,11 +123,16 @@ export function makeWorld(params: GameParams, seed = 1): World {
 export const jetById = (w: World | null | undefined, id: string | null | undefined): Jet | undefined =>
   w && id ? w.jets.find((j) => j.id === id) : undefined;
 
-function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): boolean {
-  if (!shooter.alive || !target.alive) return false;
-  const los = sub(target.pos, shooter.pos);
+/** True when `shooter`'s radar cone covers `pos` out to `rangeNm`. */
+export function radarCoversPos(w: World, shooter: Jet, pos: V3, rangeNm: number): boolean {
+  if (!shooter.alive) return false;
+  const los = sub(pos, shooter.pos);
   if (len(los) > rangeNm * NM) return false;
   return angleBetween(los, headingVec(shooter.hdg, shooter.gamma)) <= w.params.radar.gimbalDeg * DEG;
+}
+
+function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): boolean {
+  return target.alive && radarCoversPos(w, shooter, target.pos, rangeNm);
 }
 
 const detectRange = (w: World) => Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm);
@@ -209,8 +214,9 @@ export function rwrContacts(w: World, j: Jet): RwrContact[] {
 }
 
 /**
- * Position of what a "relative" steering order is flown against: a jet, or a missile (defending
- * against the missile itself). null when a missile is gone, and the jet then holds its heading.
+ * Position of what a "relative" steering order is flown against: a jet, or a threatening missile
+ * (defending against the missile itself). null once the missile misses (lost) or ends, so the jet
+ * holds its heading instead of reversing course behind a missile that flew past.
  */
 export function steerThreatPos(w: World, j: Jet): V3 | null {
   if (j.steer.mode !== "relative") return null;
@@ -219,7 +225,7 @@ export function steerThreatPos(w: World, j: Jet): V3 | null {
   // A dead jet stays where it went down: "cold" still means away from where the threat was.
   if (jet) return jet.pos;
   const m = w.missiles.find((x) => x.id === id);
-  return m && !m.end ? m.pos : null;
+  return m && !m.end && m.phase !== "lost" ? m.pos : null;
 }
 
 export const truthOf = (j: Jet): TargetTruth => ({ pos: { ...j.pos }, vel: velocity(j), alive: j.alive });

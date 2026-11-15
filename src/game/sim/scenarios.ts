@@ -94,6 +94,17 @@ function flights(params: GameParams, altFt: number, seed: number, rangeNm: numbe
   return w;
 }
 
+/** Pre-designates each blue jet onto the matching red jet at start when human-flown. */
+function preTargetBlue(w: World): void {
+  const blues = w.jets.filter((j) => j.side === "blue");
+  const reds = w.jets.filter((j) => j.side === "red");
+  for (let i = 0; i < blues.length; i++) {
+    const b = blues[i];
+    const r = reds[i] ?? reds[0];
+    if (b && r) b.targetId = r.id;
+  }
+}
+
 /** Puts NPC pilots in the jets the options say (wingmen crank opposite ways). */
 function crewNpcs(w: World, opts: ScenarioOptions): void {
   const crew = (side: Side, skill: AiSkillId, firstDir: 1 | -1) => {
@@ -118,6 +129,7 @@ export const SCENARIOS: Scenario[] = [
     build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
       const w = flights(params, altFt, seed, 60, 1);
       crewNpcs(w, opts);
+      if (!opts.blueAi) preTargetBlue(w);
       return w;
     },
   },
@@ -131,6 +143,7 @@ export const SCENARIOS: Scenario[] = [
     build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
       const w = flights(params, altFt, seed, 60, 2);
       crewNpcs(w, opts);
+      if (!opts.blueAi) preTargetBlue(w);
       return w;
     },
   },

@@ -54,6 +54,19 @@ describe("game: NPC knows only what its side can see", () => {
     expect(must(defendAt) - must(rwrAt)).toBeGreaterThanOrEqual(0);
     expect(must(defendAt) - must(rwrAt)).toBeLessThan(3 * 1.3 + 0.1);
   });
+
+  it("drops a dead enemy from target selection immediately instead of chasing its ghost", () => {
+    const w = scenarioById("2v2").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    for (let i = 0; i < 50; i++) step(w);
+    const b1 = must(jetById(w, "B1"));
+    const first = must(b1.targetId);
+    must(jetById(w, first)).alive = false;
+    // Even if B1 is turned away so its radar is not looking at the dead jet, it switches to the survivor.
+    b1.hdg = Math.PI;
+    step(w);
+    expect(b1.targetId).not.toBe(first);
+    expect(jetById(w, b1.targetId)?.alive).toBe(true);
+  });
 });
 
 describe("game: NPC vs NPC", () => {

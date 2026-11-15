@@ -4,7 +4,7 @@ import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
 import { AI_SKILL_ORDER, AI_SKILLS, DoctrineBot } from "../ai/doctrine.ts";
-import { availableG, type Jet, mach, type Steer, type Throttle } from "../sim/aircraft.ts";
+import { availableG, type Jet, mach, type Throttle } from "../sim/aircraft.ts";
 import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
@@ -15,10 +15,10 @@ import {
   type ScenarioOptions,
   scenarioById,
 } from "../sim/scenarios.ts";
+import { wrap2Pi } from "../sim/vec.ts";
 import {
   awaitingCall,
   type Command,
-  command,
   jetById,
   rwrContacts,
   type World,
@@ -26,8 +26,8 @@ import {
 } from "../sim/world.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { ParamEditor } from "./ParamEditor.tsx";
-import { type AutoPause, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
-import { loadAutoPause, loadLast, loadParams, saveAutoPause, saveLast, saveParams } from "./storage.ts";
+import { DEFAULT_AUTOPAUSE, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
+import { loadLast, loadParams, saveLast, saveParams } from "./storage.ts";
 
 /** Crank keeps the threat just inside the 60° radar gimbal. */
 const CRANK_DEG = 50;
@@ -38,7 +38,7 @@ const deg = (r: number) => Math.round(((r * 180) / Math.PI + 360) % 360);
 
 export function GameApp() {
   const [params, setParams] = useState<GameParams>(loadParams);
-  const [autoPause, setAutoPauseState] = useState<AutoPause>(loadAutoPause);
+  const autoPause = DEFAULT_AUTOPAUSE;
   const last = loadLast();
   const [scenarioId, setScenarioId] = useState(last?.scenarioId ?? SCENARIOS[0]?.id ?? "duel");
   const [altFt, setAltFt] = useState<number>(last?.altFt ?? 25000);
@@ -63,6 +63,7 @@ export function GameApp() {
   const [, setTick] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View>({ cx: 0, cy: 0, scale: 0.01, w: 800, h: 600 });
   const hitsRef = useRef<Hit[]>([]);
   const followRef = useRef(follow);
@@ -80,7 +81,7 @@ export function GameApp() {
       saveLast(id, alt, options);
       fitView(viewRef.current, s);
     },
-    [scenarioId, altFt, params, autoPause, options],
+    [scenarioId, altFt, params, options],
   );
 
   const issue = useCallback(
@@ -95,7 +96,7 @@ export function GameApp() {
         const j = jetById(session.world, id);
         if (!j?.alive) continue;
         const c = make(j);
-        if (c) err = command(session.world, c) ?? err;
+        if (c) err = session.applyCommand(c) ?? err;
       }
       if (err) setFlash(err);
       setTick((t) => t + 1);
@@ -104,24 +105,40 @@ export function GameApp() {
   );
 
   /**
-   * Hot and crank are flown against the targeted bandit. Notch and cold are flown against the
-   * nearest active missile on this jet's RWR when there is one (that is what you defend), else the bandit.
+   * For defensive turns (Notch / Cold), an active missile on RWR is highest priority, else the
+   * nearest known/guessed enemy. For offensive turns (Hot / Crank), steer against the targeted
+   * enemy if known, else the nearest known/guessed enemy. Never tracks unseen bandits live.
    */
   const steerRel = useCallback(
     (offsetDeg: number, dir: 1 | -1, label: string, vsMissile = false) =>
       issue((j) => {
-        const w = session?.world ?? null;
-        const missile = vsMissile && w ? nearestRwrMissile(w, j) : null;
-        const threatId = missile ?? (jetById(w, j.targetId) ?? nearestEnemy(session, j))?.id;
-        if (!threatId) return null;
-        const steer: Steer = {
-          mode: "relative",
-          threatId,
-          offsetDeg,
-          dir,
-          label: missile ? `${label} vs ${missile}` : label,
+        if (!session) return null;
+        const w = session.world;
+        const missile = vsMissile ? nearestRwrMissile(w, j) : null;
+        if (missile) {
+          return {
+            type: "steer",
+            jetId: j.id,
+            steer: { mode: "relative", threatId: missile, offsetDeg, dir, label: `${label} vs ${missile}` },
+          };
+        }
+        const targetPos = !vsMissile && j.targetId ? session.knownEnemyPos(j.targetId) : null;
+        const enemy =
+          targetPos && j.targetId ? { id: j.targetId, pos: targetPos } : nearestKnownEnemy(session, j);
+        if (!enemy) return null;
+        if (session.sees(enemy.id)) {
+          return {
+            type: "steer",
+            jetId: j.id,
+            steer: { mode: "relative", threatId: enemy.id, offsetDeg, dir, label },
+          };
+        }
+        const brg = Math.atan2(enemy.pos.x - j.pos.x, enemy.pos.y - j.pos.y);
+        return {
+          type: "steer",
+          jetId: j.id,
+          steer: { mode: "heading", hdg: wrap2Pi(brg + (dir * offsetDeg * Math.PI) / 180) },
         };
-        return { type: "steer", jetId: j.id, steer };
       }),
     [issue, session],
   );
@@ -246,9 +263,10 @@ export function GameApp() {
           jetId: j.id,
           steer: {
             mode: "heading",
-            hdg:
+            hdg: wrap2Pi(
               (j.steer.mode === "heading" ? j.steer.hdg : j.hdg) +
-              ((k === "arrowleft" ? -10 : 10) * Math.PI) / 180,
+                ((k === "arrowleft" ? -10 : 10) * Math.PI) / 180,
+            ),
           },
         }));
       else if (k === "v") setFollow(true);
@@ -264,6 +282,22 @@ export function GameApp() {
     const id = setTimeout(() => setFlash(null), 3000);
     return () => clearTimeout(id);
   }, [flash]);
+
+  useEffect(() => {
+    if (!showExport) return;
+    const onDown = (e: MouseEvent) => {
+      if (e.target instanceof Node && !exportMenuRef.current?.contains(e.target)) setShowExport(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowExport(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onEsc);
+    };
+  }, [showExport]);
 
   // Mouse: left click selects / designates, left drag pans, right click sets heading, wheel zooms.
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
@@ -355,12 +389,6 @@ export function GameApp() {
   const ended = !!w?.outcome;
   const scenario = scenarioById(session?.scenarioId ?? scenarioId);
 
-  const updateAutoPause = (a: AutoPause) => {
-    setAutoPauseState(a);
-    saveAutoPause(a);
-    session?.setAutoPause(a);
-  };
-
   return (
     <div className="g-app">
       <header className="g-top">
@@ -422,7 +450,7 @@ export function GameApp() {
         <button type="button" onClick={() => setShowParams(true)}>
           Parameters
         </button>
-        <div className="g-menu">
+        <div className="g-menu" ref={exportMenuRef}>
           <button
             type="button"
             disabled={!session}
@@ -658,44 +686,6 @@ export function GameApp() {
               </ol>
             </section>
           )}
-
-          <details className="g-card">
-            <summary>
-              <b>Auto-pause</b> <span className="g-muted">(optional, off by default)</span>
-            </summary>
-            {(
-              [
-                ["enemyLaunch", "Missile fired at you"],
-                ["seekerLock", "Active missile shows on your RWR"],
-                ["pitbull", "Your / incoming missile goes active"],
-                ["datalinkLost", "Your missile loses datalink"],
-                ["missileEnd", "Missile hits, misses or is spent"],
-                ["radarChange", "Your radar loses / regains target"],
-              ] as const
-            ).map(([k, text]) => (
-              <label key={k} className="g-check">
-                <input
-                  type="checkbox"
-                  checked={autoPause[k]}
-                  onChange={(e) => updateAutoPause({ ...autoPause, [k]: e.target.checked })}
-                />{" "}
-                {text}
-              </label>
-            ))}
-            <label className="g-check">
-              Turn mode: pause every{" "}
-              <select
-                value={autoPause.turnEveryS}
-                onChange={(e) => updateAutoPause({ ...autoPause, turnEveryS: Number(e.target.value) })}
-              >
-                {[0, 5, 10, 15, 30].map((s) => (
-                  <option key={s} value={s}>
-                    {s === 0 ? "off" : `${s} s`}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </details>
 
           <section className="g-card g-help">
             <h3>Controls</h3>
@@ -1106,24 +1096,28 @@ function npcState(session: GameSession, jetId: string): string | null {
   return c instanceof DoctrineBot ? `NPC ${c.skill.label}: ${c.describe()}` : null;
 }
 
-function nearestEnemy(s: GameSession | null, j: Jet): Jet | undefined {
-  if (!s) return undefined;
-  let best: Jet | undefined;
+function nearestKnownEnemy(
+  s: GameSession,
+  j: Jet,
+): { id: string; pos: { x: number; y: number; z: number } } | undefined {
+  let best: { id: string; pos: { x: number; y: number; z: number } } | undefined;
   let bd = Number.POSITIVE_INFINITY;
   for (const o of s.world.jets) {
     if (o.side === j.side || !o.alive) continue;
-    const d = Math.hypot(o.pos.x - j.pos.x, o.pos.y - j.pos.y);
+    const pos = s.knownEnemyPos(o.id);
+    if (!pos) continue;
+    const d = Math.hypot(pos.x - j.pos.x, pos.y - j.pos.y);
     if (d < bd) {
       bd = d;
-      best = o;
+      best = { id: o.id, pos };
     }
   }
   return best;
 }
 
 function fightBox(s: GameSession) {
-  const pts = s.world.jets.filter((j) => j.alive).map((j) => j.pos);
-  const all = pts.length > 0 ? pts : s.world.jets.map((j) => j.pos);
+  const pts = s.world.jets.filter((j) => j.alive && s.sees(j.id)).map((j) => j.pos);
+  const all = pts.length > 0 ? pts : s.world.jets.filter((j) => s.sees(j.id)).map((j) => j.pos);
   let x0 = Number.POSITIVE_INFINITY;
   let x1 = Number.NEGATIVE_INFINITY;
   let y0 = Number.POSITIVE_INFINITY;

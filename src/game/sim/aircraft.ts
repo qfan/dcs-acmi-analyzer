@@ -149,9 +149,10 @@ export function stepJet(p: AircraftParams, j: Jet, desiredHdg: number, dt: numbe
   j.hdg = (j.hdg + turnRate * dt + 2 * Math.PI) % (2 * Math.PI);
 
   const m = mach(j);
+  const mass = Math.max(p.massKg, 1);
   const accel =
-    (thrustN(p, j.throttle, j.pos.z, m) - dragN(p, j.pos.z, j.speed, j.g)) / p.massKg - G * Math.sin(j.gamma);
-  j.speed = Math.max(p.minSpeedKt * KT, j.speed + accel * dt);
+    (thrustN(p, j.throttle, j.pos.z, m) - dragN(p, j.pos.z, j.speed, j.g)) / mass - G * Math.sin(j.gamma);
+  j.speed = Math.max(1, p.minSpeedKt * KT, j.speed + accel * dt);
 
   const u = headingVec(j.hdg, j.gamma);
   j.pos.x += u.x * j.speed * dt;

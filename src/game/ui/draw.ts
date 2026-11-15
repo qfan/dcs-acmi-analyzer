@@ -407,8 +407,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
     ctx.stroke();
     ctx.setLineDash([]);
     const dist = Math.hypot(tgtPos.x - p.pos.x, tgtPos.y - p.pos.y);
-    const ux = (tgtPos.x - p.pos.x) / dist;
-    const uy = (tgtPos.y - p.pos.y) / dist;
+    const ux = dist > 1 ? (tgtPos.x - p.pos.x) / dist : 0;
+    const uy = dist > 1 ? (tgtPos.y - p.pos.y) / dist : 1;
     const z = s.zone?.jetId === p.id && s.zone.targetId === tgt.id ? s.zone.zone : null;
     if (z) {
       for (const [nm, col, name] of [

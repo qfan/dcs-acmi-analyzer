@@ -41,16 +41,22 @@ function fromDraft(d: Draft, base: GameParams): { params: GameParams; errors: st
     else if (f.kind === "select") dst[f.key] = String(raw);
     else if (f.kind === "number") {
       const n = Number(raw);
-      if (Number.isFinite(n) && String(raw).trim() !== "") dst[f.key] = n;
-      else errors.push(f.label);
+      if (!Number.isFinite(n) || String(raw).trim() === "") errors.push(f.label);
+      else if (f.int && !Number.isInteger(n)) errors.push(`${f.label} (whole number)`);
+      else if (f.min !== undefined && n < f.min) errors.push(`${f.label} (≥ ${f.min})`);
+      else if (f.max !== undefined && n > f.max) errors.push(`${f.label} (≤ ${f.max})`);
+      else dst[f.key] = n;
     } else {
       const arr = String(raw)
         .split(/[,\s]+/)
         .filter((s) => s !== "")
         .map(Number);
       const want = (dst[f.key] as number[]).length;
-      if (arr.length === want && arr.every(Number.isFinite)) dst[f.key] = arr;
-      else errors.push(`${f.label} (needs ${want} numbers)`);
+      const min = f.min;
+      if (arr.length !== want || !arr.every(Number.isFinite))
+        errors.push(`${f.label} (needs ${want} numbers)`);
+      else if (min !== undefined && arr.some((x) => x < min)) errors.push(`${f.label} (each ≥ ${min})`);
+      else dst[f.key] = arr;
     }
   }
   return { params: p, errors };

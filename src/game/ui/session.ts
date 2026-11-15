@@ -4,16 +4,22 @@
  * same world runs under any of these policies; only when time moves differs.
  */
 import { AcmiRecorder } from "../acmi.ts";
-import { type Jet, velocity } from "../sim/aircraft.ts";
+import { desiredHeading, type Jet, velocity } from "../sim/aircraft.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import type { GameParams } from "../sim/params.ts";
 import { DEFAULT_OPTIONS, type ScenarioOptions, scenarioById } from "../sim/scenarios.ts";
+import type { V3 } from "../sim/vec.ts";
 import { type LaunchZone, launchZone } from "../sim/wez.ts";
 import {
+  type Command,
+  command,
   type GameEvent,
   jetById,
+  radarBroken,
   radarCanDetect,
   radarCanTrack,
+  radarCoversPos,
+  rwrContacts,
   SIM_DT,
   step,
   truthOf,
@@ -93,7 +99,7 @@ export class GameSession {
   fog = false;
   /** Enemy jets your side's radars detect right now. */
   known = new Set<string>();
-  lastSeen = new Map<string, { x: number; y: number; hdg: number; t: number }>();
+  lastSeen = new Map<string, { x: number; y: number; z: number; hdg: number; t: number }>();
   /** Last TWS track of each enemy jet held by one of your radars (what your missiles' timers use). */
   lastTrack = new Map<string, TargetTrack>();
   /** Onboard time-to-pitbull / time-to-impact estimate for each of your missiles. */
@@ -164,6 +170,7 @@ export class GameSession {
       this.acc -= SIM_DT;
       step(this.world);
       this.updateKnowledge();
+      this.freezeHiddenSteer();
       this.updateTimers(SIM_DT);
       this.recorder.update(this.world);
       if (this.world.t >= this.nextTrailAt) this.recordTrails();
@@ -194,7 +201,7 @@ export class GameSession {
         // There is no launch warning on the RWR, so under fog of war the player cannot know.
         return a.enemyLaunch && atMe && !this.fog;
       case "pitbull":
-        return a.pitbull && (mineShot || atMe);
+        return a.pitbull && (mineShot || atMe) && !this.fog;
       case "rwr-missile":
         return a.seekerLock && e.side === PLAYER_SIDE;
       case "datalink-lost":
@@ -207,7 +214,9 @@ export class GameSession {
       case "miss":
       case "spent":
       case "seeker-lost":
-        return a.missileEnd && (mineShot || atMe);
+        return (
+          a.missileEnd && (mineShot || atMe) && (!this.fog || e.type === "kill" || e.type === "survived-hit")
+        );
       default:
         return false;
     }
@@ -235,15 +244,73 @@ export class GameSession {
     const w = this.world;
     this.known.clear();
     const mine = w.jets.filter((j) => j.side === PLAYER_SIDE && j.alive);
+    const detectRange = Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm);
     for (const e of w.jets) {
-      if (e.side === PLAYER_SIDE || !e.alive) continue;
+      if (e.side === PLAYER_SIDE) continue;
+      if (!e.alive) {
+        this.lastSeen.delete(e.id);
+        continue;
+      }
       if (mine.some((j) => radarCanDetect(w, j, e))) {
         this.known.add(e.id);
-        this.lastSeen.set(e.id, { x: e.pos.x, y: e.pos.y, hdg: e.hdg, t: w.t });
+        this.lastSeen.set(e.id, { x: e.pos.x, y: e.pos.y, z: e.pos.z, hdg: e.hdg, t: w.t });
+      } else {
+        const g = this.lastSeen.get(e.id);
+        if (g && w.t - g.t >= 0.5) {
+          const seenPos = { x: g.x, y: g.y, z: g.z };
+          const scannedEmpty = mine.some(
+            (j) => radarCoversPos(w, j, seenPos, detectRange * 0.95) && !radarBroken(w, j, e),
+          );
+          if (scannedEmpty) this.lastSeen.delete(e.id);
+        }
       }
       if (mine.some((j) => radarCanTrack(w, j, e)))
         this.lastTrack.set(e.id, { pos: { ...e.pos }, vel: velocity(e), t: w.t });
     }
+  }
+
+  /**
+   * Under fog of war, relative steering must not track an unseen bandit or a missile that has left
+   * the jet's RWR. Freeze to the last-known heading when contact is lost.
+   */
+  private freezeHiddenSteer(): void {
+    if (!this.fog) return;
+    const w = this.world;
+    for (const j of w.jets) {
+      if (!j.alive || j.side !== PLAYER_SIDE || j.steer.mode !== "relative") continue;
+      const id = j.steer.threatId;
+      const enemy = jetById(w, id);
+      if (enemy) {
+        if (!this.sees(enemy.id)) {
+          const known = this.knownEnemyPos(enemy.id);
+          j.steer = { mode: "heading", hdg: desiredHeading(j, known) };
+        }
+      } else {
+        const onRwr = rwrContacts(w, j).some((c) => c.kind === "missile" && c.sourceId === id);
+        if (!onRwr) j.steer = { mode: "heading", hdg: j.hdg };
+      }
+    }
+  }
+
+  /** Applies a command and syncs onboard timers immediately (e.g. firing while paused). */
+  applyCommand(c: Command): string | null {
+    const err = command(this.world, c);
+    if (!err && c.type === "fire") this.updateTimers(0);
+    return err;
+  }
+
+  /**
+   * Best known position of an alive enemy jet for player steering/targeting: live position when
+   * visible, else extrapolated last track or last-seen position (null if cleared or never seen).
+   */
+  knownEnemyPos(enemyId: string): V3 | null {
+    const e = jetById(this.world, enemyId);
+    if (!e?.alive || e.side === PLAYER_SIDE) return null;
+    if (!this.fog || this.known.has(enemyId)) return { ...e.pos };
+    const g = this.lastSeen.get(enemyId);
+    if (!g) return null;
+    const tr = this.lastTrack.get(enemyId);
+    return tr ? trackAt(tr, this.world.t).pos : { x: g.x, y: g.y, z: g.z };
   }
 
   /**
@@ -252,15 +319,20 @@ export class GameSession {
    */
   private updateTimers(dt: number): void {
     const w = this.world;
+    const newlyAdded = new Set<string>();
     for (const m of w.missiles)
-      if (m.side === PLAYER_SIDE && !this.timers.has(m.id)) this.timers.set(m.id, startTimer(m, w.t));
+      if (m.side === PLAYER_SIDE && !this.timers.has(m.id)) {
+        this.timers.set(m.id, startTimer(m, w.t));
+        newlyAdded.add(m.id);
+      }
     for (const tm of this.timers.values()) {
       const shooter = jetById(w, tm.shooterId);
       const target = jetById(w, tm.targetId);
       const datalink = !!shooter && !!target && radarCanTrack(w, shooter, target);
       const track = this.lastTrack.get(tm.targetId);
       const known = datalink && target ? truthOf(target) : track ? trackAt(track, w.t) : null;
-      if (known) stepTimer(w.params.missile, tm, known, datalink, w.t, dt);
+      const stepDt = newlyAdded.has(tm.missileId) ? 0 : dt;
+      if (known) stepTimer(w.params.missile, tm, known, datalink, w.t, stepDt);
     }
   }
 

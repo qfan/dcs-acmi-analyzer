@@ -69,7 +69,7 @@ export function stepTimer(
   dt: number,
 ): void {
   const g = timer.ghost;
-  if (!g.end) stepMissile(p, g, known, datalink, dt, PREDICT_FUZE_M);
+  if (!g.end && dt > 0) stepMissile(p, g, known, datalink, dt, PREDICT_FUZE_M);
   if (t - timer.predictedAt < PREDICT_EVERY_S) return;
   timer.predictedAt = t;
   const pred = predict(p, g, known, datalink, t);

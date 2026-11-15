@@ -241,13 +241,17 @@ export class DoctrineBot implements Controller {
     const friends = w.jets.filter((j) => j.side === me.side && j.alive);
     for (const e of w.jets) {
       if (e.side === me.side) continue;
-      if (e.alive && friends.some((f) => radarCanDetect(w, f, e))) {
+      if (!e.alive) {
+        this.tracks.delete(e.id);
+        continue;
+      }
+      if (friends.some((f) => radarCanDetect(w, f, e))) {
         this.tracks.set(e.id, { pos: { ...e.pos }, vel: velocity(e), t: w.t });
         continue;
       }
       const tr = this.tracks.get(e.id);
       if (!tr || w.t - tr.t < STALE_TRACK_S) continue;
-      // Should be in our radar coverage by now and is not seen: gone (dead, or we lost it for good).
+      // Should be in our radar coverage by now and is not seen: lost it for good.
       const guess = trackAt(tr, w.t).pos;
       const covered = friends.some((f) => {
         const d = len(sub(guess, f.pos)) / NM;
@@ -262,8 +266,12 @@ export class DoctrineBot implements Controller {
   }
 
   private updateTimers(w: World, me: Jet, dt: number): void {
+    const newlyAdded = new Set<string>();
     for (const m of w.missiles)
-      if (m.shooterId === me.id && !this.timers.has(m.id)) this.timers.set(m.id, startTimer(m, w.t));
+      if (m.shooterId === me.id && !this.timers.has(m.id)) {
+        this.timers.set(m.id, startTimer(m, w.t));
+        newlyAdded.add(m.id);
+      }
     for (const tm of this.timers.values()) {
       const enemy = jetById(w, tm.targetId);
       const datalink = !!enemy && radarCanTrack(w, me, enemy);
@@ -274,7 +282,9 @@ export class DoctrineBot implements Controller {
           : tr
             ? trackAt(tr, w.t)
             : null;
-      if (known && dt > 0) stepTimer(w.params.missile, tm, known, datalink, w.t, dt);
+      const stepDt = newlyAdded.has(tm.missileId) ? 0 : dt;
+      if (known && (stepDt > 0 || newlyAdded.has(tm.missileId)))
+        stepTimer(w.params.missile, tm, known, datalink, w.t, stepDt);
     }
   }
 
@@ -286,7 +296,9 @@ export class DoctrineBot implements Controller {
   /** Nearest known enemy, preferring one a wingman is not already targeting. */
   private chooseTarget(w: World, me: Jet): string | null {
     const taken = new Set(
-      w.jets.filter((j) => j.side === me.side && j.alive && j.id !== me.id).map((j) => j.targetId),
+      w.jets
+        .filter((j) => j.side === me.side && j.alive && j.id !== me.id && jetById(w, j.targetId)?.alive)
+        .map((j) => j.targetId),
     );
     let best: string | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
