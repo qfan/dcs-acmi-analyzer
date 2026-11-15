@@ -3,7 +3,7 @@ import { toWorld, type View } from "../../map/render.ts";
 import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
-import { AI_SKILL_ORDER, AI_SKILLS, DoctrineBot } from "../ai/doctrine.ts";
+import { AI_SKILL_CHOICES, DoctrineBot, type NpcStatus, skillChoiceLabel } from "../ai/doctrine.ts";
 import { availableG, type Jet, mach, type Throttle } from "../sim/aircraft.ts";
 import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
@@ -24,6 +24,7 @@ import {
   type World,
   waitingOnMissiles,
 } from "../sim/world.ts";
+import { BGM_TRACKS, type BgmPlayer, createBgmPlayer } from "./bgm.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { DEFAULT_AUTOPAUSE, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
@@ -48,6 +49,7 @@ export function GameApp() {
   const [showParams, setShowParams] = useState(false);
   const [endSeen, setEndSeen] = useState(false);
   const [labels, setLabels] = useState(true);
+  const [radarSectors, setRadarSectors] = useState(true);
   const [follow, setFollow] = useState(true);
   /** Fog of war: off by default each time the page opens. */
   const [fog, setFog] = useState(false);
@@ -60,7 +62,18 @@ export function GameApp() {
   };
   const [flash, setFlash] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [bgmOn, setBgmOn] = useState(false);
+  const bgmRef = useRef<BgmPlayer | null>(null);
   const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const player = createBgmPlayer();
+    bgmRef.current = player;
+    return () => {
+      player.dispose();
+      bgmRef.current = null;
+    };
+  }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -70,6 +83,8 @@ export function GameApp() {
   followRef.current = follow;
   const labelsRef = useRef(labels);
   labelsRef.current = labels;
+  const radarSectorsRef = useRef(radarSectors);
+  radarSectorsRef.current = radarSectors;
 
   const start = useCallback(
     (id = scenarioId, alt = altFt) => {
@@ -78,7 +93,7 @@ export function GameApp() {
       setSession(s);
       setShowStart(false);
       setEndSeen(false);
-      saveLast(id, alt, options);
+      saveLast(id, alt, s.options);
       fitView(viewRef.current, s);
     },
     [scenarioId, altFt, params, options],
@@ -151,7 +166,7 @@ export function GameApp() {
   const exportFight = useCallback(
     async (mode: ExportMode) => {
       setShowExport(false);
-      if (!session) return;
+      if (!session?.recorder) return;
       const name = acmiFileName(session.scenarioId, session.altFt, session.startedAt);
       const blob = new Blob([session.recorder.text()], { type: "text/plain" });
       if (mode !== "viewer") downloadBlob(blob, name);
@@ -213,7 +228,7 @@ export function GameApp() {
         if (followRef.current) centerOnFight(v, session);
         if (ctx) {
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          hitsRef.current = drawScene(ctx, v, session, labelsRef.current);
+          hitsRef.current = drawScene(ctx, v, session, labelsRef.current, radarSectorsRef.current);
         }
       }
       if (now - lastHud > HUD_MS) {
@@ -347,16 +362,16 @@ export function GameApp() {
     const id = pickAt(sx ?? 0, sy ?? 0);
     const j = jetById(session.world, id);
     if (!j) return;
-    if (j.side === PLAYER_SIDE) {
-      if (!e.shiftKey) session.selected.clear();
-      if (e.shiftKey && session.selected.has(j.id)) session.selected.delete(j.id);
+    if (j.side === PLAYER_SIDE || session.watch) {
+      if (!e.shiftKey || session.watch) session.selected.clear();
+      if (e.shiftKey && !session.watch && session.selected.has(j.id)) session.selected.delete(j.id);
       else session.selected.add(j.id);
       setTick((t) => t + 1);
     } else if (j.alive) issue((mine) => ({ type: "target", jetId: mine.id, targetId: j.id }));
   };
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!session) return;
+    if (!session || session.watch) return;
     const [sx, sy] = local(e);
     const [wx, wy] = toWorld(viewRef.current, sx ?? 0, sy ?? 0);
     issue((j) => ({
@@ -390,6 +405,9 @@ export function GameApp() {
   const w = session?.world;
   const p = session?.primary();
   const tgt = p ? jetById(w ?? null, p.targetId) : undefined;
+  const pAi = session && p ? npcStatus(session, p.id) : null;
+  const npcControlled = !!session?.watch || pAi !== null;
+  const watchJets = session?.watch && w ? w.jets.filter((j) => j.alive && session.sees(j.id)) : [];
   const ended = !!w?.outcome;
   const scenario = scenarioById(session?.scenarioId ?? scenarioId);
 
@@ -399,8 +417,8 @@ export function GameApp() {
         <strong className="g-title">BVR Trainer</strong>
         <span className="g-muted g-hide-narrow">
           {scenario.title} · {(session?.altFt ?? altFt).toLocaleString()} ft
-          {session?.watch ? " · watching NPC vs NPC" : ""}
         </span>
+        {session?.watch && <span className="g-watch-badge">NPC vs NPC · Watch</span>}
         <span className="g-grow" />
         {session && (
           <>
@@ -434,6 +452,28 @@ export function GameApp() {
         )}
         <button
           type="button"
+          className={`g-bgm ${bgmOn ? "on" : ""}`}
+          aria-pressed={bgmOn}
+          aria-label={bgmOn ? "Disable background music" : "Enable background music"}
+          disabled={!BGM_TRACKS.length}
+          onClick={(e) => {
+            const next = !bgmOn;
+            setBgmOn(next);
+            bgmRef.current?.setEnabled(next);
+            e.currentTarget.blur(); // keep Space and the game keys working
+          }}
+          title={
+            BGM_TRACKS.length
+              ? bgmOn
+                ? "Background music: ON (click to disable)"
+                : "Background music: OFF (click to enable)"
+              : "No background music tracks available"
+          }
+        >
+          ♫
+        </button>
+        <button
+          type="button"
           className={`g-fog ${fog ? "on" : ""}`}
           aria-pressed={fog}
           onClick={(e) => {
@@ -460,15 +500,19 @@ export function GameApp() {
         <div className="g-menu" ref={exportMenuRef}>
           <button
             type="button"
-            disabled={!session}
+            disabled={!session?.recorder}
             aria-haspopup="menu"
             aria-expanded={showExport}
             onClick={() => setShowExport((v) => !v)}
-            title="Save this fight as a Tacview .acmi recording (works mid-fight too)"
+            title={
+              session && !session.recorder
+                ? "ACMI recording is disabled in infinite demo mode"
+                : "Save this fight as a Tacview .acmi recording (works mid-fight too)"
+            }
           >
             Export .acmi ▾
           </button>
-          {showExport && session && (
+          {showExport && session?.recorder && (
             <div className="g-menu-list" role="menu">
               <ExportButtons onExport={exportFight} />
             </div>
@@ -526,10 +570,51 @@ export function GameApp() {
               />{" "}
               Labels
             </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={radarSectors}
+                onChange={(e) => {
+                  setRadarSectors(e.target.checked);
+                  e.target.blur();
+                }}
+              />{" "}
+              Radar sectors
+            </label>
           </div>
         </div>
 
         <aside className="g-side">
+          {session?.watch && watchJets.length > 0 && (
+            <section className="g-card g-watch-bar" aria-label="Inspect AI jet">
+              <div className="g-watch-head">
+                <span className="g-muted">Inspect AI</span>
+                <span className="g-watch-mode">No player control</span>
+              </div>
+              <div className="g-watch-jets">
+                {watchJets.map((j) => {
+                  const st = npcStatus(session, j.id);
+                  const active = session.selected.has(j.id);
+                  return (
+                    <button
+                      type="button"
+                      key={j.id}
+                      className={`g-watch-jet ${active ? "on" : ""}`}
+                      onClick={() => {
+                        session.selected.clear();
+                        session.selected.add(j.id);
+                        setTick((t) => t + 1);
+                      }}
+                    >
+                      <span className="g-watch-dot" style={{ background: sideCol(j.side) }} />
+                      <span>{j.callsign}</span>
+                      {st && <span className={`g-ai-pill g-ai-pill-${st.state}`}>{st.state}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
           {session && p && w && (
             <section className="g-card">
               <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
@@ -554,103 +639,109 @@ export function GameApp() {
                 />
               </div>
               <RwrLine session={session} jet={p} />
-              <div className="g-row">
-                <span className="g-label">Throttle</span>
-                <div className="g-seg">
-                  {(["idle", "mil", "ab"] as Throttle[]).map((t) => (
+              {npcControlled ? (
+                <NpcBehaviorPanel session={session} jet={p} ai={pAi} tgt={tgt} params={w.params} />
+              ) : (
+                <>
+                  <div className="g-row">
+                    <span className="g-label">Throttle</span>
+                    <div className="g-seg">
+                      {(["idle", "mil", "ab"] as Throttle[]).map((t) => (
+                        <button
+                          type="button"
+                          key={t}
+                          className={p.throttle === t ? "on" : ""}
+                          onClick={(e) => {
+                            issue((j) => ({ type: "throttle", jetId: j.id, throttle: t }));
+                            e.currentTarget.blur();
+                          }}
+                        >
+                          {t.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="g-row">
+                    <span className="g-label">Turns</span>
+                    <div className="g-seg">
+                      {(["sustain", "normal", "max"] as const).map((t) => (
+                        <button
+                          type="button"
+                          key={t}
+                          className={p.effort === t ? "on" : ""}
+                          title={
+                            t === "sustain"
+                              ? "Hold speed / Mach (zero energy bleed when thrust allows)"
+                              : undefined
+                          }
+                          onClick={(e) => {
+                            issue((j) => ({ type: "effort", jetId: j.id, effort: t }));
+                            e.currentTarget.blur();
+                          }}
+                        >
+                          {t === "sustain"
+                            ? "Hold Spd"
+                            : t === "normal"
+                              ? `Normal ${w.params.aircraft.normalG} g`
+                              : `Max ${w.params.aircraft.gLimit} g`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="g-maneuvers">
+                    <button type="button" onClick={() => steerRel(CRANK_DEG, -1, "crank left")} title="Q">
+                      ↖ Crank L
+                    </button>
+                    <button type="button" onClick={() => steerRel(0, 1, "hot")} title="H">
+                      ↑ Hot
+                    </button>
+                    <button type="button" onClick={() => steerRel(CRANK_DEG, 1, "crank right")} title="E">
+                      Crank R ↗
+                    </button>
+                    <button type="button" onClick={() => steerRel(90, -1, "notch left", true)} title="A">
+                      ← Notch L
+                    </button>
+                    <button type="button" onClick={() => steerRel(180, 1, "cold", true)} title="C">
+                      ↓ Cold
+                    </button>
+                    <button type="button" onClick={() => steerRel(90, 1, "notch right", true)} title="D">
+                      Notch R →
+                    </button>
                     <button
                       type="button"
-                      key={t}
-                      className={p.throttle === t ? "on" : ""}
-                      onClick={(e) => {
-                        issue((j) => ({ type: "throttle", jetId: j.id, throttle: t }));
-                        e.currentTarget.blur();
-                      }}
+                      onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
+                      title="Insert (visual only for now)"
                     >
-                      {t.toUpperCase()}
+                      Chaff ({p.chaff})
                     </button>
-                  ))}
-                </div>
-              </div>
-              <div className="g-row">
-                <span className="g-label">Turns</span>
-                <div className="g-seg">
-                  {(["sustain", "normal", "max"] as const).map((t) => (
+                    <span />
                     <button
                       type="button"
-                      key={t}
-                      className={p.effort === t ? "on" : ""}
-                      title={
-                        t === "sustain"
-                          ? "Hold speed / Mach (zero energy bleed when thrust allows)"
-                          : undefined
-                      }
-                      onClick={(e) => {
-                        issue((j) => ({ type: "effort", jetId: j.id, effort: t }));
-                        e.currentTarget.blur();
-                      }}
+                      onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
+                      title="Delete (visual only for now)"
                     >
-                      {t === "sustain"
-                        ? "Hold Spd"
-                        : t === "normal"
-                          ? `Normal ${w.params.aircraft.normalG} g`
-                          : `Max ${w.params.aircraft.gLimit} g`}
+                      Flare ({p.flares})
                     </button>
-                  ))}
-                </div>
-              </div>
-              <div className="g-maneuvers">
-                <button type="button" onClick={() => steerRel(CRANK_DEG, -1, "crank left")} title="Q">
-                  ↖ Crank L
-                </button>
-                <button type="button" onClick={() => steerRel(0, 1, "hot")} title="H">
-                  ↑ Hot
-                </button>
-                <button type="button" onClick={() => steerRel(CRANK_DEG, 1, "crank right")} title="E">
-                  Crank R ↗
-                </button>
-                <button type="button" onClick={() => steerRel(90, -1, "notch left", true)} title="A">
-                  ← Notch L
-                </button>
-                <button type="button" onClick={() => steerRel(180, 1, "cold", true)} title="C">
-                  ↓ Cold
-                </button>
-                <button type="button" onClick={() => steerRel(90, 1, "notch right", true)} title="D">
-                  Notch R →
-                </button>
-                <button
-                  type="button"
-                  onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
-                  title="Insert (visual only for now)"
-                >
-                  Chaff ({p.chaff})
-                </button>
-                <span />
-                <button
-                  type="button"
-                  onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
-                  title="Delete (visual only for now)"
-                >
-                  Flare ({p.flares})
-                </button>
-              </div>
-              <ZoneBox session={session} />
-              <button
-                type="button"
-                className="g-fire"
-                disabled={!tgt?.alive || p.missiles <= 0}
-                onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
-                title="F"
-              >
-                FOX 3 {tgt?.alive ? `→ ${tgt.callsign}` : ""}
-              </button>
+                  </div>
+                  <ZoneBox session={session} />
+                  <button
+                    type="button"
+                    className="g-fire"
+                    disabled={!tgt?.alive || p.missiles <= 0}
+                    onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
+                    title="F"
+                  >
+                    FOX 3 {tgt?.alive ? `→ ${tgt.callsign}` : ""}
+                  </button>
+                </>
+              )}
             </section>
           )}
 
           {w && (
             <section className="g-card">
               <h3>Missiles</h3>
-              {session && <OwnMissileTimers session={session} />}
+              {session && (!session.watch || session.fog) && <OwnMissileTimers session={session} />}
               {!session?.fog && w.missiles.some((m) => !m.end) && (
                 <p className="g-muted g-truth">Truth (hidden with fog of war on):</p>
               )}
@@ -708,17 +799,30 @@ export function GameApp() {
           )}
 
           <section className="g-card g-help">
-            <h3>Controls</h3>
-            <p>
-              <b>Click</b> your jet to select (Shift adds) · <b>click</b> a bandit to target it ·{" "}
-              <b>right-click</b> map to set heading · <b>drag</b> to pan · <b>wheel</b> to zoom
-            </p>
-            <p>
-              <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd> hot
-              · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold ·{" "}
-              <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> turn mode ·{" "}
-              <kbd>Insert</kbd> chaff · <kbd>Delete</kbd> flare · <kbd>V</kbd> follow
-            </p>
+            <h3>{session?.watch ? "Watch Controls" : "Controls"}</h3>
+            {session?.watch ? (
+              <>
+                <p>
+                  <b>Click</b> any visible jet to inspect its AI · <b>drag</b> to pan · <b>wheel</b> to zoom
+                </p>
+                <p>
+                  <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>V</kbd> follow
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  <b>Click</b> your jet to select (Shift adds) · <b>click</b> a bandit to target it ·{" "}
+                  <b>right-click</b> map to set heading · <b>drag</b> to pan · <b>wheel</b> to zoom
+                </p>
+                <p>
+                  <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd>{" "}
+                  hot · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold
+                  · <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> turn mode ·{" "}
+                  <kbd>Insert</kbd> chaff · <kbd>Delete</kbd> flare · <kbd>V</kbd> follow
+                </p>
+              </>
+            )}
             <p className="g-muted">
               Map: radar wedges are ±{w?.params.radar.gimbalDeg ?? 60}°. Shaded out to{" "}
               {w?.params.radar.rangeNm ?? 70} nm is TWS lock range (fire and datalink); the dashed band out to{" "}
@@ -746,7 +850,12 @@ export function GameApp() {
         <StartDialog
           scenarioId={scenarioId}
           altFt={altFt}
-          onScenario={setScenarioId}
+          onScenario={(id) => {
+            setScenarioId(id);
+            if (scenarioById(id).allNpc && options.blueAi === null) {
+              setOptions((o) => ({ ...o, blueAi: o.redSkill }));
+            }
+          }}
           onAlt={setAltFt}
           options={options}
           onOptions={setOptions}
@@ -963,14 +1072,15 @@ function StartDialog({
             <div className="g-row">
               <span className="g-label">Bandits</span>
               <div className="g-seg">
-                {AI_SKILL_ORDER.map((k) => (
+                {AI_SKILL_CHOICES.map((k) => (
                   <button
                     type="button"
                     key={k}
                     className={options.redSkill === k ? "on" : ""}
                     onClick={() => onOptions({ ...options, redSkill: k })}
+                    title={k === "random" ? "Pick Easy, Normal, or Hard per NPC at spawn time" : undefined}
                   >
-                    {AI_SKILLS[k].label}
+                    {skillChoiceLabel(k)}
                   </button>
                 ))}
               </div>
@@ -978,24 +1088,33 @@ function StartDialog({
             <div className="g-row">
               <span className="g-label">Blue</span>
               <div className="g-seg">
-                <button
-                  type="button"
-                  className={options.blueAi === null ? "on" : ""}
-                  onClick={() => onOptions({ ...options, blueAi: null })}
-                >
-                  You fly
-                </button>
-                {AI_SKILL_ORDER.map((k) => (
+                {!sel.allNpc && (
                   <button
                     type="button"
-                    key={k}
-                    className={options.blueAi === k ? "on" : ""}
-                    onClick={() => onOptions({ ...options, blueAi: k })}
-                    title="The NPC flies blue too: watch NPC vs NPC"
+                    className={options.blueAi === null ? "on" : ""}
+                    onClick={() => onOptions({ ...options, blueAi: null })}
                   >
-                    NPC {AI_SKILLS[k].label}
+                    You fly
                   </button>
-                ))}
+                )}
+                {AI_SKILL_CHOICES.map((k) => {
+                  const activeBlue = sel.allNpc ? (options.blueAi ?? options.redSkill) : options.blueAi;
+                  return (
+                    <button
+                      type="button"
+                      key={k}
+                      className={activeBlue === k ? "on" : ""}
+                      onClick={() => onOptions({ ...options, blueAi: k })}
+                      title={
+                        k === "random"
+                          ? "Pick Easy, Normal, or Hard per Blue NPC at spawn time"
+                          : "The NPC flies blue too: watch NPC vs NPC"
+                      }
+                    >
+                      NPC {skillChoiceLabel(k)}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </>
@@ -1114,6 +1233,53 @@ function RwrLine({ session, jet }: { session: GameSession; jet: Jet }) {
 function npcState(session: GameSession, jetId: string): string | null {
   const c = session.world.controllers.get(jetId);
   return c instanceof DoctrineBot ? `NPC ${c.skill.label}: ${c.describe()}` : null;
+}
+
+function npcStatus(session: GameSession, jetId: string): NpcStatus | null {
+  const c = session.world.controllers.get(jetId);
+  return c instanceof DoctrineBot ? c.status() : null;
+}
+
+function NpcBehaviorPanel({
+  session,
+  jet,
+  ai,
+  tgt,
+  params,
+}: {
+  session: GameSession;
+  jet: Jet;
+  ai: NpcStatus | null;
+  tgt: Jet | undefined;
+  params: GameParams;
+}) {
+  const turnLabel =
+    jet.effort === "sustain"
+      ? "Hold Spd"
+      : jet.effort === "normal"
+        ? `Normal ${params.aircraft.normalG} g`
+        : `Max ${params.aircraft.gLimit} g`;
+  return (
+    <div className="g-npc-panel">
+      <div className="g-npc-head">
+        <span className="g-muted">{ai ? `NPC (${ai.skill})` : "NPC"}</span>
+        {ai && <span className={`g-ai-pill g-ai-pill-${ai.state}`}>{ai.state.toUpperCase()}</span>}
+      </div>
+      <div className="g-npc-detail">{ai ? ai.detail : "Flown automatically by AI."}</div>
+      <div className="g-npc-meta">
+        <span>
+          Throttle <b>{jet.throttle.toUpperCase()}</b>
+        </span>
+        <span>
+          Turns <b>{turnLabel}</b>
+        </span>
+        <span>
+          Target <b>{tgt?.alive ? tgt.callsign : "—"}</b>
+        </span>
+      </div>
+      {session.zone?.zone && <ZoneBox session={session} />}
+    </div>
+  );
 }
 
 function nearestKnownEnemy(

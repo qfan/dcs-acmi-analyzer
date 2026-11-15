@@ -1,5 +1,11 @@
 /** Scenarios: fights against the NPC (1v1, 2v2) and drills. Each builds a fresh world. */
-import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../ai/doctrine.ts";
+import {
+  AI_SKILL_ORDER,
+  AI_SKILLS,
+  type AiSkillChoice,
+  type AiSkillId,
+  DoctrineBot,
+} from "../ai/doctrine.ts";
 import { type Jet, makeJet, type Side } from "./aircraft.ts";
 import { FT, NM } from "./atmosphere.ts";
 import { ScriptedBot } from "./bot.ts";
@@ -9,10 +15,10 @@ import { makeWorld, type World } from "./world.ts";
 
 /** Who flies what. Drills ignore these (their opponents are scripted). */
 export interface ScenarioOptions {
-  /** NPC skill on the red side. */
-  redSkill: AiSkillId;
+  /** NPC skill choice on the red side ("random" picks per NPC at spawn time). */
+  redSkill: AiSkillChoice;
   /** null: you fly blue. Otherwise the NPC flies blue too (watch mode: NPC vs NPC). */
-  blueAi: AiSkillId | null;
+  blueAi: AiSkillChoice | null;
 }
 
 export const DEFAULT_OPTIONS: ScenarioOptions = { redSkill: "normal", blueAi: null };
@@ -25,6 +31,8 @@ export interface Scenario {
   lesson: string;
   /** Fights against the NPC: skill choices apply, and blue can be flown by the NPC. */
   npc: boolean;
+  /** Always flown by NPCs on both sides (infinite demo mode). */
+  allNpc?: boolean;
   build(params: GameParams, altFt: number, seed: number, opts?: ScenarioOptions): World;
 }
 
@@ -105,18 +113,116 @@ function preTargetBlue(w: World): void {
   }
 }
 
+/** Helper to create one jet with default countermeasures and fuel/missile config from params. */
+function spawnJet(
+  params: GameParams,
+  init: {
+    id: string;
+    side: Side;
+    callsign: string;
+    x: number;
+    y: number;
+    altM: number;
+    hdgDeg: number;
+  },
+): Jet {
+  const j = makeJet(params.aircraft, { ...init, mach: MACH });
+  j.chaff = Math.max(0, Math.round(params.countermeasures.chaff));
+  j.flares = Math.max(0, Math.round(params.countermeasures.flares));
+  return j;
+}
+
+/** Resolves a skill choice to a concrete NPC skill for one spawned jet. */
+function pickSkill(w: World, choice: AiSkillChoice): AiSkillId {
+  if (choice !== "random") return choice;
+  return AI_SKILL_ORDER[Math.floor(w.rng() * AI_SKILL_ORDER.length)] ?? "normal";
+}
+
 /** Puts NPC pilots in the jets the options say (multi-ship wingmen split on first merge; singletons randomize). */
 function crewNpcs(w: World, opts: ScenarioOptions): void {
-  const crew = (side: Side, skill: AiSkillId) => {
+  const crew = (side: Side, choice: AiSkillChoice) => {
     const jets = w.jets.filter((x) => x.side === side);
     let dir: 1 | -1 | null = jets.length > 1 ? (w.rng() < 0.5 ? 1 : -1) : null;
     for (const j of jets) {
-      w.controllers.set(j.id, new DoctrineBot(AI_SKILLS[skill], dir));
+      w.controllers.set(j.id, new DoctrineBot(AI_SKILLS[pickSkill(w, choice)], dir));
       if (dir !== null) dir = dir === 1 ? -1 : 1;
     }
   };
   crew("red", opts.redSkill);
   if (opts.blueAi) crew("blue", opts.blueAi);
+}
+
+interface SpawnSlot {
+  side: Side;
+  x: number;
+  y: number;
+  altM: number;
+  hdgDeg: number;
+  choice: AiSkillChoice;
+  dir: 1 | -1;
+}
+
+const DEMO_RANGE_NM = 120;
+const DEMO_ROW_COLS = 3;
+const DEMO_ROW_SPACE_NM = 5;
+const DEMO_TRAIL_NM = 20;
+
+function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts: ScenarioOptions): World {
+  const w = makeWorld(params, seed);
+  w.infinite = true;
+  const altM = altFt * FT;
+  const blueChoice = opts.blueAi ?? opts.redSkill;
+  const redChoice = opts.redSkill;
+  const slots = new Map<string, SpawnSlot>();
+  const spawned: Record<Side, number> = { blue: 0, red: 0 };
+
+  const addSide = (side: Side, choice: AiSkillChoice) => {
+    const blue = side === "blue";
+    const hdgDeg = blue ? 0 : 180;
+    let dir: 1 | -1 = w.rng() < 0.5 ? 1 : -1;
+    for (let row = 0; row < 2; row++) {
+      const y = (blue ? (row === 0 ? 0 : -row * DEMO_TRAIL_NM) : DEMO_RANGE_NM + row * DEMO_TRAIL_NM) * NM;
+      for (let col = 0; col < DEMO_ROW_COLS; col++) {
+        const x = (col - (DEMO_ROW_COLS - 1) / 2) * DEMO_ROW_SPACE_NM * NM;
+        const n = ++spawned[side];
+        const id = `${blue ? "B" : "R"}${n}`;
+        const callsign = `${blue ? "Viper" : "Bandit"} ${n}`;
+        const slot: SpawnSlot = { side, x, y, altM, hdgDeg, choice, dir };
+        slots.set(id, slot);
+        w.jets.push(spawnJet(params, { id, side, callsign, x, y, altM, hdgDeg }));
+        w.controllers.set(id, new DoctrineBot(AI_SKILLS[pickSkill(w, choice)], dir));
+        dir = dir === 1 ? -1 : 1;
+      }
+    }
+  };
+
+  addSide("blue", blueChoice);
+  addSide("red", redChoice);
+
+  w.respawn = (world, dead) => {
+    const slot = slots.get(dead.id);
+    if (!slot) return null;
+    slots.delete(dead.id);
+    const blue = slot.side === "blue";
+    const n = ++spawned[slot.side];
+    const id = `${blue ? "B" : "R"}${n}`;
+    const callsign = `${blue ? "Viper" : "Bandit"} ${n}`;
+    slots.set(id, slot);
+    return {
+      jet: spawnJet(params, {
+        id,
+        side: slot.side,
+        callsign,
+        x: slot.x,
+        y: slot.y,
+        altM: slot.altM,
+        hdgDeg: slot.hdgDeg,
+      }),
+      controller: new DoctrineBot(AI_SKILLS[pickSkill(world, slot.choice)], slot.dir),
+    };
+  };
+
+  return w;
 }
 
 export const SCENARIOS: Scenario[] = [
@@ -146,6 +252,19 @@ export const SCENARIOS: Scenario[] = [
       crewNpcs(w, opts);
       if (!opts.blueAi) preTargetBlue(w);
       return w;
+    },
+  },
+  {
+    id: "infinite",
+    title: "6v6 Endless Demo",
+    summary:
+      "6v6 all-NPC battle from 120 nm in 3x2 waves. Destroyed jets respawn at their initial slot with no end condition.",
+    lesson:
+      "Both sides spawn in two 3-ship lines (5 nm lateral spacing, 20 nm in trail) separated by 120 nm. Any lost aircraft is replaced at its starting post so the BVR engagement runs indefinitely. ACMI recording is disabled in this mode.",
+    npc: true,
+    allNpc: true,
+    build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
+      return buildInfiniteDemo(params, altFt, seed, opts);
     },
   },
   {

@@ -37,6 +37,7 @@ describe("game: .acmi export", () => {
   it("reads back with the shot, its shooter and the kill", async () => {
     const s = supportedShot();
     expect(s.world.events.some((e) => e.type === "kill")).toBe(true);
+    if (!s.recorder) throw new Error("expected recorder");
     const text = s.recorder.text();
     expect(text.startsWith("FileType=text/acmi/tacview\nFileVersion=2.2\n")).toBe(true);
 

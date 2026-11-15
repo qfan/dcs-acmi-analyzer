@@ -30,6 +30,8 @@ export interface Jet {
   id: string;
   side: Side;
   callsign: string;
+  /** Initial spawn position (m), used for out-of-bounds loss checks. */
+  startPos: V3;
   /** Position (m): x east, y north, z altitude MSL. */
   pos: V3;
   /** Heading (rad, clockwise from north), flight-path angle (rad), true airspeed (m/s). */
@@ -69,6 +71,7 @@ export function makeJet(
     id: init.id,
     side: init.side,
     callsign: init.callsign,
+    startPos: { x: init.x, y: init.y, z: init.altM },
     pos: { x: init.x, y: init.y, z: init.altM },
     hdg,
     gamma: 0,

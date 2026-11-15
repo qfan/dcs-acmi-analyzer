@@ -48,6 +48,8 @@ export interface Missile {
   lostAt: number | null;
   /** Flight time before which the seeker cannot lock (just after a chaff break). */
   blindUntil: number;
+  /** Callsign cached on launch so in-flight events keep it if the shooter is removed in infinite mode. */
+  shooterCallsign?: string;
   end: MissileEnd | null;
 }
 

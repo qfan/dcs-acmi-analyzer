@@ -96,7 +96,7 @@ function bisect(hits: (rangeM: number) => boolean, hiNm: number): number {
   return Math.round(lo * 10) / 10;
 }
 
-export function launchZone(p: MissileParams, shooter: Jet, target: Jet, maxNm = 90): LaunchZone {
+function launchGeometry(shooter: Jet, target: Jet) {
   const sv = velocity(shooter);
   const tv = velocity(target);
   const los = sub(target.pos, shooter.pos);
@@ -107,7 +107,11 @@ export function launchZone(p: MissileParams, shooter: Jet, target: Jet, maxNm = 
     y: shooter.pos.y + u.y * r,
     z: shooter.pos.z + dz,
   });
-  const tSpeed = len(tv);
+  return { sv, tv, los, u, tSpeed: len(tv), at };
+}
+
+export function launchZone(p: MissileParams, shooter: Jet, target: Jet, maxNm = 90): LaunchZone {
+  const { sv, tv, los, u, tSpeed, at } = launchGeometry(shooter, target);
   const away = { x: u.x * tSpeed, y: u.y * tSpeed, z: 0 };
   return {
     rangeNm: len(los) / NM,
@@ -115,4 +119,11 @@ export function launchZone(p: MissileParams, shooter: Jet, target: Jet, maxNm = 
     rneNm: bisect((r) => flyout(p, shooter.pos, sv, at(r), away).hit, maxNm),
     now: flyout(p, shooter.pos, sv, target.pos, tv),
   };
+}
+
+/** Rmax (nm) assuming the target faces straight head-on along the line of sight at its current speed and altitude. */
+export function headOnRmaxNm(p: MissileParams, shooter: Jet, target: Jet, maxNm = 90): number {
+  const { sv, u, tSpeed, at } = launchGeometry(shooter, target);
+  const headOn = { x: -u.x * tSpeed, y: -u.y * tSpeed, z: 0 };
+  return bisect((r) => flyout(p, shooter.pos, sv, at(r), headOn).hit, maxNm);
 }

@@ -11,6 +11,11 @@ import { makeRng, type Rng } from "./rng.ts";
 import { add, angleBetween, bearing, headingVec, len, scale, sub, type V3 } from "./vec.ts";
 
 export const SIM_DT = 0.02;
+/** Maximum distance (nm) a jet may travel from its initial position before counting as a loss. */
+export const MAX_ROAM_NM = 500;
+/** In infinite demo mode, winchester jets retire and respawn after staying this far clear (nm) for >10 s. */
+export const EGRESS_RETIRE_NM = 50;
+export const EGRESS_RETIRE_S = 10;
 /** How long a released chaff bundle or flare stays on the map (s). */
 const DECOY_LIFE_S = 4;
 
@@ -31,6 +36,7 @@ export type GameEventType =
   | "rwr-missile"
   | "chaff"
   | "flare"
+  | "rtb"
   | "end";
 
 export interface GameEvent {
@@ -71,6 +77,9 @@ export interface Controller {
   update(world: World, jet: Jet): Command[];
 }
 
+/** Builds a replacement jet (and optional controller) when a jet is destroyed in infinite mode. */
+export type JetRespawner = (world: World, dead: Jet) => { jet: Jet; controller?: Controller } | null;
+
 /** How a fight ended. "trade": both sides destroyed. "draw": nobody destroyed (out of missiles or time). */
 export type Outcome = { winner: Side | null; kind: "win" | "loss" | "trade" | "draw"; reason: string };
 
@@ -91,6 +100,14 @@ export interface World {
   /** "radarJetId>targetJetId" → sim time until which that radar cannot lock the target (chaff). */
   radarBreak: Map<string, number>;
   outcome: Outcome | null;
+  /** Number of early events trimmed from `events` in infinite mode, to keep HUD cursors aligned. */
+  eventOffset: number;
+  /** Infinite demo mode: skips outcome checks, respawns killed jets, and bounds retained history. */
+  infinite: boolean;
+  /** In infinite mode: sim time each winchester jet began staying >=50 nm clear of enemies. */
+  egressSafeSince: Map<string, number>;
+  /** Optional builder invoked when a jet is lost in infinite mode to spawn its replacement. */
+  respawn?: JetRespawner;
   /** The fight ends as a draw after this long (s). */
   timeLimitS: number;
   /** "survive": the blue side wins by outliving every red missile. */
@@ -114,6 +131,9 @@ export function makeWorld(params: GameParams, seed = 1): World {
     rwrSeen: new Set(),
     radarBreak: new Map(),
     outcome: null,
+    eventOffset: 0,
+    infinite: false,
+    egressSafeSince: new Map(),
     timeLimitS: 900,
     objective: "kill",
     callAt: null,
@@ -290,6 +310,7 @@ export function command(w: World, c: Command): string | null {
         vel: velocity(j),
         target: truthOf(tgt),
       });
+      m.shooterCallsign = j.callsign;
       w.missiles.push(m);
       const rangeNm = len(sub(tgt.pos, j.pos)) / NM;
       emit(w, {
@@ -368,7 +389,7 @@ export function step(w: World, dt = SIM_DT): void {
       cm: w.params.countermeasures,
       chaff: freshChaff.get(tgt.id) ?? null,
     });
-    const who = `${shooter?.callsign ?? "?"} ${m.id}`;
+    const who = `${shooter?.callsign ?? m.shooterCallsign ?? "?"} ${m.id}`;
     for (const e of evs) {
       if (e === "fuzed") {
         if (w.rng() < w.params.missile.pk) {
@@ -408,6 +429,22 @@ export function step(w: World, dt = SIM_DT): void {
   w.decoys = w.decoys.filter((d) => w.t - d.t0 < DECOY_LIFE_S);
   for (const d of w.decoys) d.pos = add(d.pos, scale(d.vel, dt));
 
+  // Any jet 500 nm or further from its initial spawn location counts as a loss.
+  const maxRoamM = MAX_ROAM_NM * NM;
+  for (const j of w.jets) {
+    if (!j.alive) continue;
+    if (len(sub(j.pos, j.startPos)) >= maxRoamM) {
+      j.alive = false;
+      j.g = 1;
+      emit(w, {
+        type: "kill",
+        side: j.side === "blue" ? "red" : "blue",
+        targetId: j.id,
+        text: `${j.callsign} lost (departed ${MAX_ROAM_NM} nm from initial position)`,
+      });
+    }
+  }
+
   // Announce each active missile the first time it shows on a jet's RWR.
   for (const j of w.jets) {
     if (!j.alive) continue;
@@ -426,7 +463,99 @@ export function step(w: World, dt = SIM_DT): void {
       });
     }
   }
-  checkOutcome(w);
+  if (w.infinite) maintainInfiniteWorld(w);
+  else checkOutcome(w);
+}
+
+const MAX_INFINITE_EVENTS = 150;
+
+function retireSafeEgressJets(w: World): void {
+  const safeM = EGRESS_RETIRE_NM * NM;
+  const toRetire: Jet[] = [];
+  for (const j of w.jets) {
+    if (!j.alive) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    const winchester = j.missiles === 0 && !w.missiles.some((m) => !m.end && m.shooterId === j.id);
+    if (!winchester) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    const threatened =
+      rwrContacts(w, j).some((c) => c.kind === "missile") ||
+      w.missiles.some((m) => !m.end && m.phase !== "lost" && m.targetId === j.id);
+    if (threatened) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    let nearestM = Number.POSITIVE_INFINITY;
+    for (const e of w.jets) {
+      if (e.side !== j.side && e.alive) nearestM = Math.min(nearestM, len(sub(e.pos, j.pos)));
+    }
+    if (nearestM < safeM) {
+      w.egressSafeSince.delete(j.id);
+      continue;
+    }
+    const since = w.egressSafeSince.get(j.id);
+    if (since === undefined) w.egressSafeSince.set(j.id, w.t);
+    else if (w.t - since > EGRESS_RETIRE_S) toRetire.push(j);
+  }
+  for (const j of toRetire) {
+    j.alive = false;
+    j.g = 1;
+    w.egressSafeSince.delete(j.id);
+    emit(w, {
+      type: "rtb",
+      side: j.side,
+      jetId: j.id,
+      text: `${j.callsign} RTB (winchester, >${EGRESS_RETIRE_NM} nm clear) — replaced`,
+    });
+  }
+}
+
+function maintainInfiniteWorld(w: World): void {
+  retireSafeEgressJets(w);
+  const dead = w.jets.filter((j) => !j.alive);
+  if (dead.length > 0) {
+    const deadIds = new Set(dead.map((d) => d.id));
+    for (const d of dead) {
+      w.egressSafeSince.delete(d.id);
+      w.controllers.delete(d.id);
+      w.radarTrack.delete(d.id);
+      const rep = w.respawn?.(w, d);
+      if (rep) {
+        w.jets.push(rep.jet);
+        if (rep.controller) w.controllers.set(rep.jet.id, rep.controller);
+        w.radarTrack.set(rep.jet.id, false);
+      }
+    }
+    w.jets = w.jets.filter((j) => j.alive);
+    for (const [key, until] of w.radarBreak) {
+      if (until <= w.t) {
+        w.radarBreak.delete(key);
+        continue;
+      }
+      const sep = key.indexOf(">");
+      if (sep >= 0 && (deadIds.has(key.slice(0, sep)) || deadIds.has(key.slice(sep + 1)))) {
+        w.radarBreak.delete(key);
+      }
+    }
+  }
+  if (w.missiles.some((m) => m.end !== null)) {
+    w.missiles = w.missiles.filter((m) => !m.end);
+    const liveMissiles = new Set(w.missiles.map((m) => m.id));
+    for (const key of w.rwrSeen) {
+      const sep = key.indexOf(">");
+      const mid = sep >= 0 ? key.slice(0, sep) : key;
+      if (!liveMissiles.has(mid)) w.rwrSeen.delete(key);
+    }
+  }
+  if (w.events.length > MAX_INFINITE_EVENTS) {
+    const drop = w.events.length - MAX_INFINITE_EVENTS;
+    w.events.splice(0, drop);
+    w.eventOffset += drop;
+  }
 }
 
 /**
@@ -443,7 +572,7 @@ export function missileThreatens(w: World, m: Missile): boolean {
  * they hit or are defeated (you can still die after the last bandit falls, or trade with your last shot).
  */
 export function waitingOnMissiles(w: World): boolean {
-  if (w.outcome) return false;
+  if (w.infinite || w.outcome) return false;
   const alive = (s: Side) => w.jets.some((j) => j.side === s && j.alive);
   return (!alive("blue") || !alive("red")) && w.missiles.some((m) => missileThreatens(w, m));
 }
@@ -453,7 +582,7 @@ export function waitingOnMissiles(w: World): boolean {
  * waiting out its random delay. The UI shows a banner; with fog of war it must not say why.
  */
 export function awaitingCall(w: World): boolean {
-  if (w.outcome) return false;
+  if (w.infinite || w.outcome) return false;
   const alive = (s: Side) => w.jets.some((j) => j.side === s && j.alive);
   return !alive("blue") || !alive("red") || w.callAt !== null;
 }

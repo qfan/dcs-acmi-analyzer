@@ -16,8 +16,8 @@ import { type Jet, type Steer, velocity } from "../sim/aircraft.ts";
 import { DEG, NM } from "../sim/atmosphere.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import { type Rng, randNormal } from "../sim/rng.ts";
-import { bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
-import { launchZone } from "../sim/wez.ts";
+import { angleBetween, bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
+import { headOnRmaxNm, launchZone } from "../sim/wez.ts";
 import {
   type Command,
   type Controller,
@@ -42,6 +42,10 @@ export interface AiSkill {
   pumpS: number;
   /** Keeps defending this long (s) after the missile leaves the RWR. */
   defendHoldS: number;
+  /** Fires a posture shot near head-on Rmax when carrying plenty of missiles (even if the enemy cranks). */
+  postureShot: boolean;
+  /** Takes high-Pk opportunity shots at other TWS-tracked enemies in lethal range. */
+  opportunityShot: boolean;
 }
 
 export type AiSkillId = "easy" | "normal" | "hard";
@@ -55,6 +59,8 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: false,
     pumpS: 0,
     defendHoldS: 3,
+    postureShot: false,
+    opportunityShot: false,
   },
   normal: {
     label: "Normal",
@@ -64,6 +70,8 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 15,
     defendHoldS: 6,
+    postureShot: false,
+    opportunityShot: true,
   },
   hard: {
     label: "Hard",
@@ -73,15 +81,40 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 20,
     defendHoldS: 8,
+    postureShot: true,
+    opportunityShot: true,
   },
 };
 
 export const AI_SKILL_ORDER: AiSkillId[] = ["easy", "normal", "hard"];
+export type AiSkillChoice = AiSkillId | "random";
+export const AI_SKILL_CHOICES: readonly AiSkillChoice[] = [...AI_SKILL_ORDER, "random"];
+export const skillChoiceLabel = (c: AiSkillChoice): string =>
+  c === "random" ? "Random" : AI_SKILLS[c].label;
 
 /** Each missile already used moves the next shot this much closer (fraction of the Rne..Rmax span). */
 const SHOT_CLOSER_PER_MISSILE = 0.35;
 /** How often (s) the NPC re-estimates its Rmax against its target (the flyouts cost a few ms). */
 const ZONE_EVERY_S = 2;
+/** Minimum missiles remaining to keep firing posture shots regardless of initial load. */
+const POSTURE_MISSILES_MIN = 8;
+/** Only fire a posture shot when the target is not already cold/running away (aspect <= 95 deg). */
+const POSTURE_MAX_ASPECT_RAD = 95 * DEG;
+/** Treat an enemy still facing within crank angles (<= 70 deg) as head-on-capable so cranks don't lock out follow-ups. */
+const CRANK_ASPECT_RAD = 70 * DEG;
+/** Fraction of Rne..Rmax span for the final missile so engagements resolve cleanly inside WEZ. */
+const LAST_MISSILE_FRAC = 0.03;
+/** Fraction of Rne..Rmax span within which a secondary TWS target qualifies for an opportunity shot. */
+const OPP_SHOT_FRAC = 0.45;
+/** Deconfliction distance penalty per closer/peer friendly targeting the same enemy (m). */
+const SORT_TAKEN_PENALTY_M = 18 * NM;
+/** Peer proximity allowance so rear/respawned friendlies do not push frontline jets off closer targets. */
+const SORT_PEER_MARGIN_M = 8 * NM;
+/** Off-boresight penalty at full 60° gimbal edge so same-lane ahead bandits are preferred. */
+const SORT_ANGLE_WEIGHT_M = 8 * NM;
+/** Target hysteresis bonus for current target vs. a target with an active pre-pitbull missile. */
+const SORT_KEEP_TARGET_M = 4 * NM;
+const SORT_SUPPORT_BONUS_M = 22 * NM;
 /** A dead-reckoned track that should be inside our radar coverage but is not seen is dropped. */
 const STALE_TRACK_S = 4;
 /** Re-steer only when the wanted heading moved this much (avoids a command every step). */
@@ -91,6 +124,8 @@ const OFFSET_DECISION_RAD = 12 * DEG;
 /** Intermediate cold-turn offset (< 180°) while rotating past beam so head-on breaks actually go left or right. */
 const COLD_COMMIT_OFFSET_DEG = 160;
 const COLD_PAST_BEAM_RAD = 120 * DEG;
+/** Brief hold (s) after leaving an unlocked missile's illumination cone (e.g. a missile chasing another jet). */
+const UNLOCKED_ILLUM_HOLD_S = 0.5;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -102,10 +137,18 @@ function sampleScale(rng: Rng, sigma: number, cap = 2): number {
 
 export type AiState = "commit" | "support" | "pump" | "defend" | "egress";
 
+export interface NpcStatus {
+  skill: string;
+  state: AiState;
+  detail: string;
+}
+
 export class DoctrineBot implements Controller {
   readonly skill: AiSkill;
   state: AiState = "commit";
+  private actionDetail = "Ready — committing hot";
   private readonly tracks = new Map<string, TargetTrack>();
+  private readonly oppZones = new Map<string, { at: number; rmaxNm: number; rneNm: number }>();
   private readonly timers = new Map<string, MissileTimer>();
   private readonly rwrFirstSeen = new Map<string, number>();
   private readonly rwrReactionS = new Map<string, number>();
@@ -115,6 +158,7 @@ export class DoctrineBot implements Controller {
   private defendFrom: string | null = null;
   private defendDir: 1 | -1 | null = null;
   private defendHoldS = 0;
+  private defendLocked = false;
   private pumpDir: 1 | -1 | null = null;
   private egressDir: 1 | -1 | null = null;
   private lastT: number | null = null;
@@ -122,14 +166,17 @@ export class DoctrineBot implements Controller {
   private zoneFor: string | null = null;
   private rmaxNm = 0;
   private rneNm = 0;
+  private headOnRmaxNm = 0;
   /** Optional initial formation crank bias (wingmen split opposite ways on first merge). */
   private preferredCrankDir: 1 | -1 | null;
   private crankDir: 1 | -1 = 1;
   private supportTarget: string | null = null;
   /** This pilot's own spread around the skill (set on the first update from the world's seed). */
   private shotScale = 1;
+  private postureScale = 1;
   private reactionScale = 1;
   private initialMissiles: number | null = null;
+  private postureShotsFired = 0;
 
   constructor(skill: AiSkill, preferredCrankDir: 1 | -1 | null = null) {
     this.skill = skill;
@@ -142,6 +189,7 @@ export class DoctrineBot implements Controller {
       // Capped normal spread around the skill so mirrored pilots diverge without leaving their tier.
       this.initialMissiles = me.missiles;
       this.shotScale = clamp(sampleScale(w.rng, 0.075), 0.85, 1.15);
+      this.postureScale = clamp(sampleScale(w.rng, 0.03), 0.94, 1.06);
       this.reactionScale = clamp(sampleScale(w.rng, 0.12), 0.76, 1.24);
     }
     this.lastT = w.t;
@@ -154,6 +202,13 @@ export class DoctrineBot implements Controller {
 
     // RWR: keep defending for as long as any active missile remains on RWR (after a capped normal reaction delay).
     const missiles = rwrContacts(w, me).filter((c) => c.kind === "missile");
+    const liveMissileIds = new Set(w.missiles.filter((m) => !m.end).map((m) => m.id));
+    for (const id of this.rwrFirstSeen.keys()) {
+      if (!liveMissileIds.has(id)) {
+        this.rwrFirstSeen.delete(id);
+        this.rwrReactionS.delete(id);
+      }
+    }
     for (const c of missiles) {
       if (!this.rwrFirstSeen.has(c.sourceId)) {
         this.rwrFirstSeen.set(c.sourceId, t);
@@ -169,30 +224,42 @@ export class DoctrineBot implements Controller {
     });
     const threat = reacted.find((c) => c.lock) ?? reacted[0];
     if (threat) {
-      if (this.state !== "defend" || this.defendFrom !== threat.sourceId) {
+      const sameThreat = this.state === "defend" && this.defendFrom === threat.sourceId;
+      if (!sameThreat) {
         this.defendDir = this.chooseSide(w, me, threat.bearing);
         this.defendHoldS = s.defendHoldS * clamp(sampleScale(w.rng, 0.1), 0.8, 1.2);
+        this.defendLocked = threat.lock;
+      } else if (threat.lock) {
+        this.defendLocked = true;
       }
       this.defendFrom = threat.sourceId;
-      this.defendUntil = t + this.defendHoldS;
+      const holdS = this.defendLocked ? this.defendHoldS : Math.min(this.defendHoldS, UNLOCKED_ILLUM_HOLD_S);
+      this.defendUntil = t + holdS;
     }
 
-    const target = this.chooseTarget(w, me);
     const myInFlight = [...this.timers.values()].filter((tm) => this.timerActive(tm, t));
+    const target = this.chooseTarget(w, me, myInFlight);
 
     if (t < this.defendUntil && this.defendFrom) {
       this.state = "defend";
       out.push(...this.fly(me, "ab", "max"));
       const rwrThreat = missiles.find((c) => c.sourceId === this.defendFrom);
-      const offsetDeg = rwrThreat ? this.coldOffsetDeg(me, rwrThreat.bearing) : 180;
-      // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
-      out.push(
-        ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
-      );
+      if (rwrThreat) {
+        const offsetDeg = this.coldOffsetDeg(me, rwrThreat.bearing);
+        this.actionDetail = `Turning cold from active missile (${rwrThreat.lock ? "locked" : "searching"})`;
+        // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
+        out.push(
+          ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
+        );
+      } else {
+        this.actionDetail = `Holding cold evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
+        out.push(...this.setHeading(me, me.hdg));
+      }
       return out;
     }
     this.defendFrom = null;
     this.defendDir = null;
+    this.defendLocked = false;
 
     // Pump once per missile after it went active (if this skill does), then re-commit.
     if (s.pumpAfterPitbull)
@@ -206,6 +273,7 @@ export class DoctrineBot implements Controller {
       const brg = this.trackBearing(me, target);
       if (this.state !== "pump") this.pumpDir = brg === null ? 1 : this.chooseSide(w, me, brg);
       this.state = "pump";
+      this.actionDetail = `Pumping cold after pitbull (${Math.max(0, Math.ceil(this.pumpUntil - t))} s left)`;
       out.push(...this.fly(me, "ab", "normal"));
       const offsetDeg = brg === null ? 180 : this.coldOffsetDeg(me, brg);
       out.push(...this.steerVsTrack(me, target, offsetDeg, this.pumpDir ?? 1));
@@ -217,6 +285,7 @@ export class DoctrineBot implements Controller {
       const brg = target ? this.trackBearing(me, target) : null;
       if (this.state !== "egress") this.egressDir = brg === null ? 1 : this.chooseSide(w, me, brg);
       this.state = "egress";
+      this.actionDetail = "Out of missiles — leaving cold";
       out.push(...this.fly(me, "mil", "normal"));
       if (target) {
         const offsetDeg = brg === null ? 180 : this.coldOffsetDeg(me, brg);
@@ -229,6 +298,7 @@ export class DoctrineBot implements Controller {
     out.push(...this.fly(me, "mil", "normal"));
     if (!target) {
       this.state = "commit";
+      this.actionDetail = "Searching — no radar track";
       return out; // nothing known: hold heading until something shows up
     }
     if (me.targetId !== target) out.push({ type: "target", jetId: me.id, targetId: target });
@@ -245,6 +315,8 @@ export class DoctrineBot implements Controller {
         this.supportTarget = target;
       }
       this.state = "support";
+      this.actionDetail = `Cranking ${s.crankDeg}° ${this.crankDir > 0 ? "R" : "L"} — supporting ${supporting[0]?.missileId ?? "missile"} to pitbull`;
+      this.tryOpportunityShot(w, me, target, myInFlight, out);
       out.push(...this.steerVsTrack(me, target, s.crankDeg, this.crankDir));
       return out;
     }
@@ -259,6 +331,7 @@ export class DoctrineBot implements Controller {
     const onTarget = myInFlight.some(
       (tm) => tm.targetId === target && (!tm.ghost.pitbull || tm.impactAt !== null),
     );
+    let firedPrimary = false;
     if (enemy && me.missiles > 0 && !onTarget && radarCanTrack(w, me, enemy)) {
       if (this.zoneFor !== target || t - this.zoneAt >= ZONE_EVERY_S) {
         this.zoneAt = t;
@@ -266,11 +339,36 @@ export class DoctrineBot implements Controller {
         const zone = launchZone(w.params.missile, me, enemy);
         this.rmaxNm = zone.rmaxNm;
         this.rneNm = zone.rneNm;
+        this.headOnRmaxNm = this.skill.postureShot ? headOnRmaxNm(w.params.missile, me, enemy) : 0;
       }
       const rangeNm = len(sub(enemy.pos, me.pos)) / NM;
-      if (this.rmaxNm > 0 && rangeNm <= this.shotRangeNm(me))
+      const normalRange = this.rmaxNm > 0 ? this.shotRangeNm(me, enemy) : 0;
+      const postureActive = this.headOnRmaxNm > 0 && this.canPostureShot(me, enemy);
+      const postureRange = postureActive ? this.headOnRmaxNm * this.postureScale : 0;
+      const fireRangeNm = Math.max(normalRange, postureRange);
+      const usingPosture = postureActive && postureRange > normalRange;
+      if (fireRangeNm > 0 && rangeNm <= fireRangeNm) {
+        if (usingPosture) this.postureShotsFired++;
+        this.actionDetail = usingPosture
+          ? `Firing posture shot at ${rangeNm.toFixed(1)} nm`
+          : `Firing at ${rangeNm.toFixed(1)} nm`;
         out.push({ type: "fire", jetId: me.id, targetId: target });
+        firedPrimary = true;
+      } else if (fireRangeNm > 0) {
+        this.actionDetail = usingPosture
+          ? `Closing to posture-shot range (${fireRangeNm.toFixed(1)} nm)`
+          : `Closing to shot range (${fireRangeNm.toFixed(1)} nm)`;
+      } else {
+        this.actionDetail = "Closing hot — target outside WEZ";
+      }
+    } else if (me.missiles === 0) {
+      this.actionDetail = "Waiting on active missile in flight";
+    } else if (onTarget) {
+      this.actionDetail = "Tracking active missile — holding next shot";
+    } else {
+      this.actionDetail = "Turning hot — acquiring TWS lock";
     }
+    if (!firedPrimary) this.tryOpportunityShot(w, me, target, myInFlight, out);
     return out;
   }
 
@@ -279,19 +377,43 @@ export class DoctrineBot implements Controller {
     return this.state;
   }
 
+  /** Structured behaviour state and action summary for read-only UI inspection. */
+  status(): NpcStatus {
+    return { skill: this.skill.label, state: this.state, detail: this.actionDetail };
+  }
+
+  private canPostureShot(me: Jet, enemy: Jet): boolean {
+    if (!this.skill.postureShot || me.missiles <= 1) return false;
+    const initial = this.initialMissiles ?? me.missiles;
+    if (me.missiles < POSTURE_MISSILES_MIN && me.missiles < initial) return false;
+    // Only posture-shot enemies that are hot/cranking/beaming, not already running away cold.
+    return angleBetween(velocity(enemy), sub(me.pos, enemy.pos)) <= POSTURE_MAX_ASPECT_RAD;
+  }
+
   /**
-   * Range to shoot at: between Rne and Rmax, and closer with every missile already used. The first
-   * shot is long (it forces the enemy defensive); later ones get toward the no-escape range.
+   * Range to shoot at: between Rne and Rmax, and closer with every non-posture missile used.
+   * Opening posture shots don't prematurely shrink the combat timeline; the final missile holds
+   * until near Rne so fights resolve cleanly instead of stalemating.
    */
-  private shotRangeNm(me: Jet): number {
-    const used = Math.max(0, (this.initialMissiles ?? me.missiles) - me.missiles);
-    const frac = Math.min(1, this.skill.shotFrac * this.shotScale) * SHOT_CLOSER_PER_MISSILE ** used;
-    const rne = Math.min(this.rneNm, this.rmaxNm);
-    return rne + frac * (this.rmaxNm - rne);
+  private shotRangeNm(me: Jet, enemy: Jet): number {
+    const totalUsed = Math.max(0, (this.initialMissiles ?? me.missiles) - me.missiles);
+    const combatUsed = Math.max(0, totalUsed - this.postureShotsFired);
+    let frac = Math.min(1, this.skill.shotFrac * this.shotScale) * SHOT_CLOSER_PER_MISSILE ** combatUsed;
+    if (me.missiles === 1) frac = Math.min(frac, LAST_MISSILE_FRAC);
+    const aspect = angleBetween(velocity(enemy), sub(me.pos, enemy.pos));
+    // Cranking keeps the enemy inside our threat envelope; don't let their temporary crank lock out follow-ups.
+    const rmax =
+      this.headOnRmaxNm > 0 && aspect <= CRANK_ASPECT_RAD
+        ? Math.max(this.rmaxNm, this.headOnRmaxNm)
+        : this.rmaxNm;
+    const rne = Math.min(this.rneNm, rmax);
+    return rne + frac * (rmax - rne);
   }
 
   /** Known enemies: detected by our side's radars now, else dead-reckoned from the last detection. */
   private updateTracks(w: World, me: Jet): void {
+    for (const id of this.tracks.keys()) if (!jetById(w, id)?.alive) this.tracks.delete(id);
+    for (const id of this.oppZones.keys()) if (!jetById(w, id)?.alive) this.oppZones.delete(id);
     const friends = w.jets.filter((j) => j.side === me.side && j.alive);
     for (const e of w.jets) {
       if (e.side === me.side) continue;
@@ -321,11 +443,21 @@ export class DoctrineBot implements Controller {
 
   private updateTimers(w: World, me: Jet, dt: number): void {
     const newlyAdded = new Set<string>();
-    for (const m of w.missiles)
+    const liveIds = new Set<string>();
+    for (const m of w.missiles) {
+      if (m.end) continue;
+      liveIds.add(m.id);
       if (m.shooterId === me.id && !this.timers.has(m.id)) {
         this.timers.set(m.id, startTimer(m, w.t));
         newlyAdded.add(m.id);
       }
+    }
+    for (const id of this.timers.keys()) {
+      if (!liveIds.has(id)) {
+        this.timers.delete(id);
+        this.pumpedFor.delete(id);
+      }
+    }
     for (const tm of this.timers.values()) {
       const enemy = jetById(w, tm.targetId);
       const datalink = !!enemy && radarCanTrack(w, me, enemy);
@@ -347,18 +479,87 @@ export class DoctrineBot implements Controller {
     return !tm.ghost.end && tm.ghost.phase !== "lost";
   }
 
-  /** Nearest known enemy, preferring one a wingman is not already targeting. */
-  private chooseTarget(w: World, me: Jet): string | null {
-    const taken = new Set(
-      w.jets
-        .filter((j) => j.side === me.side && j.alive && j.id !== me.id && jetById(w, j.targetId)?.alive)
-        .map((j) => j.targetId),
+  /**
+   * Fires an opportunistic Fox 3 at another TWS-locked enemy inside high-Pk range when carrying
+   * spare missiles, without breaking primary target assignment or missile cranking support.
+   */
+  private tryOpportunityShot(
+    w: World,
+    me: Jet,
+    primaryTarget: string,
+    myInFlight: MissileTimer[],
+    out: Command[],
+  ): void {
+    if (!this.skill.opportunityShot || me.missiles <= 1) return;
+    const t = w.t;
+    const preFilterM = w.params.radar.rangeNm * 0.65 * NM;
+    let bestOther: Jet | null = null;
+    let bestRangeNm = Number.POSITIVE_INFINITY;
+
+    for (const other of w.jets) {
+      if (other.side === me.side || !other.alive || other.id === primaryTarget) continue;
+      if (!radarCanTrack(w, me, other)) continue;
+      const distM = len(sub(other.pos, me.pos));
+      if (distM > preFilterM) continue;
+      const alreadyShot = myInFlight.some(
+        (tm) => tm.targetId === other.id && (!tm.ghost.pitbull || tm.impactAt !== null),
+      );
+      if (alreadyShot) continue;
+
+      let cached = this.oppZones.get(other.id);
+      if (!cached || t - cached.at >= ZONE_EVERY_S) {
+        const zone = launchZone(w.params.missile, me, other);
+        cached = { at: t, rmaxNm: zone.rmaxNm, rneNm: zone.rneNm };
+        this.oppZones.set(other.id, cached);
+      }
+      if (cached.rmaxNm <= 0) continue;
+      const goodRangeNm = cached.rneNm + OPP_SHOT_FRAC * Math.max(0, cached.rmaxNm - cached.rneNm);
+      const rangeNm = distM / NM;
+      if (rangeNm <= goodRangeNm && rangeNm < bestRangeNm) {
+        bestRangeNm = rangeNm;
+        bestOther = other;
+      }
+    }
+
+    if (bestOther) {
+      out.push({ type: "fire", jetId: me.id, targetId: bestOther.id });
+      // `command("fire")` sets `me.targetId = other.id`; restore the sorted primary target immediately.
+      out.push({ type: "target", jetId: me.id, targetId: primaryTarget });
+      this.actionDetail = `Opportunity Fox 3 on ${bestOther.callsign} at ${bestRangeNm.toFixed(1)} nm`;
+    }
+  }
+
+  /**
+   * Selects the best known enemy: favors closer & forward-lane bandits, keeps pre-pitbull missile
+   * support stable, and only applies deconfliction when closer/peer friendlies already claim it.
+   */
+  private chooseTarget(w: World, me: Jet, myInFlight: MissileTimer[]): string | null {
+    const friends = w.jets.filter(
+      (j) => j.side === me.side && j.alive && j.id !== me.id && jetById(w, j.targetId)?.alive,
+    );
+    const gimbalRad = w.params.radar.gimbalDeg * DEG;
+    const prePitbullTargets = new Set(
+      myInFlight.filter((tm) => tm.pitbullAt === null || w.t < tm.pitbullAt).map((tm) => tm.targetId),
     );
     let best: string | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const [id, tr] of this.tracks) {
       const p = trackAt(tr, w.t).pos;
-      const score = len(sub(p, me.pos)) + (taken.has(id) ? 30 * NM : 0);
+      const d = len(sub(p, me.pos));
+      const off = Math.abs(wrapPi(bearing(me.pos, p) - me.hdg));
+      const offPenalty = (off / gimbalRad) * SORT_ANGLE_WEIGHT_M;
+      let takenCount = 0;
+      for (const f of friends) {
+        if (f.targetId !== id) continue;
+        if (len(sub(p, f.pos)) <= d + SORT_PEER_MARGIN_M) takenCount++;
+      }
+      const takenPenalty = Math.min(takenCount, 2) * SORT_TAKEN_PENALTY_M;
+      const keepBonus = prePitbullTargets.has(id)
+        ? SORT_SUPPORT_BONUS_M
+        : me.targetId === id
+          ? SORT_KEEP_TARGET_M
+          : 0;
+      const score = d + offPenalty + takenPenalty - keepBonus;
       if (score < bestScore) {
         bestScore = score;
         best = id;

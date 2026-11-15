@@ -3,3 +3,4 @@
 
 # Recordings and fixtures must stay byte-exact (tests check sizes and cut-off line endings).
 *.acmi binary
+*.mp3 filter=lfs diff=lfs merge=lfs -text

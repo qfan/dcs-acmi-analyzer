@@ -599,4 +599,21 @@ describe("game: review fixes", () => {
     s.advance(0.02);
     expect(tm0.ghost.tof).toBeCloseTo(m.tof, 9);
   });
+
+  it("marks a jet as lost once it reaches 500 nm from its initial spawn location", () => {
+    const w = scenarioById("duel").build(P(), 25000, 1);
+    w.controllers.clear();
+    const b1 = must(jetById(w, "B1"));
+    b1.pos.x = b1.startPos.x + 499.9 * NM;
+    b1.hdg = Math.PI / 2;
+    step(w);
+    expect(b1.alive).toBe(true);
+
+    b1.pos.x = b1.startPos.x + 500 * NM;
+    step(w);
+    expect(b1.alive).toBe(false);
+    expect(w.events.some((e) => e.type === "kill" && e.targetId === "B1" && e.text.includes("500 nm"))).toBe(
+      true,
+    );
+  });
 });
