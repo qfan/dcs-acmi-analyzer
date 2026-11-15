@@ -7,6 +7,7 @@
  * multiplayer host can switch tabs without stalling everyone's fight.
  */
 import { AI_SKILL_CHOICES } from "../ai/doctrine.ts";
+import { Outbox, ReplyLimiter } from "../net/outbox.ts";
 import { RelayClient } from "../net/relayClient.ts";
 import type { Side } from "../sim/aircraft.ts";
 import type { GameParams } from "../sim/params.ts";
@@ -36,6 +37,7 @@ import {
   buildSnapshot,
   type Snapshot,
   SnapshotCursor,
+  slimSnapshot,
   snapshotFromNet,
   snapshotToJson,
   worldShape,
@@ -49,6 +51,8 @@ const NET_BYTES_PER_S = 160_000;
 /** Largest snapshot the host sends (the relay allows 64 KB). */
 const NET_MAX_BYTES = 60_000;
 const PING_MS = 2_000;
+/** Least time between two lobby broadcasts caused by guests (ms). */
+const LOBBY_MIN_MS = 200;
 const LOBBY_REFRESH_MS = 2_000;
 /** UI snapshots while nothing moves (paused), so NPC panels and the like stay fresh. */
 const IDLE_SNAP_MS = 250;
@@ -95,6 +99,11 @@ export class Engine {
   private lastNetAt = 0;
   private netEveryMs = NET_MIN_MS;
   private lobbyDirty = false;
+  private lastLobbyAt = Number.NEGATIVE_INFINITY;
+  private lobbySoon: ReturnType<typeof setTimeout> | null = null;
+  private readonly replies = new ReplyLimiter();
+  /** Guest: paces orders to the host. */
+  private outbox: Outbox | null = null;
   private lobbyTimer: ReturnType<typeof setInterval> | null = null;
   private matchMeta: Omit<MatchMeta, "mode" | "side" | "owned" | "pausesLeft"> | null = null;
   // Guest only
@@ -292,8 +301,12 @@ export class Engine {
     }
     if (this.lobbyTimer) clearInterval(this.lobbyTimer);
     if (this.pingTimer) clearInterval(this.pingTimer);
+    if (this.lobbySoon) clearTimeout(this.lobbySoon);
+    this.outbox?.dispose();
+    this.outbox = null;
     this.lobbyTimer = null;
     this.pingTimer = null;
+    this.lobbySoon = null;
     this.lobby = null;
     this.inMatch = false;
     this.owners.clear();
@@ -308,11 +321,12 @@ export class Engine {
 
   private flashTo(peer: number, text: string): void {
     if (peer === this.you) this.post({ t: "flash", text });
-    else this.toPeer(peer, { k: "flash", text });
+    else if (this.replies.allow(peer, "flash")) this.toPeer(peer, { k: "flash", text });
   }
 
   private toHost(m: GuestMsg): void {
-    this.relay?.send(m);
+    if (this.outbox) this.outbox.push(m);
+    else this.relay?.send(m);
   }
 
   private toPeer(peer: number, m: HostMsg): void {
@@ -412,9 +426,28 @@ export class Engine {
     }));
   }
 
-  private broadcastLobby(): void {
-    this.lobbyDirty = false;
+  /**
+   * Sends the lobby to everyone. Changes guests cause go out at most every LOBBY_MIN_MS (the last
+   * one always goes out), so a busy lobby can't push the host over the relay's message limit.
+   * `now` sends at once: match start and end, and late joiners, need the lobby before what follows.
+   */
+  private broadcastLobby(now = false): void {
     if (!this.lobby) return;
+    const t = performance.now();
+    if (!now && t - this.lastLobbyAt < LOBBY_MIN_MS) {
+      this.lobbySoon ??= setTimeout(
+        () => {
+          this.lobbySoon = null;
+          this.broadcastLobby(true);
+        },
+        LOBBY_MIN_MS - (t - this.lastLobbyAt),
+      );
+      return;
+    }
+    if (this.lobbySoon) clearTimeout(this.lobbySoon);
+    this.lobbySoon = null;
+    this.lastLobbyAt = t;
+    this.lobbyDirty = false;
     this.postLobby();
     this.broadcast({ k: "lobby", lobby: this.lobby });
   }
@@ -432,7 +465,7 @@ export class Engine {
         away: false,
         rttMs: null,
       });
-      this.broadcastLobby();
+      this.broadcastLobby(true);
       if (this.session) this.sendMatchTo(id);
       return;
     }
@@ -449,6 +482,7 @@ export class Engine {
       this.resumeIfNobodyAway();
     } else {
       lobby.players = lobby.players.filter((p) => p.id !== id);
+      this.replies.forget(id);
       for (const sl of lobby.slots) {
         if (sl.peer !== id) continue;
         sl.peer = null;
@@ -497,11 +531,12 @@ export class Engine {
         this.setPersonalFog(from, m.on);
         return;
       case "sync":
+        if (!this.replies.allow(from, "sync")) return;
         if (this.lobby) this.toPeer(from, { k: "lobby", lobby: this.lobby });
         if (this.session) this.sendMatchTo(from);
         return;
       case "ping": {
-        this.toPeer(from, { k: "pong", n: m.n });
+        if (this.replies.allow(from, "pong")) this.toPeer(from, { k: "pong", n: m.n });
         const p = this.lobby?.players.find((x) => x.id === from);
         if (p && typeof m.rttMs === "number" && p.rttMs !== Math.round(m.rttMs)) {
           p.rttMs = Math.round(m.rttMs);
@@ -676,7 +711,7 @@ export class Engine {
     };
     this.session = s;
     this.refreshFogJets();
-    this.broadcastLobby();
+    this.broadcastLobby(true);
     this.netCursor = new SnapshotCursor();
     this.broadcast({ k: "start", meta: this.matchMeta, snap: null });
     this.lastNetAt = 0;
@@ -713,10 +748,15 @@ export class Engine {
   private sendNetSnapshot(cur: SnapshotCursor, to?: number): void {
     const s = this.session;
     if (!s || !this.relay) return;
-    const json = snapshotToJson(buildSnapshot(s, ["blue", "red"], cur));
+    const before = cur.clone();
+    const snap = buildSnapshot(s, ["blue", "red"], cur);
+    let json = snapshotToJson(snap);
+    // Too big for the relay: drop the extras (NPC panels, track extrapolation) first.
+    if (json.length > NET_MAX_BYTES) json = snapshotToJson(slimSnapshot(snap));
     if (json.length > NET_MAX_BYTES) {
-      // Too big for the relay (only possible with very many missiles in the air): skip it rather
-      // than get disconnected; the next one goes out a little later.
+      // Still too big: send nothing rather than get disconnected, and keep everything unsent
+      // (events, ended missiles, decoys) for the next try a little later.
+      cur.restore(before);
       this.netEveryMs = 1000;
       return;
     }
@@ -808,7 +848,7 @@ export class Engine {
     for (const sl of lobby.slots) if (this.humanSlots.has(sl.jetId) && sl.peer === null) sl.crew = "open";
     this.humanSlots.clear();
     this.owners.clear();
-    this.broadcastLobby();
+    this.broadcastLobby(true);
   }
 
   private mpClosed(message: string): void {
@@ -832,6 +872,8 @@ export class Engine {
       return;
     }
     let welcomed = false;
+    this.outbox?.dispose();
+    this.outbox = new Outbox((m) => this.relay?.send(m));
     const relay = new RelayClient(url, {
       onStatus: (status) => this.post({ t: "net", status, relay: status === "connected" ? url : undefined }),
       onWelcome: (info) => {

@@ -17,7 +17,7 @@ export const MAX_ROAM_NM = 500;
 export const EGRESS_RETIRE_NM = 50;
 export const EGRESS_RETIRE_S = 10;
 /** How long a released chaff bundle or flare stays on the map (s). */
-const DECOY_LIFE_S = 4;
+export const DECOY_LIFE_S = 4;
 
 export type GameEventType =
   | "launch"
@@ -64,6 +64,8 @@ export type Command =
 
 /** A released chaff bundle or flare, kept briefly for display (it does not affect missiles yet). */
 export interface Decoy {
+  /** Release order within the fight (snapshots send each decoy once, by this). */
+  seq: number;
   kind: "chaff" | "flare";
   jetId: string;
   side: Side;
@@ -94,6 +96,8 @@ export interface World {
   controllers: Map<string, Controller>;
   rng: Rng;
   nextId: number;
+  /** Decoys released so far (the next decoy's `seq`). */
+  decoySeq: number;
   /** Whether each jet's radar tracks its target, last step. */
   radarTrack: Map<string, boolean>;
   decoys: Decoy[];
@@ -128,6 +132,7 @@ export function makeWorld(params: GameParams, seed = 1): World {
     controllers: new Map(),
     rng: makeRng(seed),
     nextId: 1,
+    decoySeq: 0,
     radarTrack: new Map(),
     decoys: [],
     rwrSeen: new Set(),
@@ -281,6 +286,7 @@ export function command(w: World, c: Command): string | null {
       if (c.type === "chaff") j.chaff--;
       else j.flares--;
       w.decoys.push({
+        seq: w.decoySeq++,
         kind: c.type,
         jetId: j.id,
         side: j.side,

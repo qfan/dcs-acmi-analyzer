@@ -502,6 +502,11 @@ export function GameApp() {
       }
       if (e.target instanceof Element && e.target.closest("input, select, textarea")) return;
       const k = e.key.toLowerCase();
+      // A held key repeats about 30 times a second: one shot, one bundle or one pause per press.
+      if (e.repeat && (k === " " || k === "f" || k === "insert" || k === "delete")) {
+        e.preventDefault();
+        return;
+      }
       if (k === " ") togglePause();
       else if (k >= "1" && k <= "5") setScale(TIME_SCALES[Number(k) - 1] ?? 1);
       else if (k === "f") issue((j) => ({ type: "fire", jetId: j.id }));

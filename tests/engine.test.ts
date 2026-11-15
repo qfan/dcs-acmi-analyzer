@@ -214,6 +214,29 @@ describe("engine: multiplayer through the relay", () => {
     expect((await lost.until("ended")).reason).toBe("No room with that code on any server.");
   });
 
+  it("keeps a guest connected while it spams orders, and still delivers the latest", async () => {
+    const { host, guest, relay } = await room();
+    guest.engine.handle({ t: "lobby", action: { a: "take", jetId: "R1" } });
+    guest.engine.handle({ t: "lobby", action: { a: "ready", ready: true } });
+    await host.until("lobby", (m) => m.lobby.players.find((p) => p.id === 1)?.ready === true);
+    host.engine.handle({ t: "lobby", action: { a: "start" } });
+    await guest.until("match");
+    // Far beyond the relay's 20 messages a second: a held key plus frantic clicking.
+    for (let i = 0; i < 300; i++) {
+      guest.engine.handle({ t: "cmd", cmd: { type: "chaff", jetId: "R1" } });
+      guest.engine.handle({
+        t: "cmd",
+        cmd: { type: "throttle", jetId: "R1", throttle: i % 2 ? "idle" : "ab" },
+      });
+      guest.engine.handle({ t: "cmd", cmd: { type: "throttle", jetId: "B1", throttle: "idle" } }); // refused
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(guest.out.some((m) => m.t === "ended")).toBe(false);
+    expect([...relay.rooms.values()][0]?.presentCount).toBe(2);
+    const s = await guest.until("snap", (m) => m.snap.jets.find((j) => j.id === "R1")?.throttle === "idle");
+    expect(s.snap.jets.find((j) => j.id === "B1")?.throttle).not.toBe("idle");
+  });
+
   it("closes the guest's match when the host leaves", async () => {
     const { host, guest } = await room();
     host.engine.handle({ t: "mp-leave" });

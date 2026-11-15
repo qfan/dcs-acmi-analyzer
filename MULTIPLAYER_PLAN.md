@@ -44,6 +44,15 @@ next; a typed code is looked up on each known relay; invite links carry their re
 (`#join=CODE&r=cf`, or the full address for a custom one). The last 5 custom relays are remembered
 in this browser.
 
+**Worst-case load** (`tests/spam.test.ts`): 6v6, every jet firing all 10 missiles and dumping
+every chaff bundle and flare (120 missiles and 1,000+ decoys in the air). Snapshots peak at about
+39 KB (average about 21 KB), under the relay's 64 KB message limit: decoys are sent once on release
+and moved by each guest; missiles, decoys and timers go as arrays; coordinates are rounded to
+0.1 m. A snapshot that would still be too big is slimmed or held back without losing anything.
+Guests' orders are paced (10 a second, latest heading or throttle wins, a few shots queue), held
+keys don't repeat fire, chaff, flare or pause, and the host limits its replies to each guest, so
+neither side can trip the relay's flood limits.
+
 **Not done:** the Cloudflare and Oracle relays are not deployed yet, so both show as unreachable;
 on localhost the game uses `ws://localhost:8787/ws` (run `node game/server/node/relay.ts`), and Custom
 address takes any other.

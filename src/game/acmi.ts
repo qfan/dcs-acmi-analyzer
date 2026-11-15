@@ -8,7 +8,7 @@
  */
 import type { Jet } from "./sim/aircraft.ts";
 import type { Missile } from "./sim/missile.ts";
-import type { Decoy, World } from "./sim/world.ts";
+import { DECOY_LIFE_S, type Decoy, type World } from "./sim/world.ts";
 
 const EARTH_R = 6371008.8;
 const DEG = Math.PI / 180;
@@ -16,9 +16,8 @@ const DEG = Math.PI / 180;
 export const REF_LON = 56;
 export const REF_LAT = 26;
 const SAMPLE_EVERY_S = 0.25;
-const DECOY_LIFE_S = 4;
 
-const decoyKey = (d: Decoy) => `${d.jetId}|${d.kind}|${d.t0}`;
+const decoyKey = (d: Decoy) => `${d.jetId}|${d.kind}|${d.seq}`;
 
 const fmt = (x: number, d: number) => (Number.isFinite(x) ? x.toFixed(d) : "");
 
