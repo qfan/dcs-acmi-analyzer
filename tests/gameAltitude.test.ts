@@ -9,7 +9,7 @@ import {
   stepJet,
   velocity,
 } from "../src/game/sim/aircraft.ts";
-import { FT, KT, NM } from "../src/game/sim/atmosphere.ts";
+import { FT, KT, NM, speedOfSoundMs } from "../src/game/sim/atmosphere.ts";
 import { launchMissile, missileMach, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
@@ -67,18 +67,20 @@ describe("game: altitude and energy", () => {
     expect(maxMach).toBeGreaterThan(1.1);
   });
 
-  it("Hold Spd climbs only on excess power, keeping its speed", () => {
+  it("Hold Spd climbs only on excess power, holding Mach", () => {
     const p = P();
     const j = jetAt(p, 15000, 0.9);
     j.effort = "sustain";
     j.altCmd = 30000 * FT;
-    const v0 = j.speed;
-    let minSpeed = j.speed;
+    const m0 = mach(j);
+    let worst = 0;
     fly(p, j, 60, (x) => {
-      minSpeed = Math.min(minSpeed, x.speed);
+      worst = Math.max(worst, Math.abs(mach(x) - m0));
     });
     expect(j.pos.z / FT).toBeGreaterThan(20000);
-    expect(minSpeed).toBeGreaterThan(v0 - 10 * KT);
+    expect(worst).toBeLessThan(0.01);
+    // Constant Mach in the troposphere: true airspeed falls with temperature, and that speed went into height.
+    expect(j.speed).toBeLessThan(m0 * speedOfSoundMs(15000 * FT) - 5 * KT);
   });
 
   it("a zoom climb tops out instead of stalling", () => {

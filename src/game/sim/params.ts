@@ -32,7 +32,7 @@ export interface AircraftParams {
   /** Thrust scales with (ρ/ρ0) to this power. */
   thrustDensityExp: number;
   rollRateDegS: number;
-  /** The jet never slows below this (no stall model). */
+  /** The jet never slows below this calibrated airspeed (kt), nor below its 1 g stall speed. */
   minSpeedKt: number;
   /** Steepest climb or dive (deg) the altitude autopilot flies in "normal" and "max" turn modes. */
   normalClimbDeg: number;

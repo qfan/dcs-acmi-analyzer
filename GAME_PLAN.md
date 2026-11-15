@@ -38,9 +38,13 @@ original plan and are kept as written.
 - **Phase 4 (altitude and energy), player side** (2026-11-15):
   - **Flight model:** 3-DOF point mass. Lift splits into a turn part and a climb/dive part inside the
     g available; an altitude-hold autopilot flies to the ordered altitude. Climb angle follows the
-    turn mode: Hold Spd climbs only on the power the current turn leaves over (speed held), Normal
+    turn mode: Hold Spd climbs only on the power the current turn leaves over (Mach held), Normal
     up to 20°, Max up to 45°. Low-speed protection stops a zoom before the minimum speed; hard deck
     1,000 ft, ordered ceiling 50,000 ft; reaching the ground loses the jet. All editable.
+  - **Airspeeds:** ISA pressure and true/calibrated airspeed/Mach conversions (compressible pitot
+    formula, Rayleigh above Mach 1) in `sim/atmosphere.ts`. The panel shows Mach with KCAS and KTAS;
+    the jet minimum speed `minSpeedKt` is calibrated airspeed. Hold Spd holds Mach, so below 36k ft
+    the small fall in true airspeed goes into the climb too.
   - **Missiles:** unchanged model (already density-driven); jets changing altitude now makes it
     matter. Head-on Rmax against a 25k ft target: 16.5 nm fired from 5k ft, 47.7 nm from 25k ft,
     57.7 nm from 45k ft. A target that dives into thick air makes the same shot arrive ~0.3 Mach

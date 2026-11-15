@@ -14,9 +14,9 @@
  *   dV/dt = (T − D)/m − g·sin γ     dγ/dt = (L_v − g·cos γ)/V     dψ/dt = L_h/(V·cos γ)
  * so a climb trades speed for height and a dive buys speed back: energy height Es = h + V²/2g
  * changes only by (T − D)·V/W. The turn effort sets how steeply it climbs (Hold Spd: only on
- * excess power, so speed is held).
+ * excess power, so Mach is held).
  */
-import { airDensity, DEG, FT, G, interp, KT, RHO0, speedOfSoundMs } from "./atmosphere.ts";
+import { airDensity, DEG, FT, G, interp, KT, RHO0, speedOfSoundMs, tasFromCas } from "./atmosphere.ts";
 import type { AircraftParams } from "./params.ts";
 import { headingVec, type V3, wrapPi } from "./vec.ts";
 
@@ -147,11 +147,10 @@ export function dragN(p: AircraftParams, altM: number, speed: number, n: number)
   return qS * (interp(p.tableMach, p.cd0, m) + p.inducedK * cl * cl);
 }
 
-/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as IAS and stays >= 1g stall speed. */
+/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as calibrated airspeed and stays >= 1g stall speed. */
 export function minSpeedMs(p: AircraftParams, altM: number): number {
   const rho = Math.max(airDensity(altM), 1e-4);
-  const sigma = rho / RHO0;
-  const iasFloor = (p.minSpeedKt * KT) / Math.sqrt(sigma);
+  const iasFloor = tasFromCas(p.minSpeedKt * KT, altM);
   const m = iasFloor / speedOfSoundMs(altM);
   const cl1g = Math.max(interp(p.tableMach, p.clMax, m), 0.1);
   const stall1g = Math.sqrt((2 * p.massKg * G) / (rho * Math.max(p.wingAreaM2, 1) * cl1g));
@@ -183,6 +182,15 @@ const PITCH_G_SHARE = 0.6;
 /** Low-speed protection: full climb angle above CLIMB_FULL × minimum speed, no climbing below CLIMB_NONE ×. */
 const CLIMB_NONE = 1.15;
 const CLIMB_FULL = 1.6;
+/**
+ * Change of true airspeed per metre of climb at constant Mach (1/s): the speed of sound falls with
+ * temperature in the troposphere and is constant above 11 km.
+ */
+function machHoldDvDh(altM: number, speed: number): number {
+  const dadh = (speedOfSoundMs(altM + 50) - speedOfSoundMs(altM - 50)) / 100;
+  return (speed / speedOfSoundMs(altM)) * dadh;
+}
+
 /** Hold Spd dives no steeper than this (deg). */
 const SUSTAIN_DIVE_DEG = 10;
 /** γ never goes beyond this (rad): no loops. */
@@ -201,7 +209,8 @@ export const clampAltCmd = (p: AircraftParams, altM: number): number => {
 
 /**
  * Steepest climb and dive (rad, both ≥ 0) the autopilot flies right now. Hold Spd climbs only as
- * steeply as excess power allows at the current speed (sin γ = (T − D)/W), so speed is held.
+ * steeply as excess power allows while holding Mach: (T − D)/W = sin γ · (1 + V·(dV/dh)_M / g), so
+ * below 11 km the slight fall in true airspeed at constant Mach goes into height too.
  * Climbs fade out near minimum speed (a zoom tops out instead of stalling); dives are never refused.
  */
 export function climbLimits(
@@ -218,7 +227,8 @@ export function climbLimits(
     const weight = Math.max(p.massKg, 1) * G;
     const t = thrustN(p, j.throttle, j.pos.z, j.speed / speedOfSoundMs(j.pos.z));
     const nTurn = Math.hypot(1, j.g * Math.sin(j.bank));
-    const sinG = (t - dragN(p, j.pos.z, j.speed, nTurn)) / weight;
+    const share = 1 + (j.speed * machHoldDvDh(j.pos.z, j.speed)) / G;
+    const sinG = (t - dragN(p, j.pos.z, j.speed, nTurn)) / weight / Math.max(share, 0.5);
     up = Math.asin(Math.max(0, Math.min(Math.sin(angle), sinG)));
     down = Math.min(angle, SUSTAIN_DIVE_DEG * DEG);
   }

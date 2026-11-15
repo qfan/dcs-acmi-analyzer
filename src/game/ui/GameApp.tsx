@@ -14,7 +14,7 @@ import {
   type Throttle,
   verticalSpeed,
 } from "../sim/aircraft.ts";
-import { FT, KT, NM } from "../sim/atmosphere.ts";
+import { casFromTas, FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
 import {
@@ -684,7 +684,11 @@ export function GameApp() {
             <section className="g-card">
               <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
               <div className="g-stats">
-                <Stat k="Speed" v={`${Math.round(p.speed / KT)} kt`} sub={`M${mach(p).toFixed(2)}`} />
+                <Stat
+                  k="Speed"
+                  v={`M${mach(p).toFixed(2)}`}
+                  sub={`${Math.round(casFromTas(p.speed, p.pos.z) / KT)} KCAS · ${Math.round(p.speed / KT)} TAS`}
+                />
                 <Stat k="Altitude" v={`${Math.round(p.pos.z / FT).toLocaleString()} ft`} sub={altSub(p)} />
                 <Stat
                   k="Energy"
@@ -741,7 +745,7 @@ export function GameApp() {
                           className={p.effort === t ? "on" : ""}
                           title={
                             t === "sustain"
-                              ? "Hold speed / Mach (zero energy bleed when thrust allows)"
+                              ? "Hold Mach (zero energy bleed when thrust allows); climbs on spare power only"
                               : undefined
                           }
                           onClick={(e) => {
@@ -957,8 +961,8 @@ export function GameApp() {
             )}
             <p className="g-muted">
               Energy: a climb trades speed for height and a dive buys it back (Energy shows height plus speed
-              as feet; Ps is how fast it grows). The turn mode also sets how steeply you climb: Hold Spd
-              climbs only as fast as thrust allows without slowing, Normal up to{" "}
+              as feet; Ps is how fast it grows). The turn mode also sets how steeply you climb: Hold Spd holds
+              Mach and climbs only as fast as thrust allows, Normal up to{" "}
               {w?.params.aircraft.normalClimbDeg ?? 20}°, Max up to {w?.params.aircraft.maxClimbDeg ?? 45}°.
               Missiles fly much further from high and fast, and die quickly chasing you down into thick air.
               Hard deck {(w?.params.aircraft.minAltFt ?? 1000).toLocaleString()} ft.
