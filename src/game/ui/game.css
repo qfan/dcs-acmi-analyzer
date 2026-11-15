@@ -465,3 +465,52 @@ button.g-fog.on {
   border-color: #8b5cf6;
   color: #fff;
 }
+
+.g-timers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.g-timer-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.g-blue {
+  color: #4f9dff;
+}
+.g-timer-bar {
+  position: relative;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 5px;
+  background: linear-gradient(to right, rgba(79, 157, 255, 0.35), rgba(79, 157, 255, 0.12));
+}
+/* Pitbull mark */
+.g-timer-pb {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: #f0abfc;
+}
+/* "Now" triangle */
+.g-timer-now {
+  position: absolute;
+  top: 10px;
+  margin-left: -5px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 7px solid var(--g-text);
+}
+.g-truth {
+  margin: 10px 0 2px;
+  font-size: 11px;
+}
+.g-timer {
+  padding-bottom: 8px;
+}

@@ -528,17 +528,15 @@ export function GameApp() {
           {w && (
             <section className="g-card">
               <h3>Missiles</h3>
-              {w.missiles.filter((m) => !m.end && (!session?.fog || m.side === PLAYER_SIDE)).length === 0 && (
-                <p className="g-muted">
-                  {session?.fog
-                    ? "None of yours in flight. Hostile missiles show only on your RWR."
-                    : "None in flight."}
-                </p>
+              {session && <OwnMissileTimers session={session} />}
+              {!session?.fog && w.missiles.some((m) => !m.end) && (
+                <p className="g-muted g-truth">Truth (hidden with fog of war on):</p>
               )}
+              {session?.fog && <p className="g-muted">Hostile missiles show only on your RWR once active.</p>}
               <table className="g-table">
                 <tbody>
                   {w.missiles
-                    .filter((m) => !m.end && (!session?.fog || m.side === PLAYER_SIDE))
+                    .filter((m) => !m.end && !session?.fog)
                     .map((m) => {
                       const t = jetById(w, m.targetId);
                       const r = t
@@ -847,6 +845,51 @@ function nearestRwrMissile(w: World, j: Jet): string | null {
     }
   }
   return best;
+}
+
+/**
+ * Your missiles as the cockpit shows them: onboard estimates only. A bar from launch to predicted
+ * impact, a tick at predicted pitbull, and a triangle for "now", with time to pitbull (TTP) and
+ * time to impact (TTI). Nothing here reads the real missile.
+ */
+function OwnMissileTimers({ session }: { session: GameSession }) {
+  const t = session.world.t;
+  const timers = session.activeTimers();
+  if (timers.length === 0) return <p className="g-muted">None of yours in flight.</p>;
+  return (
+    <div className="g-timers">
+      {timers.map((tm) => {
+        const end = tm.impactAt ?? tm.firstImpactAt;
+        const span = Math.max(1, (end ?? tm.launchT + 60) - tm.launchT);
+        const frac = (x: number) => `${Math.max(0, Math.min(100, ((x - tm.launchT) / span) * 100))}%`;
+        const ttp = tm.pitbullAt !== null ? tm.pitbullAt - t : null;
+        const tti = tm.impactAt !== null ? tm.impactAt - t : null;
+        const target = jetById(session.world, tm.targetId);
+        const status =
+          tti !== null && tti <= 0
+            ? "TIME OUT"
+            : ttp !== null && ttp > 0
+              ? `TTP ${Math.ceil(ttp)} s`
+              : tm.ghost.pitbull
+                ? "ACTIVE"
+                : "TTP —";
+        return (
+          <div key={tm.missileId} className="g-timer">
+            <div className="g-timer-head">
+              <span className="g-blue">{tm.missileId}</span> → {target?.callsign ?? "?"}
+              <span className="g-grow" />
+              <b>{status}</b>
+              <span className="g-muted">TTI {tti !== null && tti > 0 ? `${Math.ceil(tti)} s` : "—"}</span>
+            </div>
+            <div className="g-timer-bar">
+              {tm.pitbullAt !== null && <span className="g-timer-pb" style={{ left: frac(tm.pitbullAt) }} />}
+              <span className="g-timer-now" style={{ left: frac(t) }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /** One-line RWR readout for the selected jet: who is painting it, bearings relative to the nose. */

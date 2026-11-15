@@ -384,7 +384,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
       drawTrail(ctx, v, tr, j.alive ? j.pos : null, `${j.alive ? sideCol(j.side) : COLORS.dead}55`, 1.5);
   }
   for (const m of w.missiles) {
-    if (s.fog && m.side !== PLAYER_SIDE) continue;
+    if (s.fog) continue; // missiles never show on radar, yours included: you only have timers
     const tr = s.trails.get(m.id);
     if (tr) drawTrail(ctx, v, tr, m.end ? null : m.pos, `${sideCol(m.side)}${m.end ? "33" : "99"}`, 1);
   }
@@ -447,8 +447,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
     ctx.setLineDash([]);
   }
 
-  for (const m of w.missiles)
-    if (!m.end && (!s.fog || m.side === PLAYER_SIDE)) drawMissile(ctx, v, w, m, labels);
+  for (const m of w.missiles) if (!m.end && !s.fog) drawMissile(ctx, v, w, m, labels);
 
   for (const j of w.jets) if (j.alive && j.side === PLAYER_SIDE) drawRwr(ctx, v, s, j);
 

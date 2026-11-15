@@ -285,3 +285,53 @@ describe("game: RWR, decoys and fog of war", () => {
     expect(s.world.missiles.some((m) => m.side === "red" && !m.end)).toBe(true);
   });
 });
+
+describe("game: onboard missile timers", () => {
+  /** Support drill at 35k: fire at 30 nm, then hold `steer` (crank keeps the TWS lock, cold drops it). */
+  function supportShot(steer: typeof crank | typeof cold) {
+    const s = new GameSession("support", 35000, P(), DEFAULT_AUTOPAUSE, 3);
+    let fired = false;
+    let predictedPitbull: number | null = null;
+    let predictedImpact: number | null = null;
+    while (s.world.t < 160 && !s.world.outcome) {
+      const b = must(jetById(s.world, "B1"));
+      const r = must(jetById(s.world, "R1"));
+      if (!fired && Math.hypot(b.pos.x - r.pos.x, b.pos.y - r.pos.y) <= 30 * NM) {
+        fired = command(s.world, { type: "fire", jetId: "B1", targetId: "R1" }) === null;
+        command(s.world, { type: "steer", jetId: "B1", steer });
+      }
+      s.advance(0.5);
+      const tm = s.timers.get("M1");
+      // Remember the estimate made 25 s after launch, once the drone's turn is in your track.
+      if (tm && predictedPitbull === null && s.world.t - tm.launchT >= 25) {
+        predictedPitbull = tm.pitbullAt;
+        predictedImpact = tm.impactAt;
+      }
+    }
+    return { s, predictedPitbull, predictedImpact };
+  }
+
+  it("predicts pitbull and impact of a supported shot from the jet's own track", () => {
+    const { s, predictedPitbull, predictedImpact } = supportShot(crank);
+    const pit = must(s.world.events.find((e) => e.type === "pitbull" && e.missileId === "M1"));
+    const kill = must(s.world.events.find((e) => e.type === "kill" && e.missileId === "M1"));
+    expect(Math.abs(must(predictedPitbull) - pit.t)).toBeLessThan(3);
+    expect(Math.abs(must(predictedImpact) - kill.t)).toBeLessThan(4);
+  });
+
+  it("keeps counting on dead reckoning after the lock is dropped, like the cockpit timer", () => {
+    const { s, predictedImpact } = supportShot(cold);
+    expect(s.world.events.some((e) => e.type === "kill")).toBe(false);
+    expect(predictedImpact).not.toBeNull();
+  });
+
+  it("with fog of war, hides what the jet cannot know about its own missile", () => {
+    const { s } = supportShot(crank);
+    s.fog = true;
+    const own = (type: string) => must(s.world.events.find((e) => e.type === type && e.side === "blue"));
+    expect(s.showsEvent(own("launch"))).toBe(true);
+    expect(s.showsEvent(own("acquired"))).toBe(false);
+    expect(s.showsEvent(own("pitbull"))).toBe(false);
+    expect(s.showsEvent(own("kill"))).toBe(true);
+  });
+});

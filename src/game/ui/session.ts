@@ -3,13 +3,29 @@
  * automatic pauses at decision points (events) and an optional "turn every N seconds" mode. The
  * same world runs under any of these policies; only when time moves differs.
  */
-import type { Jet } from "../sim/aircraft.ts";
+import { type Jet, velocity } from "../sim/aircraft.ts";
+import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import type { GameParams } from "../sim/params.ts";
 import { scenarioById } from "../sim/scenarios.ts";
 import { type LaunchZone, launchZone } from "../sim/wez.ts";
-import { type GameEvent, jetById, radarCanDetect, SIM_DT, step, type World } from "../sim/world.ts";
+import {
+  type GameEvent,
+  jetById,
+  radarCanDetect,
+  radarCanTrack,
+  SIM_DT,
+  step,
+  truthOf,
+  type World,
+} from "../sim/world.ts";
 
 export const PLAYER_SIDE = "blue";
+
+/**
+ * Events about a missile's own state that the launching jet cannot observe: with fog of war on,
+ * your jet only has its timers, so these stay out of the log.
+ */
+const MISSILE_INTERNAL = new Set<GameEvent["type"]>(["pitbull", "acquired", "seeker-lost", "miss", "spent"]);
 
 export interface AutoPause {
   /** A hostile missile is fired at one of your jets. */
@@ -42,6 +58,8 @@ export const TIME_SCALES = [1, 2, 4, 8, 16] as const;
 const TRAIL_EVERY_S = 1;
 const JET_TRAIL_S = 120;
 const ZONE_EVERY_MS = 700;
+/** A missile timer stays on screen this long (s) after its predicted impact. */
+const TIMER_LINGER_S = 4;
 
 export interface TrailPoint {
   x: number;
@@ -68,6 +86,10 @@ export class GameSession {
   /** Enemy jets your side's radars detect right now. */
   known = new Set<string>();
   lastSeen = new Map<string, { x: number; y: number; hdg: number; t: number }>();
+  /** Last TWS track of each enemy jet held by one of your radars (what your missiles' timers use). */
+  lastTrack = new Map<string, TargetTrack>();
+  /** Onboard time-to-pitbull / time-to-impact estimate for each of your missiles. */
+  timers = new Map<string, MissileTimer>();
   private acc = 0;
   private seenEvents = 0;
   private nextTrailAt = 0;
@@ -82,6 +104,7 @@ export class GameSession {
     const mine = this.world.jets.find((j) => j.side === PLAYER_SIDE);
     if (mine) this.selected.add(mine.id);
     this.updateKnowledge();
+    this.updateTimers(0);
     this.recordTrails();
   }
 
@@ -110,6 +133,7 @@ export class GameSession {
       this.acc -= SIM_DT;
       step(this.world);
       this.updateKnowledge();
+      this.updateTimers(SIM_DT);
       if (this.world.t >= this.nextTrailAt) this.recordTrails();
       this.checkEvents();
       if (this.world.t >= this.nextTurnAt - 1e-9) {
@@ -185,7 +209,36 @@ export class GameSession {
         this.known.add(e.id);
         this.lastSeen.set(e.id, { x: e.pos.x, y: e.pos.y, hdg: e.hdg, t: w.t });
       }
+      if (mine.some((j) => radarCanTrack(w, j, e)))
+        this.lastTrack.set(e.id, { pos: { ...e.pos }, vel: velocity(e), t: w.t });
     }
+  }
+
+  /**
+   * Keeps the onboard estimate of each of your missiles: a copy of the missile model flown against
+   * your own track of the target. The real missile is only read once, at launch.
+   */
+  private updateTimers(dt: number): void {
+    const w = this.world;
+    for (const m of w.missiles)
+      if (m.side === PLAYER_SIDE && !this.timers.has(m.id)) this.timers.set(m.id, startTimer(m, w.t));
+    for (const tm of this.timers.values()) {
+      const shooter = jetById(w, tm.shooterId);
+      const target = jetById(w, tm.targetId);
+      const datalink = !!shooter && !!target && radarCanTrack(w, shooter, target);
+      const track = this.lastTrack.get(tm.targetId);
+      const known = datalink && target ? truthOf(target) : track ? trackAt(track, w.t) : null;
+      if (known) stepTimer(w.params.missile, tm, known, datalink, w.t, dt);
+    }
+  }
+
+  /** Timers still worth showing: until a little after the predicted impact, or the missile is spent. */
+  activeTimers(): MissileTimer[] {
+    const t = this.world.t;
+    return [...this.timers.values()].filter((tm) => {
+      if (tm.impactAt !== null) return t < tm.impactAt + TIMER_LINGER_S;
+      return !tm.ghost.end && tm.ghost.phase !== "lost" && t - tm.launchT < this.world.params.missile.maxTofS;
+    });
   }
 
   /** Whether the player may see this jet (or its decoys) right now. */
@@ -197,7 +250,8 @@ export class GameSession {
 
   /** Whether the player may see this event in the log. */
   showsEvent(e: GameEvent): boolean {
-    if (!this.fog || e.side === PLAYER_SIDE || e.type === "end") return true;
+    if (!this.fog || e.type === "end") return true;
+    if (e.side === PLAYER_SIDE) return !MISSILE_INTERNAL.has(e.type);
     // Hits on your own jets are obvious; the rest of the enemy's side is hidden.
     return (
       (e.type === "kill" || e.type === "survived-hit") &&
