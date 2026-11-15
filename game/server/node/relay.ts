@@ -46,13 +46,17 @@ export interface RelayConfig {
   log: (line: string) => void;
 }
 
-export const DEFAULT_ORIGINS = [
-  "https://acmi.qfan.ca",
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:5174",
-];
+/** Entries ending in ":*" match any port (local development servers move between ports). */
+export const DEFAULT_ORIGINS = ["https://acmi.qfan.ca", "http://localhost:*", "http://127.0.0.1:*"];
+
+export function originMatches(allowed: string[], origin: string): boolean {
+  return allowed.some((a) => {
+    if (a === "*" || a === origin) return true;
+    if (!a.endsWith(":*")) return false;
+    const base = a.slice(0, -2);
+    return origin.startsWith(base) && /^:\d{1,5}$/.test(origin.slice(base.length));
+  });
+}
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): RelayConfig {
   const num = (k: string, d: number) => {
@@ -124,7 +128,7 @@ export function startRelay(cfg: RelayConfig): Promise<RunningRelay> {
 
   const originAllowed = (origin: string | undefined): boolean => {
     if (origin === undefined) return cfg.allowNoOrigin;
-    return cfg.allowedOrigins.includes("*") || cfg.allowedOrigins.includes(origin);
+    return originMatches(cfg.allowedOrigins, origin);
   };
 
   const lockedOut = (ip: string, now: number): boolean => {

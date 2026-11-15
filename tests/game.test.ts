@@ -14,7 +14,7 @@ import {
   type World,
   waitingOnMissiles,
 } from "../src/game/sim/world.ts";
-import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
 

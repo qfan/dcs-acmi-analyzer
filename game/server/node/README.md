@@ -17,7 +17,7 @@ WebSocket endpoint is `/ws`, and everything else is a 404.
 |---|---|---|
 | `RELAY_HOST` | `127.0.0.1` | Address to listen on. `0.0.0.0` for LAN play without a proxy. |
 | `RELAY_PORT` | `8787` | Port. |
-| `RELAY_ALLOWED_ORIGINS` | `https://acmi.qfan.ca` and localhost:5173/5174 | Comma-separated pages allowed to connect; `*` allows any. |
+| `RELAY_ALLOWED_ORIGINS` | `https://acmi.qfan.ca`, `http://localhost:*`, `http://127.0.0.1:*` | Comma-separated pages allowed to connect; `:*` matches any port, `*` allows any page. |
 | `RELAY_ALLOW_NO_ORIGIN` | `0` | `1` accepts clients that send no Origin (scripts, tests). |
 | `RELAY_MAX_ROOMS` | `20` | Rooms open at once. |
 | `RELAY_MAX_CONNECTIONS` | `200` | Connections at once. |

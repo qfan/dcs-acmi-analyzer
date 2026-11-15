@@ -6,7 +6,7 @@ import { acmiFileName } from "../src/game/acmi.ts";
 import { NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
 import { command, jetById } from "../src/game/sim/world.ts";
-import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 
 async function* bytes(text: string) {
   yield new TextEncoder().encode(text);

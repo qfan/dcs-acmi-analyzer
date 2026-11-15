@@ -33,7 +33,7 @@ export const LIMITS = {
   guestMessagesPerS: 20,
   guestBytesPerS: 16 * 1024,
   hostMessagesPerS: 60,
-  hostBytesPerS: 128 * 1024,
+  hostBytesPerS: 256 * 1024,
   /** A new connection must send create/join/resume within this time (ms). */
   helloTimeoutMs: 5_000,
   /** A dropped peer can resume for this long before it is removed (ms). */

@@ -33,6 +33,10 @@ export interface Scenario {
   npc: boolean;
   /** Always flown by NPCs on both sides (infinite demo mode). */
   allNpc?: boolean;
+  /** Offered in multiplayer (each jet flown by a player or an NPC). */
+  mp?: boolean;
+  /** Only offered in multiplayer. */
+  mpOnly?: boolean;
   build(params: GameParams, altFt: number, seed: number, opts?: ScenarioOptions): World;
 }
 
@@ -174,9 +178,15 @@ const DEMO_ROW_COLS = 3;
 const DEMO_ROW_SPACE_NM = 5;
 const DEMO_TRAIL_NM = 20;
 
-function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts: ScenarioOptions): World {
+function buildInfiniteDemo(
+  params: GameParams,
+  altFt: number,
+  seed: number,
+  opts: ScenarioOptions,
+  infinite = true,
+): World {
   const w = makeWorld(params, seed);
-  w.infinite = true;
+  w.infinite = infinite;
   const altM = altFt * FT;
   const blueChoice = opts.blueAi ?? opts.redSkill;
   const redChoice = opts.redSkill;
@@ -205,6 +215,7 @@ function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts
 
   addSide("blue", blueChoice);
   addSide("red", redChoice);
+  if (!infinite) return w;
 
   w.respawn = (world, dead) => {
     const slot = slots.get(dead.id);
@@ -235,6 +246,7 @@ function buildInfiniteDemo(params: GameParams, altFt: number, seed: number, opts
 export const SCENARIOS: Scenario[] = [
   {
     id: "duel",
+    mp: true,
     title: "Head-on duel",
     summary: "1v1 from 60 nm against the NPC. Pick its skill, or let the NPC fly your jet too and watch.",
     lesson:
@@ -249,6 +261,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: "2v1",
+    mp: true,
     title: "Two-ship vs one",
     summary: "2v1 from 60 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
     lesson:
@@ -263,6 +276,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: "2v2",
+    mp: true,
     title: "Two-ship vs two-ship",
     summary: "2v2 from 60 nm. You fly both blue jets (select one or both), or watch NPC vs NPC.",
     lesson:
@@ -277,6 +291,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: "4v2",
+    mp: true,
     title: "Four-ship (2x2) vs two-ship",
     summary:
       "4v2 from 60 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
@@ -336,6 +351,19 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    id: "6v6",
+    title: "Six-ship vs six-ship",
+    summary: "6v6 from 120 nm in two 3-ship lines per side, 20 nm in trail. No respawns.",
+    lesson:
+      "Each side flies two 3-ship lines 5 nm abreast, the second 20 nm behind the first. Sort targets across the flight, and let the trailing line cover the front line's pump.",
+    npc: true,
+    mp: true,
+    mpOnly: true,
+    build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
+      return buildInfiniteDemo(params, altFt, seed, opts, false);
+    },
+  },
+  {
     id: "defend",
     title: "Defend a long shot",
     npc: false,
@@ -382,3 +410,52 @@ export const SCENARIOS: Scenario[] = [
 
 export const scenarioById = (id: string): Scenario =>
   SCENARIOS.find((s) => s.id === id) ?? (SCENARIOS[0] as Scenario);
+
+/** Who flies one jet in multiplayer: a player, an NPC of some skill, or nobody (jet removed). */
+export type SlotCrew = "human" | AiSkillChoice | "closed";
+
+/** The jets a scenario spawns, for the multiplayer slot list. */
+export function scenarioSlots(
+  id: string,
+  params: GameParams,
+): { id: string; side: Side; callsign: string }[] {
+  const w = scenarioById(id).build(params, 25000, 1, { redSkill: "normal", blueAi: "normal" });
+  return w.jets.map((j) => ({ id: j.id, side: j.side, callsign: j.callsign }));
+}
+
+/**
+ * Builds a multiplayer fight: the scenario's jets, each crewed as `crew` says (missing entries fly
+ * as Normal NPCs). Closed jets are removed. Player jets start pre-targeted on a matching bandit.
+ */
+export function buildMultiplayer(
+  id: string,
+  params: GameParams,
+  altFt: number,
+  seed: number,
+  crew: Record<string, SlotCrew>,
+): World {
+  const w = scenarioById(id).build(params, altFt, seed, { redSkill: "normal", blueAi: "normal" });
+  w.jets = w.jets.filter((j) => crew[j.id] !== "closed");
+  w.controllers.clear();
+  for (const side of ["blue", "red"] as Side[]) {
+    const jets = w.jets.filter((j) => j.side === side);
+    let dir: 1 | -1 | null = jets.length > 1 ? (w.rng() < 0.5 ? 1 : -1) : null;
+    for (const j of jets) {
+      const c = crew[j.id] ?? "normal";
+      if (c !== "human" && c !== "closed")
+        w.controllers.set(j.id, new DoctrineBot(AI_SKILLS[pickSkill(w, c)], dir));
+      if (dir !== null) dir = dir === 1 ? -1 : 1;
+    }
+    const enemies = w.jets.filter((j) => j.side !== side);
+    jets.forEach((j, i) => {
+      j.targetId =
+        crew[j.id] === "human" && enemies.length > 0 ? (enemies[i % enemies.length]?.id ?? null) : null;
+    });
+  }
+  return w;
+}
+
+/** Puts a Normal NPC in a jet whose player left the match. */
+export function npcTakeover(w: World, jetId: string, skill: AiSkillId = "normal"): void {
+  w.controllers.set(jetId, new DoctrineBot(AI_SKILLS[skill], null));
+}

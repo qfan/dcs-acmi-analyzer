@@ -4,7 +4,7 @@ import { desiredHeading, type Jet, mach, velocity, verticalSpeed } from "../sim/
 import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type Missile, missileMach } from "../sim/missile.ts";
 import { jetById, rwrContacts, steerThreatPos, type World } from "../sim/world.ts";
-import { type GameSession, PLAYER_SIDE } from "./session.ts";
+import type { SessionView } from "./view.ts";
 
 export const COLORS = {
   bg: "#0a1018",
@@ -260,7 +260,7 @@ function drawMissile(ctx: CanvasRenderingContext2D, v: View, w: World, m: Missil
 }
 
 /** Released chaff (grey specks) and flares (orange), fading out. */
-function drawDecoys(ctx: CanvasRenderingContext2D, v: View, s: GameSession) {
+function drawDecoys(ctx: CanvasRenderingContext2D, v: View, s: SessionView) {
   const w = s.world;
   for (const d of w.decoys) {
     if (!s.sees(d.jetId)) continue;
@@ -293,7 +293,7 @@ const RWR_R = 26;
  * when it is locked on you. With fog of war on, missile ticks also get a strobe line, since the
  * missile itself is hidden.
  */
-function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: GameSession, j: Jet) {
+function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: SessionView, j: Jet) {
   const contacts = rwrContacts(s.world, j);
   const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
   ctx.strokeStyle = contacts.length > 0 ? "rgba(219,227,238,0.35)" : "rgba(219,227,238,0.12)";
@@ -339,7 +339,7 @@ function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: GameSession, j: Jet)
 function drawGhost(
   ctx: CanvasRenderingContext2D,
   v: View,
-  s: GameSession,
+  s: SessionView,
   j: Jet,
   labels: boolean,
 ): Hit | null {
@@ -372,7 +372,7 @@ function drawGhost(
 export function drawScene(
   ctx: CanvasRenderingContext2D,
   v: View,
-  s: GameSession,
+  s: SessionView,
   labels: boolean,
   radarSectors = true,
   sideView = false,
@@ -388,7 +388,7 @@ export function drawScene(
 
   for (const j of w.jets) {
     const tr = s.trails.get(j.id);
-    if (tr && (!s.fog || j.side === PLAYER_SIDE))
+    if (tr && (!s.fog || j.side === s.side))
       drawTrail(ctx, v, tr, j.alive ? j.pos : null, `${j.alive ? sideCol(j.side) : COLORS.dead}55`, 1.5);
   }
   for (const m of w.missiles) {
@@ -443,7 +443,7 @@ export function drawScene(
 
   // Commanded heading of own jets: where they are turning to.
   for (const j of w.jets) {
-    if (!j.alive || j.side !== PLAYER_SIDE) continue;
+    if (!j.alive || j.side !== s.side) continue;
     const hdg = desiredHeading(j, steerThreatPos(w, j));
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     ctx.strokeStyle = "rgba(219,227,238,0.35)";
@@ -457,7 +457,7 @@ export function drawScene(
 
   for (const m of w.missiles) if (!m.end && !s.fog) drawMissile(ctx, v, w, m, labels);
 
-  for (const j of w.jets) if (j.alive && j.side === PLAYER_SIDE) drawRwr(ctx, v, s, j);
+  for (const j of w.jets) if (j.alive && j.side === s.side) drawRwr(ctx, v, s, j);
 
   const targets = new Set<string>();
   for (const id of s.selected) {
@@ -480,7 +480,7 @@ export function drawScene(
       if (j.alive)
         label(
           ctx,
-          `M${mach(j).toFixed(2)} ${altText(j, j.side === PLAYER_SIDE)} ${j.g.toFixed(1)}g ×${j.missiles}`,
+          `M${mach(j).toFixed(2)} ${altText(j, j.side === s.side)} ${j.g.toFixed(1)}g ×${j.missiles}`,
           sx + 14,
           sy + 9,
           `${col}cc`,
@@ -510,7 +510,7 @@ const SIDE_H = 150;
  * to its target (or south → north when nothing is targeted). Shows what fog of war allows: your
  * jets, detected or last-seen bandits, and missiles only when fog is off.
  */
-function drawSideView(ctx: CanvasRenderingContext2D, v: View, s: GameSession) {
+function drawSideView(ctx: CanvasRenderingContext2D, v: View, s: SessionView) {
   const w = s.world;
   const pw = Math.min(SIDE_W, v.w * 0.45);
   const ph = SIDE_H;
@@ -561,7 +561,7 @@ function drawSideView(ctx: CanvasRenderingContext2D, v: View, s: GameSession) {
         kind: "jet",
         vAlong: vel.x * ux + vel.y * uy,
         vz: vel.z,
-        altCmd: j.side === PLAYER_SIDE && s.selected.has(j.id) ? j.altCmd : undefined,
+        altCmd: j.side === s.side && s.selected.has(j.id) ? j.altCmd : undefined,
       });
     } else {
       const g = s.lastSeen.get(j.id);

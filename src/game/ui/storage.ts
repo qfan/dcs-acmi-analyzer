@@ -1,9 +1,9 @@
 /** Per-browser conveniences: edited parameters, auto-pause settings and the last scenario. */
 
 import { AI_SKILL_CHOICES, type AiSkillChoice } from "../ai/doctrine.ts";
+import { type AutoPause, DEFAULT_AUTOPAUSE } from "../engine/session.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../sim/params.ts";
 import { DEFAULT_OPTIONS, type ScenarioOptions } from "../sim/scenarios.ts";
-import { type AutoPause, DEFAULT_AUTOPAUSE } from "./session.ts";
 
 const PARAMS_KEY = "bvr-trainer.params.v1";
 const AUTOPAUSE_KEY = "bvr-trainer.autopause.v2";
@@ -73,4 +73,19 @@ export function loadLast(): { scenarioId: string; altFt: number; options: Scenar
 
 export function saveLast(scenarioId: string, altFt: number, options: ScenarioOptions): void {
   write(LAST_KEY, { scenarioId, altFt, options });
+}
+
+const MP_KEY = "bvr-trainer.mp.v1";
+
+/** Multiplayer conveniences: the name you play under and a custom relay address (empty: default). */
+export function loadMp(): { name: string; relayUrl: string } {
+  const v = read(MP_KEY) as { name?: unknown; relayUrl?: unknown } | null;
+  return {
+    name: typeof v?.name === "string" ? v.name.slice(0, 24) : "",
+    relayUrl: typeof v?.relayUrl === "string" ? v.relayUrl : "",
+  };
+}
+
+export function saveMp(name: string, relayUrl: string): void {
+  write(MP_KEY, { name, relayUrl });
 }

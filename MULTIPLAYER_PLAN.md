@@ -13,6 +13,34 @@ never opens connections of its own, and never shows anyone's IP address to other
 on the **Cloudflare Workers Free plan** (Durable Objects, no payment method on file, so it can never
 send you a bill). A Node.js version of the same relay covers self-hosting, LAN and a cheap VM.
 
+## Status (2026-11-15)
+
+**Built:** the Node relay (`game/server/`), and Phase 5a in the game:
+
+- **Sim in a Web Worker** (`src/game/engine/`), for single player and the multiplayer host. The UI
+  only draws snapshots on a mirror world (`src/game/ui/view.ts`). Hidden tabs no longer stall the
+  host. Single player pauses itself when its tab is hidden, as it effectively did before.
+- **Per-side knowledge** (`src/game/sim/knowledge.ts`). Snapshots carry both sides' pictures to
+  the relay (JSON, numbers rounded, missiles trimmed; sent every 100 ms or slower when large).
+- **New game dialog** with Single player and Multiplayer tabs. Lobby: room code and invite link
+  (`#join=CODE`, never sent to a server), scenario (duel, 2v1, 2v2, 4v2, a new 6v6), altitude,
+  loadout, fog of war, real time or turns, host-only time compression. Each seat is a player, an
+  NPC of any skill, open (an NPC if nobody takes it) or closed. Ready, swap sides, start, back to
+  lobby.
+- **Rules in the match:** fog of war is on by default and locked for everyone; the host can turn
+  it off before the start, and then each player chooses their own. Five pauses each, and anyone
+  can resume. In turn mode the fight waits for every player. A dropped player gets 60 s, and the
+  fight waits for them; after that an NPC flies their jet. Orders for jets you don't own are
+  refused.
+- **Tests:** `tests/engine.test.ts` runs a host and a guest engine through a real relay in Node.
+  The browser flow (host, invite link, join, seat, ready, start, orders, pause, drop, NPC takeover,
+  end match) was checked in two tabs against the local relay.
+
+**Not done:** the Cloudflare relay. Until it is deployed, the default relay address
+`wss://relay.qfan.ca/ws` doesn't exist; on localhost the game uses `ws://localhost:8787/ws`
+(run `node game/server/node/relay.ts`), and the Multiplayer tab's Advanced field takes any other.
+Binary snapshots and lockstep (5b) are not started.
+
 ---
 
 ## 1. Is the game data ready for multiplayer?

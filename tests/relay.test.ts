@@ -146,6 +146,17 @@ describe("relay", () => {
     expect([...(await host.next<Uint8Array>())]).toEqual([1, 1]);
   });
 
+  it("matches origins exactly, or any port for entries ending in :*", async () => {
+    const { originMatches } = await import("../game/server/node/relay.ts");
+    const allowed = ["https://acmi.qfan.ca", "http://localhost:*"];
+    expect(originMatches(allowed, "https://acmi.qfan.ca")).toBe(true);
+    expect(originMatches(allowed, "http://localhost:5175")).toBe(true);
+    expect(originMatches(allowed, "http://localhost")).toBe(false);
+    expect(originMatches(allowed, "http://localhost:5175.evil.example")).toBe(false);
+    expect(originMatches(allowed, "http://localhostevil.example:80")).toBe(false);
+    expect(originMatches(allowed, "https://acmi.qfan.ca.evil.example")).toBe(false);
+  });
+
   it("refuses other origins and, by default, clients without an Origin", async () => {
     const r = await relay();
     expect(await new Client(r.port, "https://evil.example").opened).toBe(false);

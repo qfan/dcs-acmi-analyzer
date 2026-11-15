@@ -15,7 +15,7 @@ import { cloneParams, DEFAULT_PARAMS, type GameParams } from "../src/game/sim/pa
 import { scenarioById } from "../src/game/sim/scenarios.ts";
 import { launchZone } from "../src/game/sim/wez.ts";
 import { command, jetById, step } from "../src/game/sim/world.ts";
-import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
 const DT = 0.02;
