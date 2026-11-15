@@ -89,6 +89,22 @@ describe("game: missile and launch zone", () => {
     expect(hi.rneNm).toBeLessThan(hi.rmaxNm * 0.5);
   });
 
+  it("shrinks Rmax as the target turns off a hot aspect, while Rne ignores its heading", () => {
+    const p = P();
+    const shooter = jetAt(p, 25000, 0.9);
+    // Target 37 nm north; 180° = flying straight at the shooter, then cranking further away.
+    const zoneAt = (hdgDeg: number) =>
+      launchZone(p.missile, shooter, jetAt(p, 25000, 0.9, "red", 37 * NM, hdgDeg));
+    const hot = zoneAt(180);
+    const crank = zoneAt(230);
+    const beam = zoneAt(270);
+    expect(hot.rmaxNm).toBeGreaterThan(crank.rmaxNm);
+    expect(crank.rmaxNm).toBeGreaterThan(beam.rmaxNm);
+    // Rne already assumes the target turns straight away, so where it points now does not matter.
+    expect(crank.rneNm).toBeCloseTo(hot.rneNm, 0);
+    expect(beam.rneNm).toBeCloseTo(hot.rneNm, 0);
+  });
+
   it("still finds the zone while cranking (short shots off-boresight miss)", () => {
     const p = P();
     const z = launchZone(
