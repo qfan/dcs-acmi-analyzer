@@ -15,7 +15,9 @@
 
 import type { Side } from "./aircraft.ts";
 import { airDensity, DEG, FT, G, interp, KT, NM, speedOfSoundMs } from "./atmosphere.ts";
-import type { MissileParams } from "./params.ts";
+import { chanceInStep, inNotch } from "./countermeasures.ts";
+import type { CountermeasureParams, MissileParams } from "./params.ts";
+import type { Rng } from "./rng.ts";
 import { add, angleBetween, dot, len, norm, perp, scale, segmentClosest, sub, type V3, v3 } from "./vec.ts";
 
 export type MissilePhase = "datalink" | "inertial" | "search" | "tracking" | "lost";
@@ -45,6 +47,8 @@ export interface Missile {
   latAccel: number;
   /** Flight time at which the seeker gave up or the missile overshot (it then flies on unguided). */
   lostAt: number | null;
+  /** Flight time before which the seeker cannot lock (just after a notch or chaff break). */
+  blindUntil: number;
   end: MissileEnd | null;
 }
 
@@ -63,7 +67,9 @@ export type MissileEvent =
   | "fuzed"
   | "miss"
   | "spent"
-  | "ground";
+  | "ground"
+  | "seeker-notched"
+  | "seeker-chaffed";
 
 export function loftGainM(p: MissileParams, rangeM: number): number {
   if (!p.loft) return 0;
@@ -103,6 +109,7 @@ export function launchMissile(
     prevRangeM: range,
     latAccel: 0,
     lostAt: null,
+    blindUntil: 0,
     end: null,
   };
 }
@@ -117,6 +124,14 @@ export function motorAccel(p: MissileParams, tof: number): number {
   if (tof < p.boostTimeS) return p.boostAccel;
   if (tof < p.boostTimeS + p.sustainTimeS) return p.sustainAccel;
   return 0;
+}
+
+/** Notch and chaff inputs for one missile step (see CountermeasureParams). */
+export interface SeekerEcm {
+  rng: Rng;
+  cm: CountermeasureParams;
+  /** A chaff bundle the target released this step, if any. */
+  chaff: { pos: V3; vel: V3 } | null;
 }
 
 /** Steering gain for pursuit-type guidance: lateral accel = gain · v · angle error (1/s). */
@@ -160,8 +175,8 @@ function interceptPoint(pos: V3, speed: number, tp: V3, tv: V3): V3 {
 
 /**
  * Advances a missile by dt. `datalink` says whether the shooter's radar is tracking the target this
- * step. `fuzeRadiusM` can be overridden (the launch-zone calculator uses coarse steps). Returns the
- * events of this step.
+ * step. `fuzeRadiusM` can be overridden (the launch-zone calculator uses coarse steps). `ecm`
+ * turns on notch and chaff (the real fight; predictions leave it out). Returns the events of this step.
  */
 export function stepMissile(
   p: MissileParams,
@@ -170,6 +185,7 @@ export function stepMissile(
   datalink: boolean,
   dt: number,
   fuzeRadiusM = p.fuzeRadiusM,
+  ecm?: SeekerEcm,
 ): MissileEvent[] {
   const ev: MissileEvent[] = [];
   if (m.end) return ev;
@@ -209,6 +225,8 @@ export function stepMissile(
   if (m.phase === "search") {
     const seen =
       target.alive &&
+      m.tof >= m.blindUntil &&
+      !(ecm && inNotch(m.pos, target, ecm.cm.notchGateKt)) &&
       len(toTrue) <= p.seekerRangeNm * NM &&
       angleBetween(toTrue, toEst) <= p.seekerSearchDeg * DEG &&
       angleBetween(toTrue, m.vel) <= p.seekerGimbalDeg * DEG;
@@ -226,6 +244,21 @@ export function stepMissile(
       m.phase = "lost";
       m.lostAt = m.tof;
       ev.push("seeker-lost");
+    } else if (ecm) {
+      const cm = ecm.cm;
+      if (ecm.chaff && ecm.rng() < cm.chaffPullChance) {
+        // Pulled onto the chaff for a moment; then it searches again around the (thinning) chaff.
+        m.phase = "search";
+        m.estPos = { ...ecm.chaff.pos };
+        m.estVel = { ...ecm.chaff.vel };
+        m.blindUntil = m.tof + cm.chaffPullS;
+        ev.push("seeker-chaffed");
+      } else if (inNotch(m.pos, target, cm.notchGateKt) && ecm.rng() < chanceInStep(cm.seekerNotchPerS, dt)) {
+        // Lost in the notch: it keeps flying to where the target was going and searches again.
+        m.phase = "search";
+        m.blindUntil = m.tof + cm.notchReacquireS;
+        ev.push("seeker-notched");
+      }
     }
   }
 

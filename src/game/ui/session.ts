@@ -25,7 +25,15 @@ export const PLAYER_SIDE = "blue";
  * Events about a missile's own state that the launching jet cannot observe: with fog of war on,
  * your jet only has its timers, so these stay out of the log.
  */
-const MISSILE_INTERNAL = new Set<GameEvent["type"]>(["pitbull", "acquired", "seeker-lost", "miss", "spent"]);
+const MISSILE_INTERNAL = new Set<GameEvent["type"]>([
+  "pitbull",
+  "acquired",
+  "seeker-lost",
+  "seeker-notched",
+  "seeker-chaffed",
+  "miss",
+  "spent",
+]);
 
 export interface AutoPause {
   /** A hostile missile is fired at one of your jets. */

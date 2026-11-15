@@ -5,6 +5,7 @@
  */
 import { desiredHeading, type Jet, type Side, stepJet, velocity } from "./aircraft.ts";
 import { DEG, NM } from "./atmosphere.ts";
+import { chanceInStep, inNotch } from "./countermeasures.ts";
 import { launchMissile, type Missile, type MissileEvent, stepMissile, type TargetTruth } from "./missile.ts";
 import type { GameParams } from "./params.ts";
 import { makeRng, type Rng } from "./rng.ts";
@@ -27,6 +28,8 @@ export type GameEventType =
   | "spent"
   | "radar-lost"
   | "radar-gained"
+  | "seeker-notched"
+  | "seeker-chaffed"
   | "rwr-missile"
   | "chaff"
   | "flare"
@@ -61,6 +64,8 @@ export interface Decoy {
   t0: number;
   pos: V3;
   vel: V3;
+  /** Its chance to pull radars and seekers has been rolled (once per bundle). */
+  rolled: boolean;
 }
 
 /** Something that flies a jet: the scripted bot now, the NPC AI later. */
@@ -85,6 +90,8 @@ export interface World {
   decoys: Decoy[];
   /** "missileId>jetId" pairs already announced on that jet's RWR. */
   rwrSeen: Set<string>;
+  /** "radarJetId>targetJetId" → sim time until which that radar cannot lock the target (notch, chaff). */
+  radarBreak: Map<string, number>;
   outcome: Outcome | null;
   /** The fight ends as a draw after this long (s). */
   timeLimitS: number;
@@ -107,6 +114,7 @@ export function makeWorld(params: GameParams, seed = 1): World {
     radarTrack: new Map(),
     decoys: [],
     rwrSeen: new Set(),
+    radarBreak: new Map(),
     outcome: null,
     timeLimitS: 900,
     objective: "kill",
@@ -124,14 +132,50 @@ function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): bool
   return angleBetween(los, headingVec(shooter.hdg, shooter.gamma)) <= w.params.radar.gimbalDeg * DEG;
 }
 
-/** True when `shooter`'s radar sees `target` (detection range and gimbal). Missiles are never seen. */
+const detectRange = (w: World) => Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm);
+
+/** True when `shooter`'s radar scan covers `target` (what the target's RWR sees), notched or not. */
+export function radarScans(w: World, shooter: Jet, target: Jet): boolean {
+  return radarCovers(w, shooter, target, detectRange(w));
+}
+
+/** True while a notch or chaff break keeps `shooter`'s radar off `target`. */
+export function radarBroken(w: World, shooter: Jet, target: Jet): boolean {
+  return w.t < (w.radarBreak.get(`${shooter.id}>${target.id}`) ?? Number.NEGATIVE_INFINITY);
+}
+
+/** True when `shooter`'s radar sees `target` (detection range, gimbal, not broken). Missiles are never seen. */
 export function radarCanDetect(w: World, shooter: Jet, target: Jet): boolean {
-  return radarCovers(w, shooter, target, Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm));
+  return radarScans(w, shooter, target) && !radarBroken(w, shooter, target);
 }
 
 /** True when `shooter` can hold a TWS lock on `target`: needed to fire and for datalink support. */
 export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
-  return radarCovers(w, shooter, target, w.params.radar.rangeNm);
+  return radarCovers(w, shooter, target, w.params.radar.rangeNm) && !radarBroken(w, shooter, target);
+}
+
+/**
+ * Notch and chaff against radars, once per step. A target in a radar's notch has a small chance per
+ * second of breaking its lock; while it stays in the notch the radar cannot get it back. A fresh
+ * chaff bundle has a small chance to pull each radar scanning the jet off it for a moment.
+ */
+function updateRadarBreaks(w: World, dt: number, freshChaff: Map<string, Decoy>): void {
+  const cm = w.params.countermeasures;
+  for (const radar of w.jets) {
+    if (!radar.alive) continue;
+    for (const tgt of w.jets) {
+      if (tgt.side === radar.side || !tgt.alive || !radarScans(w, radar, tgt)) continue;
+      const key = `${radar.id}>${tgt.id}`;
+      const until = w.radarBreak.get(key) ?? Number.NEGATIVE_INFINITY;
+      if (inNotch(radar.pos, truthOf(tgt), cm.notchGateKt)) {
+        if (w.t < until) w.radarBreak.set(key, w.t + cm.notchReacquireS);
+        else if (w.rng() < chanceInStep(cm.radarNotchPerS, dt))
+          w.radarBreak.set(key, w.t + cm.notchReacquireS);
+      }
+      if (freshChaff.has(tgt.id) && w.rng() < cm.chaffPullChance)
+        w.radarBreak.set(key, Math.max(w.radarBreak.get(key) ?? 0, w.t + cm.chaffPullS));
+    }
+  }
 }
 
 /**
@@ -154,7 +198,7 @@ export function rwrContacts(w: World, j: Jet): RwrContact[] {
   if (!j.alive) return [];
   const out: RwrContact[] = [];
   for (const e of w.jets) {
-    if (e.side === j.side || !e.alive || !radarCanDetect(w, e, j)) continue;
+    if (e.side === j.side || !e.alive || !radarScans(w, e, j)) continue;
     out.push({ sourceId: e.id, kind: "radar", bearing: bearing(j.pos, e.pos), lock: false });
   }
   const mp = w.params.missile;
@@ -220,6 +264,7 @@ export function command(w: World, c: Command): string | null {
         t0: w.t,
         pos: { ...j.pos },
         vel: scale(velocity(j), 0.3),
+        rolled: false,
       });
       emit(w, {
         type: c.type,
@@ -269,6 +314,8 @@ const MISSILE_TEXT: Partial<Record<MissileEvent, [GameEventType, string]>> = {
   "datalink-lost": ["datalink-lost", "datalink lost: flying to last known position"],
   "datalink-regained": ["datalink-regained", "datalink regained"],
   "seeker-lost": ["seeker-lost", "seeker lost the target"],
+  "seeker-notched": ["seeker-notched", "seeker lost lock in the notch"],
+  "seeker-chaffed": ["seeker-chaffed", "seeker pulled onto chaff"],
   miss: ["miss", "missed"],
   spent: ["spent", "self-destructed (flight time or speed limit)"],
   ground: ["spent", "hit the ground"],
@@ -286,6 +333,15 @@ export function step(w: World, dt = SIM_DT): void {
     stepJet(w.params.aircraft, j, desiredHeading(j, steerThreatPos(w, j)), dt);
   }
   w.t += dt;
+
+  // Chaff bundles released since the last step get their one roll against radars and seekers.
+  const freshChaff = new Map<string, Decoy>();
+  for (const d of w.decoys)
+    if (d.kind === "chaff" && !d.rolled) {
+      d.rolled = true;
+      freshChaff.set(d.jetId, d);
+    }
+  updateRadarBreaks(w, dt, freshChaff);
 
   for (const j of w.jets) {
     const tgt = jetById(w, j.targetId);
@@ -311,7 +367,11 @@ export function step(w: World, dt = SIM_DT): void {
       continue;
     }
     const datalink = !!shooter && radarCanTrack(w, shooter, tgt);
-    const evs = stepMissile(w.params.missile, m, truthOf(tgt), datalink, dt);
+    const evs = stepMissile(w.params.missile, m, truthOf(tgt), datalink, dt, w.params.missile.fuzeRadiusM, {
+      rng: w.rng,
+      cm: w.params.countermeasures,
+      chaff: freshChaff.get(tgt.id) ?? null,
+    });
     const who = `${shooter?.callsign ?? "?"} ${m.id}`;
     for (const e of evs) {
       if (e === "fuzed") {
