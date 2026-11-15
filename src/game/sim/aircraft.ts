@@ -15,7 +15,7 @@ import { headingVec, type V3, wrapPi } from "./vec.ts";
 
 export type Side = "blue" | "red";
 export type Throttle = "idle" | "mil" | "ab";
-export type Effort = "normal" | "max";
+export type Effort = "sustain" | "normal" | "max";
 
 /**
  * What the pilot asks for. "heading" holds a compass heading. "relative" keeps a threat at a fixed
@@ -99,11 +99,27 @@ export function thrustN(p: AircraftParams, throttle: Throttle, altM: number, m: 
   return base * 1000 * sigma ** p.thrustDensityExp * (1 + p.thrustMachGain * m);
 }
 
-/** Load factor available right now for an effort level (lift- or g-limited, at least 1). */
-export function availableG(p: AircraftParams, j: Pick<Jet, "pos" | "speed">, effort: Effort): number {
+/** Load factor at which thrust equals drag (zero energy bleed: dV/dt = 0) at the current state. */
+export function sustainedG(p: AircraftParams, j: Pick<Jet, "pos" | "speed" | "throttle" | "gamma">): number {
+  const m = j.speed / speedOfSoundMs(j.pos.z);
+  const qS = 0.5 * airDensity(j.pos.z) * j.speed * j.speed * p.wingAreaM2;
+  const weight = p.massKg * G;
+  const d0 = qS * interp(p.tableMach, p.cd0, m);
+  const kTerm = (p.inducedK * weight * weight) / Math.max(qS, 1);
+  const tAvail = thrustN(p, j.throttle, j.pos.z, m) - weight * Math.sin(j.gamma);
+  return tAvail > d0 ? Math.sqrt((tAvail - d0) / Math.max(kTerm, 1e-6)) : 1;
+}
+
+/** Load factor available right now for an effort level (lift-, thrust-, or g-limited, at least 1). */
+export function availableG(
+  p: AircraftParams,
+  j: Pick<Jet, "pos" | "speed" | "throttle" | "gamma">,
+  effort: Effort,
+): number {
   const m = j.speed / speedOfSoundMs(j.pos.z);
   const q = 0.5 * airDensity(j.pos.z) * j.speed * j.speed;
   const liftG = (interp(p.tableMach, p.clMax, m) * q * p.wingAreaM2) / (p.massKg * G);
+  if (effort === "sustain") return Math.max(1, Math.min(p.gLimit, liftG, sustainedG(p, j)));
   return Math.max(1, Math.min(effort === "max" ? p.gLimit : p.normalG, liftG));
 }
 
@@ -113,6 +129,17 @@ export function dragN(p: AircraftParams, altM: number, speed: number, n: number)
   const qS = 0.5 * airDensity(altM) * speed * speed * p.wingAreaM2;
   const cl = (n * p.massKg * G) / Math.max(qS, 1);
   return qS * (interp(p.tableMach, p.cd0, m) + p.inducedK * cl * cl);
+}
+
+/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as IAS and stays >= 1g stall speed. */
+export function minSpeedMs(p: AircraftParams, altM: number): number {
+  const rho = Math.max(airDensity(altM), 1e-4);
+  const sigma = rho / RHO0;
+  const iasFloor = (p.minSpeedKt * KT) / Math.sqrt(sigma);
+  const m = iasFloor / speedOfSoundMs(altM);
+  const cl1g = Math.max(interp(p.tableMach, p.clMax, m), 0.1);
+  const stall1g = Math.sqrt((2 * p.massKg * G) / (rho * Math.max(p.wingAreaM2, 1) * cl1g));
+  return Math.max(1, iasFloor, stall1g);
 }
 
 /** Specific excess power (m/s) at a load factor: positive means the jet gains energy. */
@@ -152,7 +179,7 @@ export function stepJet(p: AircraftParams, j: Jet, desiredHdg: number, dt: numbe
   const mass = Math.max(p.massKg, 1);
   const accel =
     (thrustN(p, j.throttle, j.pos.z, m) - dragN(p, j.pos.z, j.speed, j.g)) / mass - G * Math.sin(j.gamma);
-  j.speed = Math.max(1, p.minSpeedKt * KT, j.speed + accel * dt);
+  j.speed = Math.max(minSpeedMs(p, j.pos.z), j.speed + accel * dt);
 
   const u = headingVec(j.hdg, j.gamma);
   j.pos.x += u.x * j.speed * dt;

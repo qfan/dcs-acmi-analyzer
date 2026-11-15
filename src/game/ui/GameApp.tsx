@@ -256,7 +256,11 @@ export function GameApp() {
           throttle: ({ idle: "mil", mil: "ab", ab: "idle" } as const)[j.throttle],
         }));
       else if (k === "g")
-        issue((j) => ({ type: "effort", jetId: j.id, effort: j.effort === "max" ? "normal" : "max" }));
+        issue((j) => ({
+          type: "effort",
+          jetId: j.id,
+          effort: ({ sustain: "normal", normal: "max", max: "sustain" } as const)[j.effort],
+        }));
       else if (k === "arrowleft" || k === "arrowright")
         issue((j) => ({
           type: "steer",
@@ -416,7 +420,10 @@ export function GameApp() {
                   type="button"
                   key={k}
                   className={session.timeScale === k ? "on" : ""}
-                  onClick={() => setScale(k)}
+                  onClick={(e) => {
+                    setScale(k);
+                    e.currentTarget.blur();
+                  }}
                   title={`Key ${i + 1}`}
                 >
                   {k}×
@@ -555,7 +562,10 @@ export function GameApp() {
                       type="button"
                       key={t}
                       className={p.throttle === t ? "on" : ""}
-                      onClick={() => issue((j) => ({ type: "throttle", jetId: j.id, throttle: t }))}
+                      onClick={(e) => {
+                        issue((j) => ({ type: "throttle", jetId: j.id, throttle: t }));
+                        e.currentTarget.blur();
+                      }}
                     >
                       {t.toUpperCase()}
                     </button>
@@ -565,16 +575,26 @@ export function GameApp() {
               <div className="g-row">
                 <span className="g-label">Turns</span>
                 <div className="g-seg">
-                  {(["normal", "max"] as const).map((t) => (
+                  {(["sustain", "normal", "max"] as const).map((t) => (
                     <button
                       type="button"
                       key={t}
                       className={p.effort === t ? "on" : ""}
-                      onClick={() => issue((j) => ({ type: "effort", jetId: j.id, effort: t }))}
+                      title={
+                        t === "sustain"
+                          ? "Hold speed / Mach (zero energy bleed when thrust allows)"
+                          : undefined
+                      }
+                      onClick={(e) => {
+                        issue((j) => ({ type: "effort", jetId: j.id, effort: t }));
+                        e.currentTarget.blur();
+                      }}
                     >
-                      {t === "normal"
-                        ? `Normal ${w.params.aircraft.normalG} g`
-                        : `Max ${w.params.aircraft.gLimit} g`}
+                      {t === "sustain"
+                        ? "Hold Spd"
+                        : t === "normal"
+                          ? `Normal ${w.params.aircraft.normalG} g`
+                          : `Max ${w.params.aircraft.gLimit} g`}
                     </button>
                   ))}
                 </div>
@@ -696,7 +716,7 @@ export function GameApp() {
             <p>
               <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd> hot
               · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold ·{" "}
-              <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> max-g turns ·{" "}
+              <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> turn mode ·{" "}
               <kbd>Insert</kbd> chaff · <kbd>Delete</kbd> flare · <kbd>V</kbd> follow
             </p>
             <p className="g-muted">

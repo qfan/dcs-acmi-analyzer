@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mach, makeJet, stepJet } from "../src/game/sim/aircraft.ts";
-import { DEG, FT, NM } from "../src/game/sim/atmosphere.ts";
+import { mach, makeJet, minSpeedMs, specificExcessPower, stepJet } from "../src/game/sim/aircraft.ts";
+import { DEG, FT, KT, NM } from "../src/game/sim/atmosphere.ts";
 import { launchMissile, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
@@ -82,6 +82,120 @@ describe("game: jet energy model", () => {
   it("turns less in thin air", () => {
     const p = P();
     expect(turnRate(p, 35000, 0.9, 1).rate).toBeLessThan(turnRate(p, 15000, 0.9, 1).rate * 0.75);
+  });
+
+  it("accelerates in AB from minimum speed at every preset altitude instead of getting trapped behind induced drag", () => {
+    const p = P();
+    for (const altFt of [5000, 15000, 25000, 35000]) {
+      const j = jetAt(p, altFt, 0.4);
+      j.throttle = "idle";
+      for (let i = 0; i < 6000; i++) stepJet(p.aircraft, j, 0, 0.02);
+      const floor = minSpeedMs(p.aircraft, altFt * FT);
+      expect(j.speed).toBeCloseTo(floor, 1);
+
+      j.throttle = "ab";
+      for (let i = 0; i < 1000; i++) stepJet(p.aircraft, j, 0, 0.02); // 20 s straight in AB
+      expect(j.speed).toBeGreaterThan(floor + 30 * KT);
+    }
+  });
+
+  it("uses AB thrust to reduce speed depletion during a hard turn and raise sustained turn speed", () => {
+    const p = P();
+    const runTurn = (throttle: "idle" | "mil" | "ab", seconds: number) => {
+      const j = jetAt(p, 25000, 0.9);
+      j.throttle = throttle;
+      j.effort = "max";
+      const steps = Math.round(seconds / 0.02);
+      for (let i = 0; i < steps; i++) stepJet(p.aircraft, j, j.hdg + 1, 0.02);
+      return j;
+    };
+    const start = jetAt(p, 25000, 0.9);
+    expect(specificExcessPower(p.aircraft, { ...start, throttle: "ab" }, 4)).toBeGreaterThan(
+      specificExcessPower(p.aircraft, { ...start, throttle: "mil" }, 4),
+    );
+    const idle15 = runTurn("idle", 15);
+    const mil15 = runTurn("mil", 15);
+    const ab15 = runTurn("ab", 15);
+    expect(ab15.speed).toBeGreaterThan(mil15.speed + 20 * KT);
+    expect(mil15.speed).toBeGreaterThan(idle15.speed + 20 * KT);
+
+    // Switching from MIL to AB mid-turn raises max-turn equilibrium speed at 15k and 25k ft
+    // (at 35k ft, CLmax induced drag exceeds AB thrust once slow unless unloading or using sustain mode).
+    for (const altFt of [15000, 25000]) {
+      const j = jetAt(p, altFt, 0.9);
+      j.throttle = "mil";
+      j.effort = "max";
+      for (let i = 0; i < 1500; i++) stepJet(p.aircraft, j, j.hdg + 1, 0.02);
+      const beforeAb = j.speed;
+      j.throttle = "ab";
+      for (let i = 0; i < 1500; i++) stepJet(p.aircraft, j, j.hdg + 1, 0.02);
+      expect(j.speed).toBeGreaterThan(beforeAb + 5 * KT);
+    }
+  });
+
+  it("conserves speed/Mach in sustain turn mode when thrust allows, and still accelerates when AB exceeds gLimit drag", () => {
+    const p = P();
+    // 25k ft M0.9: 4g normal turn bleeds speed quickly, while sustain holds M0.9 cleanly; AB turns tighter than MIL.
+    const milSustain = jetAt(p, 25000, 0.9);
+    milSustain.throttle = "mil";
+    milSustain.effort = "sustain";
+    const abSustain = jetAt(p, 25000, 0.9);
+    abSustain.throttle = "ab";
+    abSustain.effort = "sustain";
+    const milNormal = jetAt(p, 25000, 0.9);
+    milNormal.throttle = "mil";
+    milNormal.effort = "normal";
+
+    const startSpd = milSustain.speed;
+    let milTurned = 0;
+    let abTurned = 0;
+    for (let i = 0; i < 1000; i++) {
+      // 20 s continuous turn
+      const hMil = milSustain.hdg;
+      const hAb = abSustain.hdg;
+      stepJet(p.aircraft, milSustain, hMil + 1, 0.02);
+      stepJet(p.aircraft, abSustain, hAb + 1, 0.02);
+      stepJet(p.aircraft, milNormal, milNormal.hdg + 1, 0.02);
+      milTurned += (milSustain.hdg - hMil + 2 * Math.PI) % (2 * Math.PI);
+      abTurned += (abSustain.hdg - hAb + 2 * Math.PI) % (2 * Math.PI);
+    }
+    expect(Math.abs(milSustain.speed - startSpd)).toBeLessThan(15 * KT);
+    expect(Math.abs(abSustain.speed - startSpd)).toBeLessThan(15 * KT);
+    expect(milSustain.speed).toBeGreaterThan(milNormal.speed + 80 * KT);
+    expect(abTurned).toBeGreaterThan(milTurned * 1.3);
+
+    // When excess AB thrust exceeds gLimit drag (e.g. structural g limit 5g down low), sustain caps at gLimit and still accelerates.
+    const lowP = P();
+    lowP.aircraft.gLimit = 5;
+    const lowAb = jetAt(lowP, 5000, 0.75);
+    lowAb.throttle = "ab";
+    lowAb.effort = "sustain";
+    const lowStart = lowAb.speed;
+    for (let i = 0; i < 500; i++) stepJet(lowP.aircraft, lowAb, lowAb.hdg + 1, 0.02);
+    expect(lowAb.g).toBeCloseTo(lowP.aircraft.gLimit, 1);
+    expect(lowAb.speed).toBeGreaterThan(lowStart + 30 * KT);
+  });
+
+  it("applies throttle and effort commands through GameSession", () => {
+    const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    const j = must(jetById(s.world, "B1"));
+    const startSpeed = j.speed;
+    expect(j.throttle).toBe("mil");
+    expect(s.applyCommand({ type: "throttle", jetId: j.id, throttle: "idle" })).toBeNull();
+    expect(j.throttle).toBe("idle");
+    for (let i = 0; i < 200; i++) s.advance(0.1);
+    const slow = j.speed;
+    expect(slow).toBeLessThan(startSpeed - 40 * KT);
+
+    expect(s.applyCommand({ type: "throttle", jetId: j.id, throttle: "ab" })).toBeNull();
+    expect(s.applyCommand({ type: "effort", jetId: j.id, effort: "sustain" })).toBeNull();
+    expect(j.effort).toBe("sustain");
+    for (let i = 0; i < 200; i++) s.advance(0.1);
+    expect(j.speed).toBeGreaterThan(slow + 40 * KT);
+
+    expect(s.applyCommand({ type: "effort", jetId: j.id, effort: "max" })).toBeNull();
+    expect(j.throttle).toBe("ab");
+    expect(j.effort).toBe("max");
   });
 });
 
