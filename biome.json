@@ -4,6 +4,7 @@
       "**",
       "!**/node_modules",
       "!**/dist",
+      "!**/.wrangler",
       "!**/*.acmi",
       "!**/*.md",
       "!pnpm-lock.yaml",

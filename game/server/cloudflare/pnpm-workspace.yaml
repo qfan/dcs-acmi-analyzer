@@ -1,0 +1,10 @@
+# Its own pnpm workspace root: the Cloudflare relay installs and deploys apart from the viewer
+# and from the Node relay. Its only dependency is wrangler (build, local dev and deploy tool).
+
+# Supply-chain protection.
+# Refuse any package version published less than 24 hours ago (value is in minutes).
+minimumReleaseAge: 1440
+
+# Dependency lifecycle (install/build) scripts are blocked unless listed here.
+# Keep this empty unless a package genuinely needs one.
+allowBuilds: {}

@@ -8,7 +8,7 @@
  */
 import type { Jet } from "./sim/aircraft.ts";
 import type { Missile } from "./sim/missile.ts";
-import type { Decoy, World } from "./sim/world.ts";
+import { DECOY_LIFE_S, type Decoy, type World } from "./sim/world.ts";
 
 const EARTH_R = 6371008.8;
 const DEG = Math.PI / 180;
@@ -16,7 +16,8 @@ const DEG = Math.PI / 180;
 export const REF_LON = 56;
 export const REF_LAT = 26;
 const SAMPLE_EVERY_S = 0.25;
-const DECOY_LIFE_S = 4;
+
+const decoyKey = (d: Decoy) => `${d.jetId}|${d.kind}|${d.seq}`;
 
 const fmt = (x: number, d: number) => (Number.isFinite(x) ? x.toFixed(d) : "");
 
@@ -38,7 +39,8 @@ export class AcmiRecorder {
   private readonly frames: Frame[] = [];
   private readonly ids = new Map<string, string>();
   private readonly removed = new Set<string>();
-  private readonly decoyIds = new Map<Decoy, string>();
+  /** Keyed by owner, kind and release time, so copies of the same decoy (snapshots) match. */
+  private readonly decoyIds = new Map<string, { id: string; t0: number }>();
   private nextJet = 0x101;
   private nextWeapon = 0x201;
   private nextDecoy = 0x1001;
@@ -134,9 +136,10 @@ export class AcmiRecorder {
       }
     }
     for (const d of w.decoys) {
-      if (this.decoyIds.has(d)) continue;
+      const key = decoyKey(d);
+      if (this.decoyIds.has(key)) continue;
       const id = (this.nextDecoy++).toString(16);
-      this.decoyIds.set(d, id);
+      this.decoyIds.set(key, { id, t0: d.t0 });
       const owner = w.jets.find((j) => j.id === d.jetId);
       lines.push(
         [
@@ -147,10 +150,10 @@ export class AcmiRecorder {
         ].join(","),
       );
     }
-    for (const [d, id] of this.decoyIds)
+    for (const [key, d] of this.decoyIds)
       if (w.t - d.t0 >= DECOY_LIFE_S) {
-        lines.push(`-${id}`);
-        this.decoyIds.delete(d);
+        lines.push(`-${d.id}`);
+        this.decoyIds.delete(key);
       }
 
     if (lines.length > 0) this.frames.push({ t: w.t, lines });
