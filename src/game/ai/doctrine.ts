@@ -124,6 +124,8 @@ const OFFSET_DECISION_RAD = 12 * DEG;
 /** Intermediate cold-turn offset (< 180°) while rotating past beam so head-on breaks actually go left or right. */
 const COLD_COMMIT_OFFSET_DEG = 160;
 const COLD_PAST_BEAM_RAD = 120 * DEG;
+/** Brief hold (s) after leaving an unlocked missile's illumination cone (e.g. a missile chasing another jet). */
+const UNLOCKED_ILLUM_HOLD_S = 0.5;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -156,6 +158,7 @@ export class DoctrineBot implements Controller {
   private defendFrom: string | null = null;
   private defendDir: 1 | -1 | null = null;
   private defendHoldS = 0;
+  private defendLocked = false;
   private pumpDir: 1 | -1 | null = null;
   private egressDir: 1 | -1 | null = null;
   private lastT: number | null = null;
@@ -221,12 +224,17 @@ export class DoctrineBot implements Controller {
     });
     const threat = reacted.find((c) => c.lock) ?? reacted[0];
     if (threat) {
-      if (this.state !== "defend" || this.defendFrom !== threat.sourceId) {
+      const sameThreat = this.state === "defend" && this.defendFrom === threat.sourceId;
+      if (!sameThreat) {
         this.defendDir = this.chooseSide(w, me, threat.bearing);
         this.defendHoldS = s.defendHoldS * clamp(sampleScale(w.rng, 0.1), 0.8, 1.2);
+        this.defendLocked = threat.lock;
+      } else if (threat.lock) {
+        this.defendLocked = true;
       }
       this.defendFrom = threat.sourceId;
-      this.defendUntil = t + this.defendHoldS;
+      const holdS = this.defendLocked ? this.defendHoldS : Math.min(this.defendHoldS, UNLOCKED_ILLUM_HOLD_S);
+      this.defendUntil = t + holdS;
     }
 
     const myInFlight = [...this.timers.values()].filter((tm) => this.timerActive(tm, t));
@@ -236,18 +244,22 @@ export class DoctrineBot implements Controller {
       this.state = "defend";
       out.push(...this.fly(me, "ab", "max"));
       const rwrThreat = missiles.find((c) => c.sourceId === this.defendFrom);
-      const offsetDeg = rwrThreat ? this.coldOffsetDeg(me, rwrThreat.bearing) : 180;
-      this.actionDetail = rwrThreat
-        ? `Turning cold from active missile (${rwrThreat.lock ? "locked" : "searching"})`
-        : `Holding cold evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
-      // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
-      out.push(
-        ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
-      );
+      if (rwrThreat) {
+        const offsetDeg = this.coldOffsetDeg(me, rwrThreat.bearing);
+        this.actionDetail = `Turning cold from active missile (${rwrThreat.lock ? "locked" : "searching"})`;
+        // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
+        out.push(
+          ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
+        );
+      } else {
+        this.actionDetail = `Holding cold evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
+        out.push(...this.setHeading(me, me.hdg));
+      }
       return out;
     }
     this.defendFrom = null;
     this.defendDir = null;
+    this.defendLocked = false;
 
     // Pump once per missile after it went active (if this skill does), then re-commit.
     if (s.pumpAfterPitbull)

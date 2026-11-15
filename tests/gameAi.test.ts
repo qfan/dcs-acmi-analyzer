@@ -90,6 +90,41 @@ describe("game: NPC knows only what its side can see", () => {
     expect(Math.abs(wrapPi(red.hdg - bearing(m.pos, red.pos)))).toBeLessThan(0.25);
   });
 
+  it("stops defending promptly once leaving the illumination cone of a missile tracking another jet", () => {
+    const w = scenarioById("2v2").build(P(), 25000, 3, { redSkill: "hard", blueAi: null });
+    const r1 = must(jetById(w, "R1"));
+    const r2 = must(jetById(w, "R2"));
+    r1.pos = { x: -20 * NM, y: 40 * NM, z: r1.pos.z };
+    r2.pos = { x: 2 * NM, y: 20 * NM, z: r2.pos.z };
+    expect(command(w, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    const m = must(w.missiles[0]);
+
+    // Step until R2 reacts to stray illumination from the missile while it is tracking R1.
+    for (let i = 0; i < 600 && npcOf(w, "R2").state !== "defend"; i++) {
+      m.phase = "tracking";
+      m.targetId = "R1";
+      m.tof = 5;
+      m.pos = { x: r2.pos.x, y: r2.pos.y - 5 * NM, z: r2.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+    }
+    expect(npcOf(w, "R2").state).toBe("defend");
+
+    // Missile continues chasing R1 far outside R2's illumination cone.
+    const leftConeAt = w.t;
+    while (w.t < leftConeAt + 1.0) {
+      m.phase = "tracking";
+      m.targetId = "R1";
+      m.tof = 5;
+      m.pos = { x: r1.pos.x, y: r1.pos.y - 6 * NM, z: r1.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+    }
+    expect(m.end).toBeNull();
+    // Should exit defend promptly (< 1 s) instead of holding hard defendHoldS (~8 s) until the missile ends.
+    expect(npcOf(w, "R2").state).not.toBe("defend");
+  });
+
   it("uses capped normal timing variation and breaks mirror symmetry in same-skill duels", () => {
     const rng = makeRng(42);
     const samples = Array.from({ length: 500 }, () => randNormal(rng, 2));
