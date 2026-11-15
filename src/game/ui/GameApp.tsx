@@ -4,7 +4,16 @@ import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
 import { AI_SKILL_CHOICES, DoctrineBot, type NpcStatus, skillChoiceLabel } from "../ai/doctrine.ts";
-import { availableG, type Jet, mach, type Throttle } from "../sim/aircraft.ts";
+import {
+  altLimitsM,
+  availableG,
+  energyHeightM,
+  type Jet,
+  mach,
+  specificExcessPower,
+  type Throttle,
+  verticalSpeed,
+} from "../sim/aircraft.ts";
 import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
@@ -33,9 +42,23 @@ import { loadLast, loadParams, saveLast, saveParams } from "./storage.ts";
 /** Crank keeps the threat just inside the 60° radar gimbal. */
 const CRANK_DEG = 50;
 const HUD_MS = 100;
+/** Altitude order steps (ft): arrow keys / small buttons, Page keys / big buttons. */
+const ALT_STEP_FT = 1000;
+const ALT_BIG_STEP_FT = 5000;
+/** Vertical speeds below this (ft/min) count as level in the readouts. */
+const LEVEL_FPM = 300;
 
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const deg = (r: number) => Math.round(((r * 180) / Math.PI + 360) % 360);
+const fmtSigned = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x))}`;
+
+/** Altitude readout subline: climbing/diving rate and where to, or level. */
+function altSub(j: Jet): string {
+  const fpm = (verticalSpeed(j) / FT) * 60;
+  const to = `→ ${(Math.round(j.altCmd / FT / 100) * 100).toLocaleString()}`;
+  if (Math.abs(fpm) < LEVEL_FPM) return Math.abs(j.altCmd - j.pos.z) < 100 * FT ? "level" : to;
+  return `${fpm > 0 ? "↑" : "↓"}${(Math.abs(fpm) / 1000).toFixed(1)}k fpm ${to}`;
+}
 
 export function GameApp() {
   const [params, setParams] = useState<GameParams>(loadParams);
@@ -50,6 +73,7 @@ export function GameApp() {
   const [endSeen, setEndSeen] = useState(false);
   const [labels, setLabels] = useState(true);
   const [radarSectors, setRadarSectors] = useState(true);
+  const [sideView, setSideView] = useState(true);
   const [follow, setFollow] = useState(true);
   /** Fog of war: off by default each time the page opens. */
   const [fog, setFog] = useState(false);
@@ -85,6 +109,8 @@ export function GameApp() {
   labelsRef.current = labels;
   const radarSectorsRef = useRef(radarSectors);
   radarSectorsRef.current = radarSectors;
+  const sideViewRef = useRef(sideView);
+  sideViewRef.current = sideView;
 
   const start = useCallback(
     (id = scenarioId, alt = altFt) => {
@@ -158,6 +184,23 @@ export function GameApp() {
     [issue, session],
   );
 
+  /** Climbs or dives every selected jet by `deltaFt` from its current altitude order, snapped to the step. */
+  const stepAlt = useCallback(
+    (deltaFt: number) =>
+      issue((j) => {
+        const snap = Math.abs(deltaFt) >= ALT_BIG_STEP_FT ? ALT_BIG_STEP_FT : ALT_STEP_FT;
+        const ft = Math.round((j.altCmd / FT + deltaFt) / snap) * snap;
+        return { type: "altitude", jetId: j.id, altM: ft * FT };
+      }),
+    [issue],
+  );
+
+  /** Levels off: holds the altitude each selected jet is at now (rounded to 500 ft). */
+  const levelOff = useCallback(
+    () => issue((j) => ({ type: "altitude", jetId: j.id, altM: Math.round(j.pos.z / FT / 500) * 500 * FT })),
+    [issue],
+  );
+
   /**
    * Saves the fight so far as an .acmi file: download it, open it in this site's viewer, or both.
    * "Open in viewer" stores it as the viewer's last file (IndexedDB, this browser only) and opens
@@ -228,7 +271,14 @@ export function GameApp() {
         if (followRef.current) centerOnFight(v, session);
         if (ctx) {
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          hitsRef.current = drawScene(ctx, v, session, labelsRef.current, radarSectorsRef.current);
+          hitsRef.current = drawScene(
+            ctx,
+            v,
+            session,
+            labelsRef.current,
+            radarSectorsRef.current,
+            sideViewRef.current,
+          );
         }
       }
       if (now - lastHud > HUD_MS) {
@@ -288,13 +338,17 @@ export function GameApp() {
             ),
           },
         }));
+      else if (k === "arrowup" || k === "arrowdown")
+        stepAlt((k === "arrowup" ? 1 : -1) * (e.shiftKey ? ALT_BIG_STEP_FT : ALT_STEP_FT));
+      else if (k === "pageup" || k === "pagedown") stepAlt((k === "pageup" ? 1 : -1) * ALT_BIG_STEP_FT);
+      else if (k === "l") levelOff();
       else if (k === "v") setFollow(true);
       else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [issue, steerRel, togglePause, setScale, showParams, showStart, session]);
+  }, [issue, steerRel, stepAlt, levelOff, togglePause, setScale, showParams, showStart, session]);
 
   useEffect(() => {
     if (!flash) return;
@@ -581,6 +635,17 @@ export function GameApp() {
               />{" "}
               Radar sectors
             </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={sideView}
+                onChange={(e) => {
+                  setSideView(e.target.checked);
+                  e.target.blur();
+                }}
+              />{" "}
+              Side view
+            </label>
           </div>
         </div>
 
@@ -620,7 +685,12 @@ export function GameApp() {
               <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
               <div className="g-stats">
                 <Stat k="Speed" v={`${Math.round(p.speed / KT)} kt`} sub={`M${mach(p).toFixed(2)}`} />
-                <Stat k="Altitude" v={`${Math.round(p.pos.z / FT).toLocaleString()} ft`} />
+                <Stat k="Altitude" v={`${Math.round(p.pos.z / FT).toLocaleString()} ft`} sub={altSub(p)} />
+                <Stat
+                  k="Energy"
+                  v={`${(Math.round(energyHeightM(p) / FT / 100) * 100).toLocaleString()} ft`}
+                  sub={`Ps ${fmtSigned(specificExcessPower(w.params.aircraft, p, p.g) / FT)} ft/s`}
+                />
                 <Stat
                   k="Load"
                   v={`${p.g.toFixed(1)} g`}
@@ -686,6 +756,66 @@ export function GameApp() {
                               : `Max ${w.params.aircraft.gLimit} g`}
                         </button>
                       ))}
+                    </div>
+                  </div>
+                  <div className="g-row">
+                    <span className="g-label">Altitude</span>
+                    <div className="g-seg g-alt">
+                      <button
+                        type="button"
+                        title="Page Down (Shift+↓)"
+                        disabled={p.altCmd <= altLimitsM(w.params.aircraft).min + 1}
+                        onClick={(e) => {
+                          stepAlt(-ALT_BIG_STEP_FT);
+                          e.currentTarget.blur();
+                        }}
+                      >
+                        ⏬
+                      </button>
+                      <button
+                        type="button"
+                        title="↓"
+                        disabled={p.altCmd <= altLimitsM(w.params.aircraft).min + 1}
+                        onClick={(e) => {
+                          stepAlt(-ALT_STEP_FT);
+                          e.currentTarget.blur();
+                        }}
+                      >
+                        ▼
+                      </button>
+                      <button
+                        type="button"
+                        className="g-alt-cmd"
+                        title="Ordered altitude. Click (or L) to level off where you are."
+                        onClick={(e) => {
+                          levelOff();
+                          e.currentTarget.blur();
+                        }}
+                      >
+                        {Math.round(p.altCmd / FT).toLocaleString()} ft
+                      </button>
+                      <button
+                        type="button"
+                        title="↑"
+                        disabled={p.altCmd >= altLimitsM(w.params.aircraft).max - 1}
+                        onClick={(e) => {
+                          stepAlt(ALT_STEP_FT);
+                          e.currentTarget.blur();
+                        }}
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        title="Page Up (Shift+↑)"
+                        disabled={p.altCmd >= altLimitsM(w.params.aircraft).max - 1}
+                        onClick={(e) => {
+                          stepAlt(ALT_BIG_STEP_FT);
+                          e.currentTarget.blur();
+                        }}
+                      >
+                        ⏫
+                      </button>
                     </div>
                   </div>
                   <div className="g-maneuvers">
@@ -818,11 +948,21 @@ export function GameApp() {
                 <p>
                   <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd>{" "}
                   hot · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold
-                  · <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> turn mode ·{" "}
-                  <kbd>Insert</kbd> chaff · <kbd>Delete</kbd> flare · <kbd>V</kbd> follow
+                  · <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>↑</kbd>/<kbd>↓</kbd> altitude ±1,000 ft (
+                  <kbd>Shift</kbd> or <kbd>PgUp</kbd>/<kbd>PgDn</kbd> ±5,000) · <kbd>L</kbd> level off ·{" "}
+                  <kbd>T</kbd> throttle · <kbd>G</kbd> turn mode · <kbd>Insert</kbd> chaff · <kbd>Delete</kbd>{" "}
+                  flare · <kbd>V</kbd> follow
                 </p>
               </>
             )}
+            <p className="g-muted">
+              Energy: a climb trades speed for height and a dive buys it back (Energy shows height plus speed
+              as feet; Ps is how fast it grows). The turn mode also sets how steeply you climb: Hold Spd
+              climbs only as fast as thrust allows without slowing, Normal up to{" "}
+              {w?.params.aircraft.normalClimbDeg ?? 20}°, Max up to {w?.params.aircraft.maxClimbDeg ?? 45}°.
+              Missiles fly much further from high and fast, and die quickly chasing you down into thick air.
+              Hard deck {(w?.params.aircraft.minAltFt ?? 1000).toLocaleString()} ft.
+            </p>
             <p className="g-muted">
               Map: radar wedges are ±{w?.params.radar.gimbalDeg ?? 60}°. Shaded out to{" "}
               {w?.params.radar.rangeNm ?? 70} nm is TWS lock range (fire and datalink); the dashed band out to{" "}
@@ -1046,8 +1186,9 @@ function StartDialog({
       <div className="g-modal g-start" role="dialog" aria-label="Choose a scenario">
         <h2>BVR Trainer</h2>
         <p className="g-muted">
-          F/A-18C with AIM-120C on both sides. Jets hold their altitude for now; missiles loft and dive.
-          Numbers are rough estimates you can change under Parameters.
+          F/A-18C with AIM-120C on both sides. Climb and dive to trade speed for height: thin air up high lets
+          missiles fly much further, and thick air down low drains them. Numbers are rough estimates you can
+          change under Parameters.
         </p>
         <p className="g-disclaimer">
           A free, unofficial training game. Not affiliated with, endorsed by, or sponsored by Eagle Dynamics
@@ -1070,7 +1211,7 @@ function StartDialog({
         </div>
         <p className="g-lesson">{sel.lesson}</p>
         <div className="g-row">
-          <span className="g-label">Altitude</span>
+          <span className="g-label">Start altitude</span>
           <div className="g-seg">
             {ALTITUDES_FT.map((a) => (
               <button type="button" key={a} className={a === altFt ? "on" : ""} onClick={() => onAlt(a)}>
@@ -1300,6 +1441,9 @@ function NpcBehaviorPanel({
         </span>
         <span>
           Turns <b>{turnLabel}</b>
+        </span>
+        <span>
+          Alt order <b>{(Math.round(jet.altCmd / FT / 100) * 100).toLocaleString()} ft</b>
         </span>
         <span>
           Target <b>{tgt?.alive ? tgt.callsign : "—"}</b>

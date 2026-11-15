@@ -1,6 +1,6 @@
 /** Top-down canvas renderer for the game, in the style of the viewer's 2D map. */
 import { niceStep, toScreen, type View } from "../../map/render.ts";
-import { desiredHeading, type Jet, mach } from "../sim/aircraft.ts";
+import { desiredHeading, type Jet, mach, velocity, verticalSpeed } from "../sim/aircraft.ts";
 import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type Missile, missileMach } from "../sim/missile.ts";
 import { jetById, rwrContacts, steerThreatPos, type World } from "../sim/world.ts";
@@ -375,6 +375,7 @@ export function drawScene(
   s: GameSession,
   labels: boolean,
   radarSectors = true,
+  sideView = false,
 ): Hit[] {
   const w = s.world;
   const hits: Hit[] = [];
@@ -479,12 +480,197 @@ export function drawScene(
       if (j.alive)
         label(
           ctx,
-          `M${mach(j).toFixed(2)} ${(j.pos.z / FT / 1000).toFixed(0)}k ${j.g.toFixed(1)}g ×${j.missiles}`,
+          `M${mach(j).toFixed(2)} ${altText(j, j.side === PLAYER_SIDE)} ${j.g.toFixed(1)}g ×${j.missiles}`,
           sx + 14,
           sy + 9,
           `${col}cc`,
         );
     }
   }
+  if (sideView) drawSideView(ctx, v, s);
   return hits;
+}
+
+/** Climbing or diving faster than this (m/s, ≈1,000 ft/min) shows an arrow next to the altitude. */
+const CLIMB_ARROW_MS = 5;
+
+/** "25k", "25k↑" while climbing, and for your own jets the ordered altitude when it differs: "18k↑30". */
+function altText(j: Jet, own: boolean): string {
+  const vz = verticalSpeed(j);
+  const arrow = vz > CLIMB_ARROW_MS ? "↑" : vz < -CLIMB_ARROW_MS ? "↓" : "";
+  const to = own && Math.abs(j.altCmd - j.pos.z) > 500 * FT ? `${Math.round(j.altCmd / FT / 1000)}` : "";
+  return `${(j.pos.z / FT / 1000).toFixed(0)}k${arrow || (to ? "→" : "")}${to}`;
+}
+
+const SIDE_W = 340;
+const SIDE_H = 150;
+
+/**
+ * Side view (inset, bottom left): altitude against distance along the line from the selected jet
+ * to its target (or south → north when nothing is targeted). Shows what fog of war allows: your
+ * jets, detected or last-seen bandits, and missiles only when fog is off.
+ */
+function drawSideView(ctx: CanvasRenderingContext2D, v: View, s: GameSession) {
+  const w = s.world;
+  const pw = Math.min(SIDE_W, v.w * 0.45);
+  const ph = SIDE_H;
+  if (pw < 160 || v.h < ph + 110) return;
+  const x0 = 10;
+  // Clear of the map toggles along the bottom edge.
+  const y0 = v.h - ph - 40;
+  const pad = { l: 34, r: 10, t: 16, b: 18 };
+
+  // Projection axis.
+  const p = s.primary();
+  const tgtPos = p?.targetId ? s.knownEnemyPos(p.targetId) : null;
+  let origin = { x: 0, y: 0 };
+  let ux = 0;
+  let uy = 1;
+  let axisLabel = "nm north";
+  if (p && tgtPos) {
+    const dx = tgtPos.x - p.pos.x;
+    const dy = tgtPos.y - p.pos.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1) {
+      ux = dx / d;
+      uy = dy / d;
+      origin = { x: p.pos.x, y: p.pos.y };
+      axisLabel = `nm from ${p.callsign} toward target`;
+    }
+  }
+
+  interface Pt {
+    along: number;
+    z: number;
+    col: string;
+    kind: "jet" | "ghost" | "missile";
+    vAlong: number;
+    vz: number;
+    altCmd?: number;
+  }
+  const pts: Pt[] = [];
+  const along = (x: number, y: number) => (x - origin.x) * ux + (y - origin.y) * uy;
+  for (const j of w.jets) {
+    if (!j.alive) continue;
+    if (s.sees(j.id)) {
+      const vel = velocity(j);
+      pts.push({
+        along: along(j.pos.x, j.pos.y),
+        z: j.pos.z,
+        col: sideCol(j.side),
+        kind: "jet",
+        vAlong: vel.x * ux + vel.y * uy,
+        vz: vel.z,
+        altCmd: j.side === PLAYER_SIDE && s.selected.has(j.id) ? j.altCmd : undefined,
+      });
+    } else {
+      const g = s.lastSeen.get(j.id);
+      if (g)
+        pts.push({ along: along(g.x, g.y), z: g.z, col: sideCol(j.side), kind: "ghost", vAlong: 0, vz: 0 });
+    }
+  }
+  if (!s.fog)
+    for (const m of w.missiles) {
+      if (m.end) continue;
+      pts.push({
+        along: along(m.pos.x, m.pos.y),
+        z: m.pos.z,
+        col: sideCol(m.side),
+        kind: "missile",
+        vAlong: m.vel.x * ux + m.vel.y * uy,
+        vz: m.vel.z,
+      });
+    }
+  if (pts.length === 0) return;
+
+  let aMin = Math.min(...pts.map((q) => q.along));
+  let aMax = Math.max(...pts.map((q) => q.along));
+  const span = Math.max(10 * NM, (aMax - aMin) * 1.15);
+  const mid = (aMin + aMax) / 2;
+  aMin = mid - span / 2;
+  aMax = mid + span / 2;
+  const topFt = Math.max(40000, Math.ceil((Math.max(...pts.map((q) => q.z)) / FT + 5000) / 10000) * 10000);
+
+  const ix = x0 + pad.l;
+  const iw = pw - pad.l - pad.r;
+  const iy = y0 + pad.t;
+  const ih = ph - pad.t - pad.b;
+  const sx = (a: number) => ix + ((a - aMin) / (aMax - aMin)) * iw;
+  const sy = (z: number) => iy + ih - (Math.max(0, z) / FT / topFt) * ih;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(10, 16, 24, 0.82)";
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+  ctx.lineWidth = 1;
+  ctx.fillRect(x0, y0, pw, ph);
+  ctx.strokeRect(x0 + 0.5, y0 + 0.5, pw - 1, ph - 1);
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.gridText;
+  ctx.textAlign = "left";
+  ctx.fillText(`Side view · ${axisLabel}`, x0 + 6, y0 + 9);
+  for (let ft = 0; ft <= topFt; ft += 10000) {
+    const y = Math.round(sy(ft * FT)) + 0.5;
+    ctx.strokeStyle = ft === 0 ? "rgba(148, 163, 184, 0.45)" : COLORS.grid;
+    ctx.beginPath();
+    ctx.moveTo(ix, y);
+    ctx.lineTo(ix + iw, y);
+    ctx.stroke();
+    ctx.textAlign = "right";
+    ctx.fillStyle = COLORS.gridText;
+    ctx.fillText(`${ft / 1000}k`, ix - 4, y);
+  }
+  // Distance ticks.
+  const stepM = niceStep((aMax - aMin) / NM / 4) * NM;
+  ctx.textAlign = "center";
+  for (let a = Math.ceil(aMin / stepM) * stepM; a <= aMax; a += stepM) {
+    const x = sx(a);
+    ctx.fillStyle = COLORS.gridText;
+    ctx.fillText(`${Math.round(a / NM)}`, x, iy + ih + 9);
+  }
+
+  for (const q of pts) {
+    const x = sx(q.along);
+    const y = sy(q.z);
+    if (q.altCmd !== undefined && Math.abs(q.altCmd - q.z) > 300 * FT) {
+      const yc = sy(q.altCmd);
+      ctx.strokeStyle = `${q.col}88`;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, yc);
+      ctx.moveTo(x - 6, yc);
+      ctx.lineTo(x + 6, yc);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if (q.kind === "ghost") {
+      ctx.strokeStyle = `${q.col}aa`;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      continue;
+    }
+    // Velocity tick: the direction it flies in this view (screen x is distance, y is height, so the
+    // tick shows climb and dive at the scale of the panel, not the true angle).
+    const sp = Math.hypot(q.vAlong, q.vz);
+    if (sp > 1) {
+      const vxS = (q.vAlong / (aMax - aMin)) * iw;
+      const vyS = -(q.vz / FT / topFt) * ih;
+      const k = (q.kind === "missile" ? 8 : 12) / Math.max(1e-6, Math.hypot(vxS, vyS));
+      ctx.strokeStyle = q.col;
+      ctx.lineWidth = q.kind === "missile" ? 1 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + vxS * k, y + vyS * k);
+      ctx.stroke();
+    }
+    ctx.fillStyle = q.col;
+    ctx.beginPath();
+    ctx.arc(x, y, q.kind === "missile" ? 1.8 : 3.5, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  ctx.restore();
 }

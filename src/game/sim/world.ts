@@ -3,7 +3,7 @@
  * through `command()` or `step()`, so the same seed, commands and step count always give the same
  * fight. Time control (real time, pause, auto-pause on events, turns) lives outside, in the UI.
  */
-import { desiredHeading, type Jet, type Side, stepJet, velocity } from "./aircraft.ts";
+import { clampAltCmd, desiredHeading, type Jet, type Side, stepJet, velocity } from "./aircraft.ts";
 import { DEG, NM } from "./atmosphere.ts";
 import { launchMissile, type Missile, type MissileEvent, stepMissile, type TargetTruth } from "./missile.ts";
 import type { GameParams } from "./params.ts";
@@ -55,6 +55,8 @@ export type Command =
   | { type: "steer"; jetId: string; steer: Jet["steer"] }
   | { type: "throttle"; jetId: string; throttle: Jet["throttle"] }
   | { type: "effort"; jetId: string; effort: Jet["effort"] }
+  /** Altitude (m) to climb or dive to and hold; clamped to the hard deck and ceiling. */
+  | { type: "altitude"; jetId: string; altM: number }
   | { type: "target"; jetId: string; targetId: string | null }
   | { type: "fire"; jetId: string; targetId?: string }
   | { type: "chaff"; jetId: string }
@@ -148,7 +150,8 @@ export function radarCoversPos(w: World, shooter: Jet, pos: V3, rangeNm: number)
   if (!shooter.alive) return false;
   const los = sub(pos, shooter.pos);
   if (len(los) > rangeNm * NM) return false;
-  return angleBetween(los, headingVec(shooter.hdg, shooter.gamma)) <= w.params.radar.gimbalDeg * DEG;
+  // The antenna is stabilised to the horizon: climbing or diving does not tilt the scan.
+  return angleBetween(los, headingVec(shooter.hdg, 0)) <= w.params.radar.gimbalDeg * DEG;
 }
 
 function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): boolean {
@@ -268,6 +271,9 @@ export function command(w: World, c: Command): string | null {
     case "effort":
       j.effort = c.effort;
       return null;
+    case "altitude":
+      j.altCmd = clampAltCmd(w.params.aircraft, c.altM);
+      return null;
     case "chaff":
     case "flare": {
       const left = c.type === "chaff" ? j.chaff : j.flares;
@@ -348,6 +354,17 @@ export function step(w: World, dt = SIM_DT): void {
   for (const j of w.jets) {
     if (!j.alive) continue;
     stepJet(w.params.aircraft, j, desiredHeading(j, steerThreatPos(w, j)), dt);
+    if (j.pos.z <= 0) {
+      j.alive = false;
+      j.g = 1;
+      j.pos.z = 0;
+      emit(w, {
+        type: "kill",
+        side: j.side === "blue" ? "red" : "blue",
+        targetId: j.id,
+        text: `${j.callsign} flew into the ground`,
+      });
+    }
   }
   w.t += dt;
 

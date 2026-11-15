@@ -12,8 +12,8 @@
  *   SUPPORT  its own missile is still before pitbull: crank to keep the target inside the radar gimbal
  *   COMMIT   fly at the target and shoot when locked and inside a fraction of Rmax
  */
-import { type Jet, type Steer, velocity } from "../sim/aircraft.ts";
-import { DEG, NM } from "../sim/atmosphere.ts";
+import { type Jet, mach, type Steer, velocity } from "../sim/aircraft.ts";
+import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import { type Rng, randNormal } from "../sim/rng.ts";
 import { angleBetween, bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
@@ -46,6 +46,17 @@ export interface AiSkill {
   postureShot: boolean;
   /** Takes high-Pk opportunity shots at other TWS-tracked enemies in lethal range. */
   opportunityShot: boolean;
+  /**
+   * Altitude tactics. Off (null / 0) for every skill for now: in botmatch batches, climbing to
+   * shoot from higher cost the NPC its speed and turn rate, and any defensive dive made missiles
+   * miss so often that fights ran out the clock. Kept for tuning.
+   *
+   * commitAltFt: climbs (Hold Spd, so it keeps its speed) to at least this altitude while committing
+   * and supporting. null holds the altitude it started at, returning to it after a dive.
+   */
+  commitAltFt: number | null;
+  /** Dives this far (ft) when a defence starts ("cold and low": thick air drains the chasing missile). */
+  defendDropFt: number;
 }
 
 export type AiSkillId = "easy" | "normal" | "hard";
@@ -61,6 +72,8 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     defendHoldS: 3,
     postureShot: false,
     opportunityShot: false,
+    commitAltFt: null,
+    defendDropFt: 0,
   },
   normal: {
     label: "Normal",
@@ -72,6 +85,8 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     defendHoldS: 6,
     postureShot: false,
     opportunityShot: true,
+    commitAltFt: null,
+    defendDropFt: 0,
   },
   hard: {
     label: "Hard",
@@ -83,6 +98,8 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     defendHoldS: 8,
     postureShot: true,
     opportunityShot: true,
+    commitAltFt: null,
+    defendDropFt: 0,
   },
 };
 
@@ -126,6 +143,16 @@ const COLD_COMMIT_OFFSET_DEG = 160;
 const COLD_PAST_BEAM_RAD = 120 * DEG;
 /** Brief hold (s) after leaving an unlocked missile's illumination cone (e.g. a missile chasing another jet). */
 const UNLOCKED_ILLUM_HOLD_S = 0.5;
+/** Altitude orders closer than this (m) to the current one are not re-issued. */
+const ALT_EPS_M = 150;
+/** Climbs only above this Mach; slower, it levels off to build speed first. */
+const CLIMB_MIN_MACH = 0.85;
+/** A defensive dive never goes below this (ft). */
+const DEFEND_FLOOR_FT = 6000;
+/** Below this Mach it dives UNLOAD_DROP_FT (not below UNLOAD_FLOOR_FT) to regain speed. */
+const UNLOAD_MACH = 0.65;
+const UNLOAD_DROP_FT = 6000;
+const UNLOAD_FLOOR_FT = 12000;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -177,6 +204,10 @@ export class DoctrineBot implements Controller {
   private reactionScale = 1;
   private initialMissiles: number | null = null;
   private postureShotsFired = 0;
+  private startAltM: number | null = null;
+  private defendAltM = 0;
+  /** Altitude it is diving to for speed, while unloading. */
+  private unloadAltM: number | null = null;
 
   constructor(skill: AiSkill, preferredCrankDir: 1 | -1 | null = null) {
     this.skill = skill;
@@ -184,6 +215,52 @@ export class DoctrineBot implements Controller {
   }
 
   update(w: World, me: Jet): Command[] {
+    const before = this.state;
+    if (this.startAltM === null) this.startAltM = me.pos.z;
+    let out = this.decide(w, me);
+    const alt = this.wantAltitude(me, before);
+    if (alt !== null && Math.abs(alt - me.altCmd) > ALT_EPS_M)
+      out.push({ type: "altitude", jetId: me.id, altM: alt });
+    // Offensive climbs fly Hold Spd: they climb only on excess power, so the jet arrives high and
+    // still fast instead of trading its speed (and its missiles' reach) for the height.
+    const target = alt ?? me.altCmd;
+    if ((this.state === "commit" || this.state === "support") && target - me.pos.z > ALT_EPS_M) {
+      out = out.filter((c) => c.type !== "effort");
+      if (me.effort !== "sustain") out.push({ type: "effort", jetId: me.id, effort: "sustain" });
+    }
+    return out;
+  }
+
+  /**
+   * Altitude for the current state: climb while committing and supporting (only while fast enough,
+   * so the climb never bleeds it slow), dive once when a defence starts, otherwise hold.
+   */
+  private wantAltitude(me: Jet, before: AiState): number | null {
+    const s = this.skill;
+    if (this.state === "defend") {
+      if (before !== "defend")
+        this.defendAltM = Math.max(DEFEND_FLOOR_FT * FT, me.pos.z - s.defendDropFt * FT);
+      return s.defendDropFt > 0 ? this.defendAltM : null;
+    }
+    if (s.commitAltFt === null && s.defendDropFt <= 0) return null;
+    // Slow and high, a turn in thin air can pin the jet near its minimum speed for minutes:
+    // unload and dive to buy speed back, then climb again once fast.
+    const m = mach(me);
+    if (this.unloadAltM === null && m < UNLOAD_MACH && me.pos.z > UNLOAD_FLOOR_FT * FT + ALT_EPS_M)
+      this.unloadAltM = Math.max(UNLOAD_FLOOR_FT * FT, me.pos.z - UNLOAD_DROP_FT * FT);
+    else if (this.unloadAltM !== null && (m >= CLIMB_MIN_MACH || me.pos.z <= this.unloadAltM + ALT_EPS_M))
+      this.unloadAltM = null;
+    if (this.unloadAltM !== null) return this.unloadAltM;
+    if (this.state !== "commit" && this.state !== "support") return null;
+    const want = Math.max(this.startAltM ?? me.pos.z, (s.commitAltFt ?? 0) * FT);
+    if (me.pos.z < want - ALT_EPS_M && mach(me) < CLIMB_MIN_MACH) {
+      // Too slow to climb: level off and build speed first.
+      return me.altCmd > me.pos.z ? me.pos.z : null;
+    }
+    return want;
+  }
+
+  private decide(w: World, me: Jet): Command[] {
     const dt = this.lastT === null ? 0 : w.t - this.lastT;
     if (this.initialMissiles === null) {
       // Capped normal spread around the skill so mirrored pilots diverge without leaving their tier.
