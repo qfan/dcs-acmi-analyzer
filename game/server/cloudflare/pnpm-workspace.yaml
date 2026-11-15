@@ -5,6 +5,10 @@
 # Refuse any package version published less than 24 hours ago (value is in minutes).
 minimumReleaseAge: 1440
 
-# Dependency lifecycle (install/build) scripts are blocked unless listed here.
-# Keep this empty unless a package genuinely needs one.
-allowBuilds: {}
+# Dependency lifecycle (install/build) scripts. pnpm 12 fails an install when a dependency has a
+# script nobody has decided on, so each one is listed: true runs it, false keeps it blocked.
+# esbuild and workerd get their binaries from platform packages and work without their scripts
+# (bundling, `wrangler dev` and deploys are tested that way), so they stay blocked.
+allowBuilds:
+  esbuild: false
+  workerd: false
