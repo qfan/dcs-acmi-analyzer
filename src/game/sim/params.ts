@@ -69,9 +69,17 @@ export interface MissileParams {
   /** Proximity fuze radius (m) and chance that a fuzed hit kills. */
   fuzeRadiusM: number;
   pk: number;
-  /** After the motor burns out the missile is spent below this Mach. */
-  minFlyMach: number;
+  /**
+   * The missile flies on until this long after launch, or until its true airspeed drops below
+   * minSpeedKt (true, not indicated, so thin air at altitude does not end it early).
+   */
   maxTofS: number;
+  minSpeedKt: number;
+  /**
+   * Launch-zone readouts (Rmax / Rne) count a shot only if it arrives at least this fast: a
+   * "likely lethal" range, shorter than how far the missile can fly at all.
+   */
+  lethalMach: number;
   /** Loft: apex gain over launch altitude (ft) vs launch range (nm). */
   loft: boolean;
   loftRangeNm: number[];
@@ -88,10 +96,17 @@ export interface RadarParams {
   rangeNm: number;
 }
 
+export interface CountermeasureParams {
+  /** Chaff bundles and flares per jet. Releasing them does not affect missiles or radars yet. */
+  chaff: number;
+  flares: number;
+}
+
 export interface GameParams {
   aircraft: AircraftParams;
   missile: MissileParams;
   radar: RadarParams;
+  countermeasures: CountermeasureParams;
 }
 
 export const DEFAULT_AIRCRAFT: AircraftParams = {
@@ -135,8 +150,9 @@ export const DEFAULT_MISSILE: MissileParams = {
   seekerGimbalDeg: 60,
   fuzeRadiusM: 15,
   pk: 1,
-  minFlyMach: 0.75,
   maxTofS: 120,
+  minSpeedKt: 200,
+  lethalMach: 0.9,
   loft: true,
   loftRangeNm: [10, 15, 25, 35, 50],
   loftGainFt: [0, 2800, 9600, 15400, 20000],
@@ -149,10 +165,16 @@ export const DEFAULT_RADAR: RadarParams = {
   rangeNm: 40,
 };
 
+export const DEFAULT_COUNTERMEASURES: CountermeasureParams = {
+  chaff: 60,
+  flares: 30,
+};
+
 export const DEFAULT_PARAMS: GameParams = {
   aircraft: DEFAULT_AIRCRAFT,
   missile: DEFAULT_MISSILE,
   radar: DEFAULT_RADAR,
+  countermeasures: DEFAULT_COUNTERMEASURES,
 };
 
 export function cloneParams(p: GameParams): GameParams {
@@ -166,7 +188,7 @@ export function cloneParams(p: GameParams): GameParams {
 export function mergeParams(saved: unknown): GameParams {
   const out = cloneParams(DEFAULT_PARAMS);
   if (!saved || typeof saved !== "object") return out;
-  for (const group of ["aircraft", "missile", "radar"] as const) {
+  for (const group of ["aircraft", "missile", "radar", "countermeasures"] as const) {
     const src = (saved as Record<string, unknown>)[group];
     if (!src || typeof src !== "object") continue;
     const dst = out[group] as unknown as Record<string, unknown>;
@@ -234,8 +256,22 @@ export const PARAM_FIELDS: ParamField[] = [
   { group: "missile", key: "seekerGimbalDeg", label: "Seeker gimbal limit", unit: "°", kind: "number" },
   { group: "missile", key: "fuzeRadiusM", label: "Proximity fuze radius", unit: "m", kind: "number" },
   { group: "missile", key: "pk", label: "Kill chance when fuzed", unit: "0–1", kind: "number", step: 0.05 },
-  { group: "missile", key: "minFlyMach", label: "Spent below", unit: "Mach", kind: "number", step: 0.05 },
-  { group: "missile", key: "maxTofS", label: "Max flight time", unit: "s", kind: "number" },
+  { group: "missile", key: "maxTofS", label: "Self-destruct after", unit: "s", kind: "number" },
+  {
+    group: "missile",
+    key: "minSpeedKt",
+    label: "Self-destruct below (true airspeed)",
+    unit: "kt",
+    kind: "number",
+  },
+  {
+    group: "missile",
+    key: "lethalMach",
+    label: "Launch zone: likely lethal if arriving above",
+    unit: "Mach",
+    kind: "number",
+    step: 0.05,
+  },
   { group: "missile", key: "loft", label: "Loft", kind: "bool" },
   { group: "missile", key: "loftRangeNm", label: "Loft table range", unit: "nm", kind: "numbers" },
   { group: "missile", key: "loftGainFt", label: "Loft table apex gain", unit: "ft", kind: "numbers" },
@@ -258,4 +294,6 @@ export const PARAM_FIELDS: ParamField[] = [
   { group: "aircraft", key: "inducedK", label: "Induced drag factor", kind: "number", step: 0.01 },
   { group: "radar", key: "gimbalDeg", label: "Radar gimbal limit", unit: "°", kind: "number" },
   { group: "radar", key: "rangeNm", label: "Radar tracking range", unit: "nm", kind: "number" },
+  { group: "countermeasures", key: "chaff", label: "Chaff bundles per jet", kind: "number" },
+  { group: "countermeasures", key: "flares", label: "Flares per jet", kind: "number" },
 ];

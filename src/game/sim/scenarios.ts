@@ -46,6 +46,10 @@ function headOn(params: GameParams, altFt: number, seed: number, rangeNm: number
     mach: MACH,
   });
   if (blueMissiles !== undefined) blue.missiles = blueMissiles;
+  for (const j of [blue, red]) {
+    j.chaff = Math.max(0, Math.round(params.countermeasures.chaff));
+    j.flares = Math.max(0, Math.round(params.countermeasures.flares));
+  }
   blue.targetId = red.id;
   red.targetId = blue.id;
   w.jets.push(blue, red);

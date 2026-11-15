@@ -14,7 +14,7 @@
  */
 
 import type { Side } from "./aircraft.ts";
-import { airDensity, DEG, FT, G, interp, NM, speedOfSoundMs } from "./atmosphere.ts";
+import { airDensity, DEG, FT, G, interp, KT, NM, speedOfSoundMs } from "./atmosphere.ts";
 import type { MissileParams } from "./params.ts";
 import { add, angleBetween, dot, len, norm, perp, scale, segmentClosest, sub, type V3, v3 } from "./vec.ts";
 
@@ -43,7 +43,7 @@ export interface Missile {
   prevRangeM: number;
   /** Lateral acceleration commanded last step (m/s²), for display. */
   latAccel: number;
-  /** Flight time at which the seeker gave up (the missile is removed a few seconds later). */
+  /** Flight time at which the seeker gave up or the missile overshot (it then flies on unguided). */
   lostAt: number | null;
   end: MissileEnd | null;
 }
@@ -126,8 +126,6 @@ const PASSED_M = 2000;
 /** Look angles (rad) over which terminal guidance blends from pure PN to added direct steering. */
 const BLEND_FROM = 15 * DEG;
 const BLEND_SPAN = 25 * DEG;
-/** An unguided (lost) missile is removed as a miss after this long (s). */
-const LOST_REMOVE_S = 5;
 
 function steerToward(dir: V3, vel: V3): V3 {
   const v = len(vel);
@@ -300,19 +298,18 @@ export function stepMissile(
     }
     const range = len(sub(target.pos, m.pos));
     if (m.phase === "tracking" && range > m.prevRangeM && range < PASSED_M) {
-      m.end = "miss";
+      // Overshot: it flies on unguided until it self-destructs.
+      m.phase = "lost";
+      m.lostAt = m.tof;
       ev.push("miss");
-      return ev;
     }
     m.prevRangeM = range;
   }
-  if (m.lostAt !== null && m.tof - m.lostAt > LOST_REMOVE_S) {
-    m.end = "miss";
-    ev.push("miss");
-  } else if (m.pos.z <= 0) {
+  if (m.pos.z <= 0) {
     m.end = "ground";
     ev.push("ground");
-  } else if (m.tof > p.maxTofS || (motorAccel(p, m.tof) === 0 && missileMach(m) < p.minFlyMach)) {
+  } else if (m.tof > p.maxTofS || (motorAccel(p, m.tof) === 0 && len(m.vel) < p.minSpeedKt * KT)) {
+    // True airspeed, not indicated: at altitude a fast missile shows a low indicated speed.
     m.end = "spent";
     ev.push("spent");
   }

@@ -5,7 +5,7 @@ import { FT, KT, NM } from "../sim/atmosphere.ts";
 import { missileMach } from "../sim/missile.ts";
 import type { GameParams } from "../sim/params.ts";
 import { ALTITUDES_FT, SCENARIOS, scenarioById } from "../sim/scenarios.ts";
-import { type Command, command, jetById } from "../sim/world.ts";
+import { type Command, command, jetById, rwrContacts, type World } from "../sim/world.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { type AutoPause, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
@@ -30,6 +30,10 @@ export function GameApp() {
   const [endSeen, setEndSeen] = useState(false);
   const [labels, setLabels] = useState(true);
   const [follow, setFollow] = useState(true);
+  /** Fog of war: off by default each time the page opens. */
+  const [fog, setFog] = useState(false);
+  const fogRef = useRef(fog);
+  fogRef.current = fog;
   const [flash, setFlash] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
@@ -44,6 +48,7 @@ export function GameApp() {
   const start = useCallback(
     (id = scenarioId, alt = altFt) => {
       const s = new GameSession(id, alt, params, autoPause, Math.floor(Math.random() * 1e9));
+      s.fog = fogRef.current;
       setSession(s);
       setShowStart(false);
       setEndSeen(false);
@@ -69,12 +74,24 @@ export function GameApp() {
     [session],
   );
 
+  /**
+   * Hot and crank are flown against the targeted bandit. Notch and cold are flown against the
+   * nearest active missile on this jet's RWR when there is one (that is what you defend), else the bandit.
+   */
   const steerRel = useCallback(
-    (offsetDeg: number, dir: 1 | -1, label: string) =>
+    (offsetDeg: number, dir: 1 | -1, label: string, vsMissile = false) =>
       issue((j) => {
-        const threat = jetById(session?.world ?? null, j.targetId) ?? nearestEnemy(session, j);
-        if (!threat) return null;
-        const steer: Steer = { mode: "relative", threatId: threat.id, offsetDeg, dir, label };
+        const w = session?.world ?? null;
+        const missile = vsMissile && w ? nearestRwrMissile(w, j) : null;
+        const threatId = missile ?? (jetById(w, j.targetId) ?? nearestEnemy(session, j))?.id;
+        if (!threatId) return null;
+        const steer: Steer = {
+          mode: "relative",
+          threatId,
+          offsetDeg,
+          dir,
+          label: missile ? `${label} vs ${missile}` : label,
+        };
         return { type: "steer", jetId: j.id, steer };
       }),
     [issue, session],
@@ -146,7 +163,7 @@ export function GameApp() {
         }
         return;
       }
-      if ((e.target as HTMLElement)?.closest("input, select, textarea")) return;
+      if (e.target instanceof Element && e.target.closest("input, select, textarea")) return;
       const k = e.key.toLowerCase();
       if (k === " ") togglePause();
       else if (k >= "1" && k <= "5") setScale(TIME_SCALES[Number(k) - 1] ?? 1);
@@ -154,9 +171,11 @@ export function GameApp() {
       else if (k === "h") steerRel(0, 1, "hot");
       else if (k === "q") steerRel(CRANK_DEG, -1, "crank left");
       else if (k === "e") steerRel(CRANK_DEG, 1, "crank right");
-      else if (k === "a") steerRel(90, -1, "notch left");
-      else if (k === "d") steerRel(90, 1, "notch right");
-      else if (k === "c") steerRel(180, 1, "cold");
+      else if (k === "a") steerRel(90, -1, "notch left", true);
+      else if (k === "d") steerRel(90, 1, "notch right", true);
+      else if (k === "c") steerRel(180, 1, "cold", true);
+      else if (k === "insert") issue((j) => ({ type: "chaff", jetId: j.id }));
+      else if (k === "delete") issue((j) => ({ type: "flare", jetId: j.id }));
       else if (k === "t")
         issue((j) => ({
           type: "throttle",
@@ -360,11 +379,38 @@ export function GameApp() {
           {flash && <div className="g-flash">{flash}</div>}
           <div className="g-stage-tools">
             <label>
-              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow
-              fight
+              <input
+                type="checkbox"
+                checked={follow}
+                onChange={(e) => {
+                  setFollow(e.target.checked);
+                  e.target.blur();
+                }}
+              />{" "}
+              Follow fight
             </label>
             <label>
-              <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Labels
+              <input
+                type="checkbox"
+                checked={labels}
+                onChange={(e) => {
+                  setLabels(e.target.checked);
+                  e.target.blur();
+                }}
+              />{" "}
+              Labels
+            </label>
+            <label title="Show only what your radar and RWR tell you">
+              <input
+                type="checkbox"
+                checked={fog}
+                onChange={(e) => {
+                  setFog(e.target.checked);
+                  e.target.blur(); // keep Space and the game keys working
+                  if (session) session.fog = e.target.checked;
+                }}
+              />{" "}
+              Fog of war
             </label>
           </div>
         </div>
@@ -386,13 +432,14 @@ export function GameApp() {
                   v={`${String(deg(p.hdg)).padStart(3, "0")}°`}
                   sub={p.steer.mode === "relative" ? p.steer.label : "heading"}
                 />
-                <Stat k="Missiles" v={`${p.missiles}`} />
+                <Stat k="Missiles" v={`${p.missiles}`} sub={`chaff ${p.chaff} · flare ${p.flares}`} />
                 <Stat
                   k="Radar"
                   v={tgt?.alive ? (w.radarTrack.get(p.id) ? "TRACK" : "no track") : "—"}
                   sub={tgt?.alive ? tgt.callsign : "no target"}
                 />
               </div>
+              <RwrLine session={session} jet={p} />
               <div className="g-row">
                 <span className="g-label">Throttle</span>
                 <div className="g-seg">
@@ -435,14 +482,29 @@ export function GameApp() {
                 <button type="button" onClick={() => steerRel(CRANK_DEG, 1, "crank right")} title="E">
                   Crank R ↗
                 </button>
-                <button type="button" onClick={() => steerRel(90, -1, "notch left")} title="A">
+                <button type="button" onClick={() => steerRel(90, -1, "notch left", true)} title="A">
                   ← Notch L
                 </button>
-                <button type="button" onClick={() => steerRel(180, 1, "cold")} title="C">
+                <button type="button" onClick={() => steerRel(180, 1, "cold", true)} title="C">
                   ↓ Cold
                 </button>
-                <button type="button" onClick={() => steerRel(90, 1, "notch right")} title="D">
+                <button type="button" onClick={() => steerRel(90, 1, "notch right", true)} title="D">
                   Notch R →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
+                  title="Insert (visual only for now)"
+                >
+                  Chaff ({p.chaff})
+                </button>
+                <span />
+                <button
+                  type="button"
+                  onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
+                  title="Delete (visual only for now)"
+                >
+                  Flare ({p.flares})
                 </button>
               </div>
               <ZoneBox session={session} />
@@ -461,11 +523,17 @@ export function GameApp() {
           {w && (
             <section className="g-card">
               <h3>Missiles</h3>
-              {w.missiles.filter((m) => !m.end).length === 0 && <p className="g-muted">None in flight.</p>}
+              {w.missiles.filter((m) => !m.end && (!session?.fog || m.side === PLAYER_SIDE)).length === 0 && (
+                <p className="g-muted">
+                  {session?.fog
+                    ? "None of yours in flight. Hostile missiles show only on your RWR."
+                    : "None in flight."}
+                </p>
+              )}
               <table className="g-table">
                 <tbody>
                   {w.missiles
-                    .filter((m) => !m.end)
+                    .filter((m) => !m.end && (!session?.fog || m.side === PLAYER_SIDE))
                     .map((m) => {
                       const t = jetById(w, m.targetId);
                       const r = t
@@ -494,7 +562,14 @@ export function GameApp() {
               <ol className="g-log">
                 {w.events
                   .map((e, seq) => ({ e, seq }))
-                  .filter(({ e }) => e.type !== "radar-gained" && e.type !== "radar-lost")
+                  .filter(
+                    ({ e }) =>
+                      e.type !== "radar-gained" &&
+                      e.type !== "radar-lost" &&
+                      e.type !== "chaff" &&
+                      e.type !== "flare" &&
+                      (!session || session.showsEvent(e)),
+                  )
                   .slice(-14)
                   .reverse()
                   .map(({ e, seq }) => (
@@ -514,7 +589,7 @@ export function GameApp() {
             {(
               [
                 ["enemyLaunch", "Missile fired at you"],
-                ["seekerLock", "Missile seeker locks you"],
+                ["seekerLock", "Active missile shows on your RWR"],
                 ["pitbull", "Your / incoming missile goes active"],
                 ["datalinkLost", "Your missile loses datalink"],
                 ["missileEnd", "Missile hits, misses or is spent"],
@@ -555,12 +630,18 @@ export function GameApp() {
               <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd> hot
               · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold ·{" "}
               <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>T</kbd> throttle · <kbd>G</kbd> max-g turns ·{" "}
-              <kbd>V</kbd> follow
+              <kbd>Insert</kbd> chaff · <kbd>Delete</kbd> flare · <kbd>V</kbd> follow
             </p>
             <p className="g-muted">
               Map: shaded wedges are radar coverage (±{w?.params.radar.gimbalDeg ?? 60}°,{" "}
               {w?.params.radar.rangeNm ?? 40} nm). A dotted line from a missile means datalink; dashed with ×
               is where a missile <i>thinks</i> the target is.
+            </p>
+            <p className="g-muted">
+              RWR ring around your jets: amber tick = an enemy radar is scanning you (datalink support looks
+              the same, so there is no launch warning); red <b>M</b> = an active missile seeker sees you,
+              blinking when it is locked on. Notch and Cold fly against that missile. Chaff and flares are
+              visual only for now.
             </p>
           </section>
         </aside>
@@ -719,6 +800,45 @@ function StartDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Nearest active missile on this jet's RWR (locked ones first), or null. */
+function nearestRwrMissile(w: World, j: Jet): string | null {
+  let best: string | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const c of rwrContacts(w, j)) {
+    if (c.kind !== "missile") continue;
+    const m = w.missiles.find((x) => x.id === c.sourceId);
+    if (!m) continue;
+    const d = Math.hypot(m.pos.x - j.pos.x, m.pos.y - j.pos.y) - (c.lock ? 1e7 : 0);
+    if (d < bestScore) {
+      bestScore = d;
+      best = m.id;
+    }
+  }
+  return best;
+}
+
+/** One-line RWR readout for the selected jet: who is painting it, bearings relative to the nose. */
+function RwrLine({ session, jet }: { session: GameSession; jet: Jet }) {
+  const contacts = rwrContacts(session.world, jet);
+  if (contacts.length === 0) return <div className="g-rwr g-muted">RWR: clean</div>;
+  const rel = (b: number) => {
+    const d = Math.round(((((b - jet.hdg) * 180) / Math.PI + 540) % 360) - 180);
+    return d === 0 ? "nose" : `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
+  };
+  return (
+    <div className="g-rwr">
+      RWR:{" "}
+      {contacts.map((c, i) => (
+        <span key={c.sourceId} className={c.kind === "missile" ? "g-rwr-missile" : "g-rwr-radar"}>
+          {i > 0 ? " · " : ""}
+          {c.kind === "missile" ? `MISSILE ${c.lock ? "LOCK " : ""}` : "radar "}
+          {rel(c.bearing)}
+        </span>
+      ))}
     </div>
   );
 }

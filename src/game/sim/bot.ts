@@ -6,14 +6,17 @@
 import type { Jet, Steer, Throttle } from "./aircraft.ts";
 import { len, sub } from "./vec.ts";
 import { launchZone } from "./wez.ts";
-import { type Command, type Controller, jetById, radarCanTrack, type World } from "./world.ts";
+import { type Command, type Controller, radarCanTrack, rwrContacts, type World } from "./world.ts";
 
 export interface BotConfig {
   /** Fire when the range is within this fraction of the current Rmax; null never fires. */
   fireFracRmax: number | null;
   /** Off-nose angle (deg) to hold while its own missile is in flight, to keep supporting; null stays hot. */
   crankDeg: number | null;
-  /** When to defend against a missile aimed at it; null never defends. */
+  /**
+   * When to defend, from its own RWR: "pitbull" when any active missile shows, "acquired" when one
+   * is locked on it. "launch" cheats (knows every launch at it). null never defends.
+   */
   defendOn: "launch" | "pitbull" | "acquired" | null;
   /** Defensive heading relative to the threat: 180 cold, 90 notch/beam. */
   defendOffsetDeg: number;
@@ -35,6 +38,7 @@ export const DEFAULT_BOT: BotConfig = {
 };
 
 const ZONE_EVERY_S = 2;
+const CHAFF_EVERY_S = 2;
 
 export class ScriptedBot implements Controller {
   readonly cfg: BotConfig;
@@ -42,6 +46,7 @@ export class ScriptedBot implements Controller {
   private rmaxNm = 0;
   private firstShotAtMe: number | null = null;
   private beamed = false;
+  private lastChaff = -1e9;
 
   constructor(cfg: Partial<BotConfig> = {}) {
     this.cfg = { ...DEFAULT_BOT, ...cfg };
@@ -62,13 +67,15 @@ export class ScriptedBot implements Controller {
 
     let steer: Steer = { mode: "relative", threatId: tgt.id, offsetDeg: 0, dir: 1, label: "hot" };
     const c = this.cfg;
-    const threatened = atMe.find((m) =>
+    const rwrMissiles = rwrContacts(w, me).filter((r) => r.kind === "missile");
+    const threatId =
       c.defendOn === "launch"
-        ? true
+        ? atMe[0]?.id
         : c.defendOn === "pitbull"
-          ? m.pitbull
-          : c.defendOn === "acquired" && m.phase === "tracking",
-    );
+          ? rwrMissiles[0]?.sourceId
+          : c.defendOn === "acquired"
+            ? rwrMissiles.find((r) => r.lock)?.sourceId
+            : undefined;
     if (
       c.beamAfterLaunchS !== null &&
       this.firstShotAtMe !== null &&
@@ -84,15 +91,13 @@ export class ScriptedBot implements Controller {
       }
       return out;
     }
-    if (threatened) {
-      const shooter = jetById(w, threatened.shooterId);
-      steer = {
-        mode: "relative",
-        threatId: shooter?.alive ? shooter.id : tgt.id,
-        offsetDeg: c.defendOffsetDeg,
-        dir: 1,
-        label: "defending",
-      };
+    if (threatId) {
+      // Defend against the missile itself (the RWR gives its bearing), dropping chaff as it goes.
+      steer = { mode: "relative", threatId, offsetDeg: c.defendOffsetDeg, dir: 1, label: "defending" };
+      if (me.chaff > 0 && w.t - this.lastChaff >= CHAFF_EVERY_S) {
+        this.lastChaff = w.t;
+        out.push({ type: "chaff", jetId: me.id });
+      }
     } else if (mine.length > 0 && c.crankDeg !== null) {
       steer = { mode: "relative", threatId: tgt.id, offsetDeg: c.crankDeg, dir: 1, label: "crank" };
     } else if (c.fireFracRmax !== null && me.missiles > 0 && radarCanTrack(w, me, tgt)) {

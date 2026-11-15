@@ -44,6 +44,9 @@ export interface Jet {
   steer: Steer;
   alive: boolean;
   missiles: number;
+  /** Chaff bundles and flares left (set by the scenario from the countermeasure parameters). */
+  chaff: number;
+  flares: number;
   /** Contact this jet's radar is told to track and shoot at. */
   targetId: string | null;
 }
@@ -77,6 +80,8 @@ export function makeJet(
     steer: { mode: "heading", hdg },
     alive: true,
     missiles: Math.max(0, Math.round(p.missiles)),
+    chaff: 0,
+    flares: 0,
     targetId: null,
   };
 }

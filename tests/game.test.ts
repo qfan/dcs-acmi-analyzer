@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { mach, makeJet, stepJet } from "../src/game/sim/aircraft.ts";
 import { DEG, FT, NM } from "../src/game/sim/atmosphere.ts";
+import { launchMissile, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
 import { launchZone } from "../src/game/sim/wez.ts";
-import { command, jetById, step, type World } from "../src/game/sim/world.ts";
+import { command, jetById, rwrContacts, step, type World } from "../src/game/sim/world.ts";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
+
+function must<T>(x: T | null | undefined): T {
+  if (x === null || x === undefined) throw new Error("missing");
+  return x;
+}
 
 function jetAt(p: GameParams, altFt: number, m: number, side: "blue" | "red" = "blue", y = 0, hdgDeg = 0) {
   return makeJet(p.aircraft, { id: side, side, callsign: side, x: 0, y, altM: altFt * FT, hdgDeg, mach: m });
@@ -144,5 +151,100 @@ describe("game: rules", () => {
     expect(m.missile.dragCd).toEqual(DEFAULT_PARAMS.missile.dragCd);
     expect(m.missile.pk).toBe(DEFAULT_PARAMS.missile.pk);
     expect(m.radar).toEqual(DEFAULT_PARAMS.radar);
+  });
+});
+
+describe("game: missile end and lethal range", () => {
+  it("keeps flying below the lethal speed until the true-airspeed or time limit", () => {
+    const p = P();
+    const m = launchMissile(p.missile, {
+      id: "m",
+      side: "blue",
+      shooterId: "s",
+      targetId: "t",
+      pos: { x: 0, y: 0, z: 40000 * FT },
+      vel: { x: 0, y: 130, z: 0 },
+      target: { pos: { x: 0, y: 90 * NM, z: 40000 * FT }, vel: { x: 0, y: 0, z: 0 }, alive: true },
+    });
+    p.missile.boostTimeS = 0;
+    // 130 m/s true (≈253 kt) at 40,000 ft is only ≈ 140 kt indicated: it must still be flying.
+    stepMissile(
+      p.missile,
+      m,
+      { pos: { x: 0, y: 90 * NM, z: 40000 * FT }, vel: { x: 0, y: 0, z: 0 }, alive: true },
+      true,
+      0.02,
+    );
+    expect(m.end).toBeNull();
+    m.vel = { x: 0, y: 95, z: 0 };
+    stepMissile(
+      p.missile,
+      m,
+      { pos: { x: 0, y: 90 * NM, z: 40000 * FT }, vel: { x: 0, y: 0, z: 0 }, alive: true },
+      true,
+      0.02,
+    );
+    expect(m.end).toBe("spent");
+  });
+
+  it("shows a shorter Rmax when the lethal speed is raised", () => {
+    const p = P();
+    const s = jetAt(p, 25000, 0.9);
+    const t = jetAt(p, 25000, 0.9, "red", 30 * NM, 180);
+    const base = launchZone(p.missile, s, t).rmaxNm;
+    p.missile.lethalMach = 1.3;
+    expect(launchZone(p.missile, s, t).rmaxNm).toBeLessThan(base);
+  });
+});
+
+describe("game: RWR, decoys and fog of war", () => {
+  it("shows the enemy radar scan but no launch warning while the missile is on datalink", () => {
+    const w = scenarioById("duel").build(P(), 25000, 3);
+    w.controllers.clear();
+    const blue = jetById(w, "B1");
+    if (!blue) throw new Error("no blue jet");
+    must(jetById(w, "R1")).pos.y = 30 * NM;
+    expect(rwrContacts(w, blue).map((c) => c.kind)).toEqual(["radar"]);
+    command(w, { type: "fire", jetId: "R1", targetId: "B1" });
+    for (let i = 0; i < 100; i++) step(w);
+    expect(rwrContacts(w, blue).some((c) => c.kind === "missile")).toBe(false);
+    expect(w.events.some((e) => e.type === "rwr-missile")).toBe(false);
+  });
+
+  it("warns once the missile goes active and its seeker sees you", () => {
+    const w = play("defend", 25000, {});
+    const rwr = w.events.find((e) => e.type === "rwr-missile" && e.targetId === "B1");
+    const pit = w.events.find((e) => e.type === "pitbull");
+    expect(rwr).toBeDefined();
+    expect(pit).toBeDefined();
+    expect(must(rwr).t).toBeGreaterThanOrEqual(must(pit).t);
+  });
+
+  it("releases chaff and flares from the jet's load", () => {
+    const w = scenarioById("duel").build(P(), 25000, 1);
+    const b = must(jetById(w, "B1"));
+    const c0 = b.chaff;
+    const f0 = b.flares;
+    expect(command(w, { type: "chaff", jetId: "B1" })).toBeNull();
+    expect(command(w, { type: "flare", jetId: "B1" })).toBeNull();
+    expect([b.chaff, b.flares]).toEqual([c0 - 1, f0 - 1]);
+    expect(w.decoys).toHaveLength(2);
+    b.chaff = 0;
+    expect(command(w, { type: "chaff", jetId: "B1" })).toMatch(/chaff/);
+  });
+
+  it("fog of war hides a bandit outside your radar and keeps its last-seen position", () => {
+    const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.fog = true;
+    expect(s.sees("R1")).toBe(false); // 45 nm: beyond the 40 nm radar
+    while (s.world.t < 20) s.advance(0.25);
+    expect(s.sees("R1")).toBe(true);
+    const b = must(jetById(s.world, "B1"));
+    b.hdg = Math.PI; // turn the radar away
+    s.advance(0.02);
+    expect(s.sees("R1")).toBe(false);
+    expect(s.lastSeen.has("R1")).toBe(true);
+    s.fog = false;
+    expect(s.sees("R1")).toBe(true);
   });
 });

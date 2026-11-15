@@ -443,3 +443,16 @@ details.g-card summary {
 details.g-card[open] summary {
   margin-bottom: 6px;
 }
+
+.g-rwr {
+  font-size: 12px;
+  margin: 0 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.g-rwr-radar {
+  color: #fbbf24;
+}
+.g-rwr-missile {
+  color: #ff5a5a;
+  font-weight: 700;
+}

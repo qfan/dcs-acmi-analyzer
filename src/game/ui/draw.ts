@@ -3,8 +3,8 @@ import { niceStep, toScreen, type View } from "../../map/render.ts";
 import { desiredHeading, type Jet, mach } from "../sim/aircraft.ts";
 import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type Missile, missileMach } from "../sim/missile.ts";
-import { jetById, type World } from "../sim/world.ts";
-import type { GameSession } from "./session.ts";
+import { jetById, rwrContacts, steerThreatPos, type World } from "../sim/world.ts";
+import { type GameSession, PLAYER_SIDE } from "./session.ts";
 
 export const COLORS = {
   bg: "#0a1018",
@@ -18,6 +18,8 @@ export const COLORS = {
   select: "#fbbf24",
   rmax: "#34d399",
   rne: "#f87171",
+  rwrRadar: "#fbbf24",
+  rwrMissile: "#ff3b3b",
 };
 
 export const sideCol = (side: string) => (side === "blue" ? COLORS.blue : COLORS.red);
@@ -244,6 +246,116 @@ function drawMissile(ctx: CanvasRenderingContext2D, v: View, w: World, m: Missil
   }
 }
 
+/** Released chaff (grey specks) and flares (orange), fading out. */
+function drawDecoys(ctx: CanvasRenderingContext2D, v: View, s: GameSession) {
+  const w = s.world;
+  for (const d of w.decoys) {
+    if (!s.sees(d.jetId)) continue;
+    const age = w.t - d.t0;
+    const a = Math.max(0, 1 - age / 4);
+    const [sx, sy] = toScreen(v, d.pos.x, d.pos.y);
+    if (d.kind === "flare") {
+      ctx.fillStyle = `rgba(251,146,60,${a})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 2.5, 0, 2 * Math.PI);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = `rgba(203,213,225,${a * 0.8})`;
+      for (const [dx, dy] of [
+        [0, 0],
+        [3, 2],
+        [-2, 3],
+        [2, -3],
+      ] as const)
+        ctx.fillRect(sx + dx * (1 + age), sy + dy * (1 + age), 1.5, 1.5);
+    }
+  }
+}
+
+const RWR_R = 26;
+
+/**
+ * RWR on the map: a ring around each of your jets with a tick on the bearing of each emitter.
+ * Short amber tick = an enemy radar scanning you; long red tick = an active missile seeker, blinking
+ * when it is locked on you. With fog of war on, missile ticks also get a strobe line, since the
+ * missile itself is hidden.
+ */
+function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: GameSession, j: Jet) {
+  const contacts = rwrContacts(s.world, j);
+  const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
+  ctx.strokeStyle = contacts.length > 0 ? "rgba(219,227,238,0.35)" : "rgba(219,227,238,0.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(sx, sy, RWR_R, 0, 2 * Math.PI);
+  ctx.stroke();
+  const blink = Math.floor(performance.now() / 250) % 2 === 0;
+  for (const c of contacts) {
+    const ux = Math.sin(c.bearing);
+    const uy = -Math.cos(c.bearing);
+    if (c.kind === "radar") {
+      ctx.strokeStyle = COLORS.rwrRadar;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(sx + ux * (RWR_R - 4), sy + uy * (RWR_R - 4));
+      ctx.lineTo(sx + ux * (RWR_R + 6), sy + uy * (RWR_R + 6));
+      ctx.stroke();
+      continue;
+    }
+    if (c.lock && !blink) continue;
+    ctx.strokeStyle = COLORS.rwrMissile;
+    ctx.lineWidth = c.lock ? 4 : 2.5;
+    ctx.beginPath();
+    ctx.moveTo(sx + ux * (RWR_R - 6), sy + uy * (RWR_R - 6));
+    ctx.lineTo(sx + ux * (RWR_R + 14), sy + uy * (RWR_R + 14));
+    ctx.stroke();
+    if (s.fog) {
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath();
+      ctx.moveTo(sx + ux * (RWR_R + 14), sy + uy * (RWR_R + 14));
+      ctx.lineTo(sx + ux * 160, sy + uy * 160);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.font = "bold 10px system-ui, sans-serif";
+    label(ctx, "M", sx + ux * (RWR_R + 22), sy + uy * (RWR_R + 22) + 3, COLORS.rwrMissile, "center");
+  }
+}
+
+/** Last position where your side saw a hidden enemy (fog of war). */
+function drawGhost(
+  ctx: CanvasRenderingContext2D,
+  v: View,
+  s: GameSession,
+  j: Jet,
+  labels: boolean,
+): Hit | null {
+  const g = s.lastSeen.get(j.id);
+  if (!g) return null;
+  const [sx, sy] = toScreen(v, g.x, g.y);
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(g.hdg);
+  ctx.beginPath();
+  ctx.moveTo(0, -11);
+  ctx.lineTo(7, 8);
+  ctx.lineTo(0, 4);
+  ctx.lineTo(-7, 8);
+  ctx.closePath();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = `${sideCol(j.side)}99`;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  if (labels) {
+    ctx.font = "11px system-ui, sans-serif";
+    label(ctx, `${j.callsign}?`, sx + 14, sy - 4, `${sideCol(j.side)}aa`);
+    label(ctx, `last seen ${Math.round(s.world.t - g.t)} s ago`, sx + 14, sy + 9, COLORS.gridText);
+  }
+  return { id: j.id, sx, sy };
+}
+
 export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession, labels: boolean): Hit[] {
   const w = s.world;
   const hits: Hit[] = [];
@@ -251,24 +363,27 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
   ctx.fillRect(0, 0, v.w, v.h);
   drawGrid(ctx, v);
 
-  for (const j of w.jets) if (j.alive) drawRadar(ctx, v, w, j, s.selected.has(j.id));
+  for (const j of w.jets) if (j.alive && s.sees(j.id)) drawRadar(ctx, v, w, j, s.selected.has(j.id));
 
   for (const j of w.jets) {
     const tr = s.trails.get(j.id);
-    if (tr)
+    if (tr && (!s.fog || j.side === PLAYER_SIDE))
       drawTrail(ctx, v, tr, j.alive ? j.pos : null, `${j.alive ? sideCol(j.side) : COLORS.dead}55`, 1.5);
   }
   for (const m of w.missiles) {
+    if (s.fog && m.side !== PLAYER_SIDE) continue;
     const tr = s.trails.get(m.id);
     if (tr) drawTrail(ctx, v, tr, m.end ? null : m.pos, `${sideCol(m.side)}${m.end ? "33" : "99"}`, 1);
   }
+  drawDecoys(ctx, v, s);
 
-  // Selected jet: line to its target, range, and launch-zone ticks.
+  // Selected jet: line to its target (or where it was last seen), range, and launch-zone ticks.
   const p = s.primary();
   const tgt = p ? jetById(w, p.targetId) : undefined;
-  if (p && tgt?.alive) {
+  const tgtPos = tgt?.alive ? (s.sees(tgt.id) ? tgt.pos : (s.lastSeen.get(tgt.id) ?? null)) : null;
+  if (p && tgt && tgtPos) {
     const [ax, ay] = toScreen(v, p.pos.x, p.pos.y);
-    const [bx, by] = toScreen(v, tgt.pos.x, tgt.pos.y);
+    const [bx, by] = toScreen(v, tgtPos.x, tgtPos.y);
     const track = w.radarTrack.get(p.id) ?? false;
     ctx.setLineDash(track ? [] : [4, 4]);
     ctx.strokeStyle = track ? "rgba(251,191,36,0.55)" : "rgba(251,191,36,0.3)";
@@ -278,9 +393,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
     ctx.lineTo(bx, by);
     ctx.stroke();
     ctx.setLineDash([]);
-    const dist = Math.hypot(tgt.pos.x - p.pos.x, tgt.pos.y - p.pos.y);
-    const ux = (tgt.pos.x - p.pos.x) / dist;
-    const uy = (tgt.pos.y - p.pos.y) / dist;
+    const dist = Math.hypot(tgtPos.x - p.pos.x, tgtPos.y - p.pos.y);
+    const ux = (tgtPos.x - p.pos.x) / dist;
+    const uy = (tgtPos.y - p.pos.y) / dist;
     const z = s.zone?.jetId === p.id && s.zone.targetId === tgt.id ? s.zone.zone : null;
     if (z) {
       for (const [nm, col, name] of [
@@ -307,9 +422,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
 
   // Commanded heading of own jets: where they are turning to.
   for (const j of w.jets) {
-    if (!j.alive || j.side !== "blue") continue;
-    const threat = j.steer.mode === "relative" ? jetById(w, j.steer.threatId) : undefined;
-    const hdg = desiredHeading(j, threat?.alive ? threat.pos : null);
+    if (!j.alive || j.side !== PLAYER_SIDE) continue;
+    const hdg = desiredHeading(j, steerThreatPos(w, j));
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     ctx.strokeStyle = "rgba(219,227,238,0.35)";
     ctx.setLineDash([3, 4]);
@@ -320,7 +434,10 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
     ctx.setLineDash([]);
   }
 
-  for (const m of w.missiles) if (!m.end) drawMissile(ctx, v, w, m, labels);
+  for (const m of w.missiles)
+    if (!m.end && (!s.fog || m.side === PLAYER_SIDE)) drawMissile(ctx, v, w, m, labels);
+
+  for (const j of w.jets) if (j.alive && j.side === PLAYER_SIDE) drawRwr(ctx, v, s, j);
 
   const targets = new Set<string>();
   for (const id of s.selected) {
@@ -328,6 +445,11 @@ export function drawScene(ctx: CanvasRenderingContext2D, v: View, s: GameSession
     if (t) targets.add(t);
   }
   for (const j of w.jets) {
+    if (!s.sees(j.id)) {
+      const g = j.alive ? drawGhost(ctx, v, s, j, labels) : null;
+      if (g) hits.push(g);
+      continue;
+    }
     drawJet(ctx, v, j, s.selected.has(j.id), targets.has(j.id));
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     hits.push({ id: j.id, sx, sy });

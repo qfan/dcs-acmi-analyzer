@@ -12,6 +12,7 @@ const GROUP_TITLES: Record<keyof GameParams, string> = {
   missile: "Missile",
   aircraft: "Aircraft",
   radar: "Radar",
+  countermeasures: "Chaff & flares",
 };
 
 type Draft = Record<string, string | boolean>;
@@ -74,7 +75,7 @@ export function ParamEditor({
     if (r.errors.length === 0) onSave(r.params);
   };
 
-  const groups = ["missile", "aircraft", "radar"] as const;
+  const groups = ["missile", "aircraft", "radar", "countermeasures"] as const;
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: clicking the backdrop closes the dialog; Escape does too
     <div className="g-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

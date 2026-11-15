@@ -2,8 +2,11 @@
  * Launch zone ("WEZ" / DLZ) by fast-forwarding the same missile model the game flies: no separate
  * lookup table, so editing the missile parameters changes the zone too.
  *
- *  rmax  longest range that still hits if the target holds its current heading and speed
- *  rne   "no escape": longest range that still hits if the target turns straight away at launch
+ *  rmax  longest range that still arrives "likely lethal" (at or above lethalMach) if the target
+ *        holds its current heading and speed
+ *  rne   "no escape": the same if the target turns straight away at launch
+ *
+ * The missile itself flies further than this (until maxTofS or minSpeedKt), it just rarely kills there.
  *
  * Both keep the current geometry (shooter speed and heading, target aspect and speed) and only slide
  * the target along the current line of sight. The flyouts assume the shooter keeps supporting.
@@ -45,9 +48,12 @@ export function flyout(
   while (m.tof < tMax) {
     tPos = add(tPos, scale(targetVel, DT));
     stepMissile(p, m, { pos: tPos, vel: targetVel, alive: true }, true, DT, WEZ_FUZE_M);
-    if (m.end) break;
+    if (m.end || m.phase === "lost") break;
+    // Once the motor is out and it is below the lethal speed it will not count, so stop early.
+    if (m.tof > p.boostTimeS + p.sustainTimeS && missileMach(m) < p.lethalMach) break;
   }
-  return { hit: m.end === "hit", tofS: m.tof, arrivalMach: missileMach(m) };
+  const arrivalMach = missileMach(m);
+  return { hit: m.end === "hit" && arrivalMach >= p.lethalMach, tofS: m.tof, arrivalMach };
 }
 
 export interface LaunchZone {

@@ -7,7 +7,7 @@ import type { Jet } from "../sim/aircraft.ts";
 import type { GameParams } from "../sim/params.ts";
 import { scenarioById } from "../sim/scenarios.ts";
 import { type LaunchZone, launchZone } from "../sim/wez.ts";
-import { type GameEvent, jetById, SIM_DT, step, type World } from "../sim/world.ts";
+import { type GameEvent, jetById, radarCanTrack, SIM_DT, step, type World } from "../sim/world.ts";
 
 export const PLAYER_SIDE = "blue";
 
@@ -16,7 +16,7 @@ export interface AutoPause {
   enemyLaunch: boolean;
   /** A missile involving you (yours, or one aimed at you) goes active. */
   pitbull: boolean;
-  /** A hostile missile's seeker locks one of your jets. */
+  /** A hostile missile's active seeker shows on one of your jets' RWR. */
   seekerLock: boolean;
   /** One of your missiles loses its datalink before pitbull. */
   datalinkLost: boolean;
@@ -59,6 +59,14 @@ export class GameSession {
   selected = new Set<string>();
   trails = new Map<string, TrailPoint[]>();
   zone: { jetId: string; targetId: string; zone: LaunchZone; at: number; simT: number } | null = null;
+  /**
+   * Fog of war: show only what your side knows. Enemy jets appear while one of your radars covers
+   * them, otherwise as a ghost where they were last seen; enemy missiles show only as RWR strobes.
+   */
+  fog = false;
+  /** Enemy jets your side's radars cover right now. */
+  known = new Set<string>();
+  lastSeen = new Map<string, { x: number; y: number; hdg: number; t: number }>();
   private acc = 0;
   private seenEvents = 0;
   private nextTrailAt = 0;
@@ -72,6 +80,7 @@ export class GameSession {
     this.nextTurnAt = autoPause.turnEveryS > 0 ? autoPause.turnEveryS : Number.POSITIVE_INFINITY;
     const mine = this.world.jets.find((j) => j.side === PLAYER_SIDE);
     if (mine) this.selected.add(mine.id);
+    this.updateKnowledge();
     this.recordTrails();
   }
 
@@ -99,6 +108,7 @@ export class GameSession {
     while (this.acc >= SIM_DT && !this.paused && !this.world.outcome) {
       this.acc -= SIM_DT;
       step(this.world);
+      this.updateKnowledge();
       if (this.world.t >= this.nextTrailAt) this.recordTrails();
       this.checkEvents();
       if (this.world.t >= this.nextTurnAt - 1e-9) {
@@ -124,11 +134,12 @@ export class GameSession {
     const atMe = !mineShot && !!e.targetId && jetById(this.world, e.targetId)?.side === PLAYER_SIDE;
     switch (e.type) {
       case "launch":
-        return a.enemyLaunch && atMe;
+        // There is no launch warning on the RWR, so under fog of war the player cannot know.
+        return a.enemyLaunch && atMe && !this.fog;
       case "pitbull":
         return a.pitbull && (mineShot || atMe);
-      case "acquired":
-        return a.seekerLock && atMe;
+      case "rwr-missile":
+        return a.seekerLock && e.side === PLAYER_SIDE;
       case "datalink-lost":
         return a.datalinkLost && mineShot;
       case "radar-lost":
@@ -163,6 +174,36 @@ export class GameSession {
     }
   }
 
+  private updateKnowledge(): void {
+    const w = this.world;
+    this.known.clear();
+    const mine = w.jets.filter((j) => j.side === PLAYER_SIDE && j.alive);
+    for (const e of w.jets) {
+      if (e.side === PLAYER_SIDE || !e.alive) continue;
+      if (mine.some((j) => radarCanTrack(w, j, e))) {
+        this.known.add(e.id);
+        this.lastSeen.set(e.id, { x: e.pos.x, y: e.pos.y, hdg: e.hdg, t: w.t });
+      }
+    }
+  }
+
+  /** Whether the player may see this jet (or its decoys) right now. */
+  sees(jetId: string): boolean {
+    if (!this.fog) return true;
+    const j = jetById(this.world, jetId);
+    return !j || j.side === PLAYER_SIDE || !j.alive || this.known.has(jetId);
+  }
+
+  /** Whether the player may see this event in the log. */
+  showsEvent(e: GameEvent): boolean {
+    if (!this.fog || e.side === PLAYER_SIDE || e.type === "end") return true;
+    // Hits on your own jets are obvious; the rest of the enemy's side is hidden.
+    return (
+      (e.type === "kill" || e.type === "survived-hit") &&
+      jetById(this.world, e.targetId)?.side === PLAYER_SIDE
+    );
+  }
+
   /** The first selected own jet that is alive. */
   primary(): Jet | undefined {
     for (const id of this.selected) {
@@ -176,7 +217,7 @@ export class GameSession {
   refreshZone(nowMs: number): void {
     const j = this.primary();
     const t = jetById(this.world, j?.targetId);
-    if (!j || !t?.alive || t.side === j.side) {
+    if (!j || !t?.alive || t.side === j.side || !this.sees(t.id)) {
       this.zone = null;
       return;
     }

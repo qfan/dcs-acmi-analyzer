@@ -8,9 +8,11 @@ import { DEG, NM } from "./atmosphere.ts";
 import { launchMissile, type Missile, type MissileEvent, stepMissile, type TargetTruth } from "./missile.ts";
 import type { GameParams } from "./params.ts";
 import { makeRng, type Rng } from "./rng.ts";
-import { angleBetween, headingVec, len, sub } from "./vec.ts";
+import { add, angleBetween, bearing, headingVec, len, scale, sub, type V3 } from "./vec.ts";
 
 export const SIM_DT = 0.02;
+/** How long a released chaff bundle or flare stays on the map (s). */
+const DECOY_LIFE_S = 4;
 
 export type GameEventType =
   | "launch"
@@ -25,6 +27,9 @@ export type GameEventType =
   | "spent"
   | "radar-lost"
   | "radar-gained"
+  | "rwr-missile"
+  | "chaff"
+  | "flare"
   | "end";
 
 export interface GameEvent {
@@ -44,7 +49,19 @@ export type Command =
   | { type: "throttle"; jetId: string; throttle: Jet["throttle"] }
   | { type: "effort"; jetId: string; effort: Jet["effort"] }
   | { type: "target"; jetId: string; targetId: string | null }
-  | { type: "fire"; jetId: string; targetId?: string };
+  | { type: "fire"; jetId: string; targetId?: string }
+  | { type: "chaff"; jetId: string }
+  | { type: "flare"; jetId: string };
+
+/** A released chaff bundle or flare, kept briefly for display (it does not affect missiles yet). */
+export interface Decoy {
+  kind: "chaff" | "flare";
+  jetId: string;
+  side: Side;
+  t0: number;
+  pos: V3;
+  vel: V3;
+}
 
 /** Something that flies a jet: the scripted bot now, the NPC AI later. */
 export interface Controller {
@@ -64,6 +81,9 @@ export interface World {
   nextId: number;
   /** Whether each jet's radar tracks its target, last step. */
   radarTrack: Map<string, boolean>;
+  decoys: Decoy[];
+  /** "missileId>jetId" pairs already announced on that jet's RWR. */
+  rwrSeen: Set<string>;
   outcome: Outcome | null;
   /** The fight ends as a draw after this long (s). */
   timeLimitS: number;
@@ -82,6 +102,8 @@ export function makeWorld(params: GameParams, seed = 1): World {
     rng: makeRng(seed),
     nextId: 1,
     radarTrack: new Map(),
+    decoys: [],
+    rwrSeen: new Set(),
     outcome: null,
     timeLimitS: 900,
     objective: "kill",
@@ -97,6 +119,57 @@ export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
   const los = sub(target.pos, shooter.pos);
   if (len(los) > w.params.radar.rangeNm * NM) return false;
   return angleBetween(los, headingVec(shooter.hdg, shooter.gamma)) <= w.params.radar.gimbalDeg * DEG;
+}
+
+/**
+ * What a jet's radar warning receiver shows: bearing only, no range.
+ *  - "radar": an enemy jet's radar scan covers this jet. Datalink support of a missile in flight
+ *    looks the same as a normal scan, so there is no separate lock or launch warning.
+ *  - "missile": an enemy missile's own seeker is active and this jet is inside its field of view.
+ *    lock = the seeker is tracking this jet.
+ */
+export interface RwrContact {
+  sourceId: string;
+  kind: "radar" | "missile";
+  /** Compass bearing from the jet to the emitter (rad). */
+  bearing: number;
+  lock: boolean;
+}
+
+export function rwrContacts(w: World, j: Jet): RwrContact[] {
+  if (!j.alive) return [];
+  const out: RwrContact[] = [];
+  for (const e of w.jets) {
+    if (e.side === j.side || !e.alive || !radarCanTrack(w, e, j)) continue;
+    out.push({ sourceId: e.id, kind: "radar", bearing: bearing(j.pos, e.pos), lock: false });
+  }
+  const mp = w.params.missile;
+  for (const m of w.missiles) {
+    if (m.end || m.side === j.side) continue;
+    if (m.phase !== "search" && m.phase !== "tracking") continue;
+    const los = sub(j.pos, m.pos);
+    if (len(los) > mp.seekerRangeNm * NM || angleBetween(los, m.vel) > mp.seekerGimbalDeg * DEG) continue;
+    out.push({
+      sourceId: m.id,
+      kind: "missile",
+      bearing: bearing(j.pos, m.pos),
+      lock: m.phase === "tracking" && m.targetId === j.id,
+    });
+  }
+  return out;
+}
+
+/**
+ * Position of what a "relative" steering order is flown against: a jet, or a missile (defending
+ * against the missile itself). null when it is gone, and the jet then holds its heading.
+ */
+export function steerThreatPos(w: World, j: Jet): V3 | null {
+  if (j.steer.mode !== "relative") return null;
+  const id = j.steer.threatId;
+  const jet = jetById(w, id);
+  if (jet) return jet.alive ? jet.pos : null;
+  const m = w.missiles.find((x) => x.id === id);
+  return m && !m.end ? m.pos : null;
 }
 
 export const truthOf = (j: Jet): TargetTruth => ({ pos: { ...j.pos }, vel: velocity(j), alive: j.alive });
@@ -119,6 +192,28 @@ export function command(w: World, c: Command): string | null {
     case "effort":
       j.effort = c.effort;
       return null;
+    case "chaff":
+    case "flare": {
+      const left = c.type === "chaff" ? j.chaff : j.flares;
+      if (left <= 0) return c.type === "chaff" ? "No chaff left." : "No flares left.";
+      if (c.type === "chaff") j.chaff--;
+      else j.flares--;
+      w.decoys.push({
+        kind: c.type,
+        jetId: j.id,
+        side: j.side,
+        t0: w.t,
+        pos: { ...j.pos },
+        vel: scale(velocity(j), 0.3),
+      });
+      emit(w, {
+        type: c.type,
+        side: j.side,
+        jetId: j.id,
+        text: `${j.callsign} ${c.type === "chaff" ? "chaff" : "flare"}`,
+      });
+      return null;
+    }
     case "target":
       j.targetId = c.targetId;
       return null;
@@ -160,7 +255,7 @@ const MISSILE_TEXT: Partial<Record<MissileEvent, [GameEventType, string]>> = {
   "datalink-regained": ["datalink-regained", "datalink regained"],
   "seeker-lost": ["seeker-lost", "seeker lost the target"],
   miss: ["miss", "missed"],
-  spent: ["spent", "out of energy"],
+  spent: ["spent", "self-destructed (flight time or speed limit)"],
   ground: ["spent", "hit the ground"],
 };
 
@@ -173,8 +268,7 @@ export function step(w: World, dt = SIM_DT): void {
   }
   for (const j of w.jets) {
     if (!j.alive) continue;
-    const threat = j.steer.mode === "relative" ? jetById(w, j.steer.threatId) : undefined;
-    stepJet(w.params.aircraft, j, desiredHeading(j, threat?.alive ? threat.pos : null), dt);
+    stepJet(w.params.aircraft, j, desiredHeading(j, steerThreatPos(w, j)), dt);
   }
   w.t += dt;
 
@@ -237,6 +331,28 @@ export function step(w: World, dt = SIM_DT): void {
           targetId: m.targetId,
           text: `${who} ${map[1]}`,
         });
+    }
+  }
+  // Decoys drift and fade; they are only drawn for now.
+  w.decoys = w.decoys.filter((d) => w.t - d.t0 < DECOY_LIFE_S);
+  for (const d of w.decoys) d.pos = add(d.pos, scale(d.vel, dt));
+
+  // Announce each active missile the first time it shows on a jet's RWR.
+  for (const j of w.jets) {
+    if (!j.alive) continue;
+    for (const c of rwrContacts(w, j)) {
+      if (c.kind !== "missile") continue;
+      const key = `${c.sourceId}>${j.id}`;
+      if (w.rwrSeen.has(key)) continue;
+      w.rwrSeen.add(key);
+      emit(w, {
+        type: "rwr-missile",
+        side: j.side,
+        jetId: j.id,
+        missileId: c.sourceId,
+        targetId: j.id,
+        text: `${j.callsign} RWR: missile active ${c.lock ? "and locked on" : "nearby"}`,
+      });
     }
   }
   checkOutcome(w);
