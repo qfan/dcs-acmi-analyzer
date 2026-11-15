@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toWorld, type View } from "../../map/render.ts";
 import { saveLastFile } from "../../ui/lastFile.ts";
+import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
 import { AI_SKILL_ORDER, AI_SKILLS, DoctrineBot } from "../ai/doctrine.ts";
 import { availableG, type Jet, mach, type Steer, type Throttle } from "../sim/aircraft.ts";
@@ -726,6 +727,8 @@ export function GameApp() {
               visual only for now.
             </p>
           </section>
+
+          <SiteFooter product="game" className="g-footer" />
         </aside>
       </div>
 
@@ -914,6 +917,11 @@ function StartDialog({
         <p className="g-muted">
           F/A-18C with AIM-120C on both sides. Jets hold their altitude for now; missiles loft and dive.
           Numbers are rough estimates you can change under Parameters.
+        </p>
+        <p className="g-disclaimer">
+          A free, unofficial training game. Not affiliated with, endorsed by, or sponsored by Eagle Dynamics
+          (DCS World) or Raia Software (Tacview). Simplified game values, not real-world data. Provided as-is,
+          without warranty. Full notice at the bottom of the side panel.
         </p>
         <div className="g-scenarios">
           {SCENARIOS.map((s) => (

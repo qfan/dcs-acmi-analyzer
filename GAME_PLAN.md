@@ -27,11 +27,14 @@ original plan and are kept as written.
   - **Missile shutdown:** at 120 s, or below 200 kt true airspeed.
   - **End of fight:** waits while a missile can still kill, then calls the result after a random 5–10 s.
   - **`.acmi` export:** download, open in the viewer, or both. The viewer keeps the last file across refreshes.
-- **Phase 3 (first pass):**
+- **Phase 3:**
   - **NPC (`src/game/ai/doctrine.ts`):** flies doctrine from its side's own radar picture, RWR and
-    missile timers. Easy, Normal and Hard skills.
+    missile timers. Easy, Normal and Hard skills; difficulty judged about right (a Normal-vs-Normal
+    duel splits roughly evenly; Hard beats Normal and Easy almost every time).
   - **Scenarios:** 1v1 and 2v2 against the NPC, or NPC vs NPC (watch mode).
   - **Tuning:** `node scripts/botmatch.ts` runs headless NPC-vs-NPC batches.
+- **Release:** the game page carries the same about/disclaimer footer as the viewer and analytics
+  (unofficial, not affiliated with Eagle Dynamics or Raia Software, simplified game values, as-is).
 
 **Decisions that change the plan**
 - **Time:** real time with manual pause by default. Auto-pause and turn mode are optional settings.
@@ -41,8 +44,8 @@ original plan and are kept as written.
 - **Later:** the end-of-fight debrief (after n-vs-n); scored drills.
 
 **Next**
-- **Phase 3:** tune NPC skills with the batch runner (Hard currently beats Normal ~95%).
-- **Then:** Phase 4 (altitude and energy) or Phase 5 (multiplayer).
+- Phase 4 (altitude and energy) or Phase 5 (multiplayer).
+- Later: n-vs-n beyond 2v2, then the end-of-fight debrief; revisit chaff.
 
 ---
 

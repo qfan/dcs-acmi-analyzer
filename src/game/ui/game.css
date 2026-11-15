@@ -534,3 +534,32 @@ button.g-fog.on {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   white-space: nowrap;
 }
+
+/* Shared about / disclaimer footer, in the side panel (the viewer styles it; this is the dark version). */
+.g-footer {
+  margin: 4px 0 0;
+  padding: 10px 6px 4px;
+  border-top: 1px solid var(--g-border);
+  color: var(--g-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+}
+.g-footer p {
+  margin: 0 0 6px;
+}
+.g-footer a {
+  color: #93c5fd;
+}
+.g-footer .site-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.g-disclaimer {
+  font-size: 11px;
+  color: var(--g-muted);
+  border-left: 2px solid var(--g-border);
+  padding-left: 8px;
+  margin: 6px 0 10px;
+}
