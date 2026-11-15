@@ -10,10 +10,11 @@ never tells players each other's IP addresses.
 |---|---|---|
 | [`shared/`](shared/) | `protocol.ts` (message envelope and limits) and `room.ts` (room logic), used by every relay and later the game client | done |
 | [`node/`](node/) | Standalone Node.js relay with no dependencies: self-host, LAN, Tailscale, or a small VM | done, tested |
-| [`cloudflare/`](cloudflare/) | Cloudflare Workers Free plan, one Durable Object per room | planned |
+| [`cloudflare/`](cloudflare/) | Cloudflare Worker, one Durable Object per room (Hibernation API); Workers Free plan | done, tested locally; not deployed |
 
 This folder is its own pnpm workspace (`package.json`, `pnpm-workspace.yaml` with a 24-hour minimum
-package age), separate from the viewer. It has no dependencies today. It is deployed separately from
+package age), separate from the viewer, with no dependencies. `cloudflare/` is another, whose only
+dependency is `wrangler`. It is deployed separately from
 the viewer site (`wrangler.jsonc` at the repo root), so the viewer stays a static site with no server
 code. `pnpm typecheck` and `pnpm test` in the repo root cover it.
 

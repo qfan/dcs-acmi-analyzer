@@ -53,6 +53,12 @@ Guests' orders are paced (10 a second, latest heading or throttle wins, a few sh
 keys don't repeat fire, chaff, flare or pause, and the host limits its replies to each guest, so
 neither side can trip the relay's flood limits.
 
+**Cloudflare relay** (`game/server/cloudflare/`): a Worker plus one Durable Object per room using the
+Hibernation API, rebuilt from storage on wake-up, with a relay-wide room counter. It shares the room
+rules with the Node relay. Tested with a fake Durable Objects runtime and end to end on `wrangler dev`
+(two game engines, and two browser tabs). Rooms on Cloudflare are addressed as `/ws?room=CODE`; the
+client sends that for joins and resumes (the Node relay ignores it).
+
 **Not done:** the Cloudflare and Oracle relays are not deployed yet, so both show as unreachable;
 on localhost the game uses `ws://localhost:8787/ws` (run `node game/server/node/relay.ts`), and Custom
 address takes any other.

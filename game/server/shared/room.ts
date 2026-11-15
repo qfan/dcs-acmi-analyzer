@@ -58,6 +58,16 @@ export interface Peer {
 /** Random source for tokens, supplied by the transport (Node `crypto`, Web Crypto). */
 export type TokenSource = () => string;
 
+/** A room as saved between wake-ups (see `Room.save`). */
+export interface RoomState {
+  code: string;
+  createdAt: number;
+  lastRelayAt: number;
+  hostId: number;
+  nextId: number;
+  peers: { id: number; name: string; token: string; awayUntil: number; connected: boolean }[];
+}
+
 const CLOSE_NORMAL = 1000;
 const CLOSE_POLICY = 1008;
 
@@ -80,6 +90,65 @@ export class Room {
     this.limits = limits;
     this.createdAt = now;
     this.lastRelayAt = now;
+  }
+
+  /** When something was last relayed between two or more peers (ms). */
+  get lastActivity(): number {
+    return this.lastRelayAt;
+  }
+
+  /** Everything needed to rebuild the room later (a Durable Object that slept). Sockets aren't saved. */
+  save(): RoomState {
+    return {
+      code: this.code,
+      createdAt: this.createdAt,
+      lastRelayAt: this.lastRelayAt,
+      hostId: this.hostId,
+      nextId: this.nextId,
+      peers: [...this.peers.values()].map((p) => ({
+        id: p.id,
+        name: p.name,
+        token: p.token,
+        awayUntil: p.awayUntil,
+        connected: !!p.sock,
+      })),
+    };
+  }
+
+  /**
+   * Rebuilds a saved room. `socketFor` returns the live connection of a peer that was connected;
+   * one that has none any more counts as dropped from `now` (its resume grace starts again).
+   */
+  static restore(
+    s: RoomState,
+    now: number,
+    newToken: TokenSource,
+    socketFor: (peerId: number) => PeerSocket | null,
+    limits: Limits = LIMITS,
+  ): Room {
+    const room = new Room(s.code, s.createdAt, newToken, limits);
+    room.lastRelayAt = s.lastRelayAt;
+    room.hostId = s.hostId;
+    room.nextId = s.nextId;
+    for (const p of s.peers) {
+      const sock = p.connected ? socketFor(p.id) : null;
+      room.peers.set(p.id, {
+        id: p.id,
+        name: p.name,
+        token: p.token,
+        sock,
+        awayUntil: sock ? 0 : p.connected ? now + limits.resumeGraceMs : p.awayUntil,
+        ...room.buckets(p.id === s.hostId, now),
+      });
+    }
+    return room;
+  }
+
+  /** The next time `tick` has something to do (ms): a resume grace ending, idling out, or old age. */
+  nextDeadline(): number {
+    let t = Math.min(this.createdAt + this.limits.roomMaxAgeMs, this.lastRelayAt + this.limits.roomIdleMs);
+    for (const p of this.peers.values()) if (!p.sock) t = Math.min(t, p.awayUntil);
+    return t;
   }
 
   /** Peers with a live connection. */

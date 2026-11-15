@@ -1,0 +1,29 @@
+// Cloudflare relay for BVR Trainer multiplayer: its own Worker, separate from the "acmi" viewer site.
+// Local: `pnpm dev` (http://localhost:8788). Deploy: `pnpm run deploy` (needs `wrangler login`).
+{
+  "name": "bvr-mini-game-server-cf",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "RelayRoom" },
+      { "name": "COUNTER", "class_name": "RoomCounter" }
+    ]
+  },
+  // SQLite-backed Durable Objects: the only kind available on the Workers Free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayRoom", "RoomCounter"] }],
+  "vars": {
+    // "0" refuses every connection (kill switch); redeploy or edit in the dashboard to flip it.
+    "RELAY_ENABLED": "1",
+    // Pages allowed to connect; ":*" matches any port (local development).
+    "ALLOWED_ORIGINS": "https://acmi.qfan.ca,http://localhost:*,http://127.0.0.1:*",
+    "ALLOW_NO_ORIGIN": "0",
+    "MAX_ROOMS": "20"
+  },
+  // The relay's address. The qfan.ca zone must be on the same Cloudflare account as this Worker.
+  "routes": [{ "pattern": "bvr-mini-game-server-cf.qfan.ca", "custom_domain": true }],
+  "workers_dev": false,
+  // No usage telemetry from wrangler for this project.
+  "send_metrics": false,
+  "dev": { "port": 8788 }
+}

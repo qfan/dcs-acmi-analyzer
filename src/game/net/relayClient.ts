@@ -3,7 +3,9 @@
  * sends and receives game messages, and resumes the same seat after a dropped connection. Runs in
  * the engine worker (or Node, in tests): it only needs the standard WebSocket.
  */
-import type { PeerInfo, RelayMessage } from "../../../game/server/shared/protocol.ts";
+import type { ClientMessage, PeerInfo, RelayMessage } from "../../../game/server/shared/protocol.ts";
+
+type ClientHello = Extract<ClientMessage, { t: "create" | "join" | "resume" }>;
 
 export interface RelayHandlers {
   onWelcome(info: { room: string; you: number; host: number; peers: PeerInfo[]; resumed: boolean }): void;
@@ -68,11 +70,11 @@ export class RelayClient {
     if (this.ws?.readyState === WebSocket.OPEN && this.token) this.ws.send(text);
   }
 
-  private open(hello: unknown): void {
+  private open(hello: ClientHello): void {
     this.h.onStatus(this.token ? "reconnecting" : "connecting");
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.url);
+      ws = new WebSocket(roomUrl(this.url, hello.t === "create" ? undefined : hello.room));
     } catch {
       this.fail("bad-url", "That relay address is not valid.");
       return;
@@ -152,4 +154,16 @@ export class RelayClient {
     this.ws = null;
     this.h.onClosed(code, message);
   }
+}
+
+/**
+ * The relay address for a room: joining and resuming add `?room=CODE` so a relay that keeps each
+ * room in its own place (Cloudflare: one Durable Object per room) can route the connection before
+ * any message arrives. The Node relay ignores it.
+ */
+export function roomUrl(url: string, room: string | undefined): string {
+  if (!room) return url;
+  const u = new URL(url);
+  u.searchParams.set("room", room);
+  return u.toString();
 }
