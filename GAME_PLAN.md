@@ -70,7 +70,7 @@ original plan and are kept as written.
 **Next**
 - Phase 4 remainder: NPC altitude tactics and shot ranges that allow for dives; rebalance Hard vs
   Normal; supersonic drag so top speeds match the data; look-down notch ("notch low").
-- Phase 5 (multiplayer).
+- Phase 5 (multiplayer): planned in [MULTIPLAYER_PLAN.md](MULTIPLAYER_PLAN.md).
 - Later: n-vs-n beyond 2v2, then the end-of-fight debrief; revisit chaff.
 
 ---

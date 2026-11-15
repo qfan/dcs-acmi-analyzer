@@ -1,0 +1,52 @@
+# systemd unit for the relay on a small Linux VM, behind Caddy (see Caddyfile).
+# Install: copy game/server/ to /opt/bvr-relay, then
+#   sudo cp /opt/bvr-relay/node/deploy/bvr-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now bvr-relay
+[Unit]
+Description=BVR Trainer multiplayer relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/node /opt/bvr-relay/node/relay.ts
+Environment=RELAY_HOST=127.0.0.1
+Environment=RELAY_PORT=8787
+Environment=RELAY_TRUST_PROXY=1
+Environment=RELAY_MONTHLY_EGRESS_GB=200
+Environment=RELAY_ALLOWED_ORIGINS=https://acmi.qfan.ca
+Restart=on-failure
+RestartSec=5
+
+# Runs as a throwaway user with no home and no write access outside its state directory
+# (systemd sets STATE_DIRECTORY, where the egress counter is saved).
+DynamicUser=yes
+StateDirectory=bvr-relay
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=64
+
+# The kernel only lets this service talk to localhost (Caddy): it cannot reach the internet or
+# your network even if the code were compromised. Remove these two lines only if the relay
+# listens publicly without Caddy (RELAY_HOST=0.0.0.0).
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

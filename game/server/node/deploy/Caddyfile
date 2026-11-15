@@ -1,0 +1,12 @@
+# Caddy in front of the relay: automatic HTTPS (Let's Encrypt) and nothing exposed but /ws and /healthz.
+# Replace relay.example.com with the DNS name pointing at the VM, then put this file at
+# /etc/caddy/Caddyfile and run: sudo systemctl reload caddy
+relay.example.com {
+	@relay path /ws /healthz
+	handle @relay {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle {
+		respond 404
+	}
+}
