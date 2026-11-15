@@ -78,7 +78,7 @@ export function GameApp() {
       setSession(s);
       setShowStart(false);
       setEndSeen(false);
-      saveLast(id, alt, options);
+      saveLast(id, alt, s.options);
       fitView(viewRef.current, s);
     },
     [scenarioId, altFt, params, options],
@@ -151,7 +151,7 @@ export function GameApp() {
   const exportFight = useCallback(
     async (mode: ExportMode) => {
       setShowExport(false);
-      if (!session) return;
+      if (!session?.recorder) return;
       const name = acmiFileName(session.scenarioId, session.altFt, session.startedAt);
       const blob = new Blob([session.recorder.text()], { type: "text/plain" });
       if (mode !== "viewer") downloadBlob(blob, name);
@@ -463,15 +463,19 @@ export function GameApp() {
         <div className="g-menu" ref={exportMenuRef}>
           <button
             type="button"
-            disabled={!session}
+            disabled={!session?.recorder}
             aria-haspopup="menu"
             aria-expanded={showExport}
             onClick={() => setShowExport((v) => !v)}
-            title="Save this fight as a Tacview .acmi recording (works mid-fight too)"
+            title={
+              session && !session.recorder
+                ? "ACMI recording is disabled in infinite demo mode"
+                : "Save this fight as a Tacview .acmi recording (works mid-fight too)"
+            }
           >
             Export .acmi ▾
           </button>
-          {showExport && session && (
+          {showExport && session?.recorder && (
             <div className="g-menu-list" role="menu">
               <ExportButtons onExport={exportFight} />
             </div>
@@ -798,7 +802,12 @@ export function GameApp() {
         <StartDialog
           scenarioId={scenarioId}
           altFt={altFt}
-          onScenario={setScenarioId}
+          onScenario={(id) => {
+            setScenarioId(id);
+            if (scenarioById(id).allNpc && options.blueAi === null) {
+              setOptions((o) => ({ ...o, blueAi: o.redSkill }));
+            }
+          }}
           onAlt={setAltFt}
           options={options}
           onOptions={setOptions}
@@ -1030,24 +1039,29 @@ function StartDialog({
             <div className="g-row">
               <span className="g-label">Blue</span>
               <div className="g-seg">
-                <button
-                  type="button"
-                  className={options.blueAi === null ? "on" : ""}
-                  onClick={() => onOptions({ ...options, blueAi: null })}
-                >
-                  You fly
-                </button>
-                {AI_SKILL_ORDER.map((k) => (
+                {!sel.allNpc && (
                   <button
                     type="button"
-                    key={k}
-                    className={options.blueAi === k ? "on" : ""}
-                    onClick={() => onOptions({ ...options, blueAi: k })}
-                    title="The NPC flies blue too: watch NPC vs NPC"
+                    className={options.blueAi === null ? "on" : ""}
+                    onClick={() => onOptions({ ...options, blueAi: null })}
                   >
-                    NPC {AI_SKILLS[k].label}
+                    You fly
                   </button>
-                ))}
+                )}
+                {AI_SKILL_ORDER.map((k) => {
+                  const activeBlue = sel.allNpc ? (options.blueAi ?? options.redSkill) : options.blueAi;
+                  return (
+                    <button
+                      type="button"
+                      key={k}
+                      className={activeBlue === k ? "on" : ""}
+                      onClick={() => onOptions({ ...options, blueAi: k })}
+                      title="The NPC flies blue too: watch NPC vs NPC"
+                    >
+                      NPC {AI_SKILLS[k].label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </>

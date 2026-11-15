@@ -104,8 +104,8 @@ export class GameSession {
   lastTrack = new Map<string, TargetTrack>();
   /** Onboard time-to-pitbull / time-to-impact estimate for each of your missiles. */
   timers = new Map<string, MissileTimer>();
-  /** The fight so far, for .acmi export. */
-  readonly recorder: AcmiRecorder;
+  /** The fight so far, for .acmi export (null when recording is disabled in infinite demo mode). */
+  readonly recorder: AcmiRecorder | null;
   readonly startedAt = new Date();
   private acc = 0;
   private seenEvents = 0;
@@ -128,20 +128,25 @@ export class GameSession {
     this.scenarioId = scenarioId;
     this.altFt = altFt;
     const scenario = scenarioById(scenarioId);
-    this.options = options;
-    this.watch = scenario.npc && options.blueAi !== null;
-    this.world = scenario.build(params, altFt, seed, options);
-    this.recorder = new AcmiRecorder({
-      title: `BVR Trainer: ${scenarioById(scenarioId).title}, ${altFt.toLocaleString("en-US")} ft`,
-      startedAt: this.startedAt,
-    });
+    const effectiveOptions: ScenarioOptions = scenario.allNpc
+      ? { ...options, blueAi: options.blueAi ?? options.redSkill }
+      : options;
+    this.options = effectiveOptions;
+    this.watch = scenario.npc && (scenario.allNpc || effectiveOptions.blueAi !== null);
+    this.world = scenario.build(params, altFt, seed, effectiveOptions);
+    this.recorder = this.world.infinite
+      ? null
+      : new AcmiRecorder({
+          title: `BVR Trainer: ${scenario.title}, ${altFt.toLocaleString("en-US")} ft`,
+          startedAt: this.startedAt,
+        });
     this.autoPause = autoPause;
     this.nextTurnAt = autoPause.turnEveryS > 0 ? autoPause.turnEveryS : Number.POSITIVE_INFINITY;
     const mine = this.world.jets.find((j) => j.side === PLAYER_SIDE);
     if (mine) this.selected.add(mine.id);
     this.updateKnowledge();
     this.updateTimers(0);
-    this.recorder.update(this.world);
+    this.recorder?.update(this.world);
     this.recordTrails();
   }
 
@@ -172,8 +177,15 @@ export class GameSession {
       this.updateKnowledge();
       this.freezeHiddenSteer();
       this.updateTimers(SIM_DT);
-      this.recorder.update(this.world);
+      this.recorder?.update(this.world);
       if (this.world.t >= this.nextTrailAt) this.recordTrails();
+      if (this.watch && !this.primary()) {
+        this.selected.clear();
+        const fallback =
+          this.world.jets.find((j) => j.alive && j.side === PLAYER_SIDE) ??
+          this.world.jets.find((j) => j.alive);
+        if (fallback) this.selected.add(fallback.id);
+      }
       this.checkEvents();
       if (this.world.t >= this.nextTurnAt - 1e-9) {
         this.nextTurnAt += this.autoPause.turnEveryS;
@@ -186,10 +198,12 @@ export class GameSession {
 
   private checkEvents(): void {
     const evs = this.world.events;
-    for (; this.seenEvents < evs.length; this.seenEvents++) {
-      const e = evs[this.seenEvents] as GameEvent;
+    const offset = this.world.eventOffset;
+    for (let idx = Math.max(0, this.seenEvents - offset); idx < evs.length; idx++) {
+      const e = evs[idx] as GameEvent;
       if (!this.paused && this.shouldPause(e)) this.pause(e.text);
     }
+    this.seenEvents = offset + evs.length;
   }
 
   private shouldPause(e: GameEvent): boolean {
@@ -236,13 +250,25 @@ export class GameSession {
       if (m.end) continue;
       const tr = this.trails.get(m.id) ?? [];
       tr.push({ x: m.pos.x, y: m.pos.y });
+      if (this.world.infinite && tr.length > maxJet) tr.splice(0, tr.length - maxJet);
       this.trails.set(m.id, tr);
+    }
+    if (this.world.infinite) {
+      const liveIds = new Set<string>();
+      for (const j of this.world.jets) if (j.alive) liveIds.add(j.id);
+      for (const m of this.world.missiles) if (!m.end) liveIds.add(m.id);
+      for (const id of this.trails.keys()) if (!liveIds.has(id)) this.trails.delete(id);
     }
   }
 
   private updateKnowledge(): void {
     const w = this.world;
     this.known.clear();
+    if (w.infinite) {
+      const liveEnemies = new Set(w.jets.filter((j) => j.alive && j.side !== PLAYER_SIDE).map((j) => j.id));
+      for (const id of this.lastSeen.keys()) if (!liveEnemies.has(id)) this.lastSeen.delete(id);
+      for (const id of this.lastTrack.keys()) if (!liveEnemies.has(id)) this.lastTrack.delete(id);
+    }
     const mine = w.jets.filter((j) => j.side === PLAYER_SIDE && j.alive);
     const detectRange = Math.max(w.params.radar.detectRangeNm, w.params.radar.rangeNm);
     for (const e of w.jets) {
@@ -334,15 +360,20 @@ export class GameSession {
       const stepDt = newlyAdded.has(tm.missileId) ? 0 : dt;
       if (known) stepTimer(w.params.missile, tm, known, datalink, w.t, stepDt);
     }
+    if (w.infinite) {
+      for (const [id, tm] of this.timers) if (!this.timerActive(tm, w.t)) this.timers.delete(id);
+    }
+  }
+
+  private timerActive(tm: MissileTimer, t: number): boolean {
+    if (tm.impactAt !== null) return t < tm.impactAt + TIMER_LINGER_S;
+    return !tm.ghost.end && tm.ghost.phase !== "lost" && t - tm.launchT < this.world.params.missile.maxTofS;
   }
 
   /** Timers still worth showing: until a little after the predicted impact, or the missile is spent. */
   activeTimers(): MissileTimer[] {
     const t = this.world.t;
-    return [...this.timers.values()].filter((tm) => {
-      if (tm.impactAt !== null) return t < tm.impactAt + TIMER_LINGER_S;
-      return !tm.ghost.end && tm.ghost.phase !== "lost" && t - tm.launchT < this.world.params.missile.maxTofS;
-    });
+    return [...this.timers.values()].filter((tm) => this.timerActive(tm, t));
   }
 
   /** Whether the player may see this jet (or its decoys) right now. */

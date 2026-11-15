@@ -4,9 +4,17 @@ import { type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
 import { NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
 import { makeRng, randNormal } from "../src/game/sim/rng.ts";
-import { scenarioById } from "../src/game/sim/scenarios.ts";
+import { DEFAULT_OPTIONS, scenarioById } from "../src/game/sim/scenarios.ts";
 import { bearing, wrapPi } from "../src/game/sim/vec.ts";
-import { command, jetById, step, type World } from "../src/game/sim/world.ts";
+import {
+  awaitingCall,
+  command,
+  jetById,
+  step,
+  type World,
+  waitingOnMissiles,
+} from "../src/game/sim/world.ts";
+import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/ui/session.ts";
 
 const P = () => cloneParams(DEFAULT_PARAMS);
 
@@ -271,5 +279,97 @@ describe("game: NPC vs NPC", () => {
     const sup = bot.status();
     expect(sup.state).toBe("support");
     expect(sup.detail).toMatch(/Cranking 55° [LR]/);
+  });
+});
+
+describe("game: 6v6 infinite demo mode", () => {
+  it("spawns 6v6 in 3x2 formation at 120 nm with all NPCs and disables outcome/recording", () => {
+    const p = P();
+    const session = new GameSession("infinite", 25000, p, DEFAULT_AUTOPAUSE, 7, DEFAULT_OPTIONS);
+    expect(session.watch).toBe(true);
+    expect(session.recorder).toBeNull();
+
+    const w = session.world;
+    expect(w.infinite).toBe(true);
+    expect(w.jets).toHaveLength(12);
+    for (const j of w.jets) expect(npcOf(w, j.id)).toBeInstanceOf(DoctrineBot);
+
+    const blue = w.jets
+      .filter((j) => j.side === "blue")
+      .map((j) => [Math.round(j.pos.x / NM), Math.round(j.pos.y / NM), Math.round((j.hdg * 180) / Math.PI)]);
+    const red = w.jets
+      .filter((j) => j.side === "red")
+      .map((j) => [Math.round(j.pos.x / NM), Math.round(j.pos.y / NM), Math.round((j.hdg * 180) / Math.PI)]);
+    expect(blue).toEqual([
+      [-5, 0, 0],
+      [0, 0, 0],
+      [5, 0, 0],
+      [-5, -20, 0],
+      [0, -20, 0],
+      [5, -20, 0],
+    ]);
+    expect(red).toEqual([
+      [-5, 120, 180],
+      [0, 120, 180],
+      [5, 120, 180],
+      [-5, 140, 180],
+      [0, 140, 180],
+      [5, 140, 180],
+    ]);
+
+    w.t = w.timeLimitS + 60;
+    step(w);
+    expect(w.outcome).toBeNull();
+    expect(waitingOnMissiles(w)).toBe(false);
+    expect(awaitingCall(w)).toBe(false);
+  });
+
+  it("respawns destroyed jets at their initial slot and prunes dead jets and ended missiles", () => {
+    const p = P();
+    const w = scenarioById("infinite").build(p, 25000, 3, { redSkill: "normal", blueAi: "hard" });
+    const r5 = must(jetById(w, "R5")); // Red back center: x = 0, y = 140 nm, hdg = 180°
+    const startX = r5.pos.x;
+    const startY = r5.pos.y;
+    const startHdg = r5.hdg;
+
+    // Move R5 away and mark it destroyed, along with an ended missile to verify pruning.
+    r5.pos.x = 18 * NM;
+    r5.pos.y = 60 * NM;
+    r5.alive = false;
+    step(w);
+
+    expect(jetById(w, "R5")).toBeUndefined();
+    expect(w.controllers.has("R5")).toBe(false);
+    expect(w.jets).toHaveLength(12);
+    const reds = w.jets.filter((j) => j.side === "red");
+    expect(reds).toHaveLength(6);
+
+    const replacement = must(reds.find((j) => j.id === "R7"));
+    expect(replacement.alive).toBe(true);
+    expect(replacement.pos.x).toBeCloseTo(startX, 3);
+    expect(replacement.pos.y).toBeCloseTo(startY, 3);
+    expect(replacement.hdg).toBeCloseTo(startHdg, 5);
+    expect(replacement.missiles).toBe(p.aircraft.missiles);
+    expect(npcOf(w, "R7")).toBeInstanceOf(DoctrineBot);
+
+    // If the newly spawned R7 also gets shot down, its replacement also uses the original slot.
+    replacement.pos.x = -12 * NM;
+    replacement.pos.y = 55 * NM;
+    replacement.alive = false;
+    step(w);
+    const replacement2 = must(jetById(w, "R8"));
+    expect(replacement2.pos.x).toBeCloseTo(startX, 3);
+    expect(replacement2.pos.y).toBeCloseTo(startY, 3);
+    expect(replacement2.hdg).toBeCloseTo(startHdg, 5);
+    expect(w.jets).toHaveLength(12);
+
+    // Departing 500 nm from startPos also counts as a loss and respawns at the original slot.
+    replacement2.pos.y = replacement2.startPos.y - 500 * NM;
+    step(w);
+    expect(jetById(w, "R8")).toBeUndefined();
+    const replacement3 = must(jetById(w, "R9"));
+    expect(replacement3.pos.x).toBeCloseTo(startX, 3);
+    expect(replacement3.pos.y).toBeCloseTo(startY, 3);
+    expect(replacement3.hdg).toBeCloseTo(startHdg, 5);
   });
 });

@@ -178,6 +178,13 @@ export class DoctrineBot implements Controller {
 
     // RWR: keep defending for as long as any active missile remains on RWR (after a capped normal reaction delay).
     const missiles = rwrContacts(w, me).filter((c) => c.kind === "missile");
+    const liveMissileIds = new Set(w.missiles.filter((m) => !m.end).map((m) => m.id));
+    for (const id of this.rwrFirstSeen.keys()) {
+      if (!liveMissileIds.has(id)) {
+        this.rwrFirstSeen.delete(id);
+        this.rwrReactionS.delete(id);
+      }
+    }
     for (const c of missiles) {
       if (!this.rwrFirstSeen.has(c.sourceId)) {
         this.rwrFirstSeen.set(c.sourceId, t);
@@ -368,6 +375,7 @@ export class DoctrineBot implements Controller {
 
   /** Known enemies: detected by our side's radars now, else dead-reckoned from the last detection. */
   private updateTracks(w: World, me: Jet): void {
+    for (const id of this.tracks.keys()) if (!jetById(w, id)?.alive) this.tracks.delete(id);
     const friends = w.jets.filter((j) => j.side === me.side && j.alive);
     for (const e of w.jets) {
       if (e.side === me.side) continue;
@@ -397,11 +405,21 @@ export class DoctrineBot implements Controller {
 
   private updateTimers(w: World, me: Jet, dt: number): void {
     const newlyAdded = new Set<string>();
-    for (const m of w.missiles)
+    const liveIds = new Set<string>();
+    for (const m of w.missiles) {
+      if (m.end) continue;
+      liveIds.add(m.id);
       if (m.shooterId === me.id && !this.timers.has(m.id)) {
         this.timers.set(m.id, startTimer(m, w.t));
         newlyAdded.add(m.id);
       }
+    }
+    for (const id of this.timers.keys()) {
+      if (!liveIds.has(id)) {
+        this.timers.delete(id);
+        this.pumpedFor.delete(id);
+      }
+    }
     for (const tm of this.timers.values()) {
       const enemy = jetById(w, tm.targetId);
       const datalink = !!enemy && radarCanTrack(w, me, enemy);
