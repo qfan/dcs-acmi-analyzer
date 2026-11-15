@@ -45,6 +45,7 @@ export default defineConfig({
       input: {
         main: resolve(import.meta.dirname, "index.html"),
         analytics: resolve(import.meta.dirname, "analytics.html"),
+        game: resolve(import.meta.dirname, "game.html"),
       },
     },
   },

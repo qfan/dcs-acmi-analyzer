@@ -3,12 +3,19 @@
 A browser-only viewer and analyser for Tacview `.acmi` recordings. Recordings are opened and analysed
 entirely in the browser; nothing is uploaded anywhere.
 
-It has two pages that link to each other:
+It has three pages that link to each other:
 
 - **`index.html`: single-file viewer.** Open one recording to see a map, the kill log, shots and
-  optional missile analytics for that recording.
+  optional missile analytics for that recording. The last file you open is kept in your browser
+  (IndexedDB), so refreshing the page reopens it; "Close & forget" removes it.
 - **`analytics.html`: multi-file analytics.** Load many recordings (or a saved dataset bundle) for
   missile statistics, fitted missile flyout models and the BVR timeline validator.
+- **`game.html`: BVR Trainer.** A top-down F/A-18C vs F/A-18C beyond-visual-range training game
+  (see `GAME_PLAN.md`): 1v1 or 2v2 against an NPC at Easy, Normal or Hard, NPC vs NPC to watch,
+  and two drills. Radar warning receiver, optional fog of war, onboard missile timers; every
+  aircraft, missile and radar number is editable under Parameters. A fight can be exported as an
+  `.acmi` file, opened straight in the viewer, or both. The numbers are simplified game values, not
+  real-world or DCS data.
 
 ## Requirements
 
@@ -41,6 +48,13 @@ pnpm test
 pnpm lint
 ```
 
+To tune the BVR Trainer's NPC, play headless NPC-vs-NPC batches (scenario `duel` or `2v2`, skills
+`easy`, `normal` or `hard`) and compare the outcome rates:
+
+```bash
+node scripts/botmatch.ts --scenario duel --blue normal --red hard --alt 25000 --n 40
+```
+
 ## Making a release
 
 1. Start from a clean checkout of the commit you want to release and install exactly the locked
@@ -66,6 +80,7 @@ pnpm lint
    dist/
    ├── index.html        single-file viewer (the page visitors land on)
    ├── analytics.html    multi-file analytics
+   ├── game.html         BVR Trainer game
    ├── assets/           scripts, workers and styles (file names carry a content hash)
    └── samples/          the sample recordings behind the "Load sample" buttons (copied from public/)
    ```
@@ -99,6 +114,9 @@ ships their texts in `third-party-licenses.txt` and links to it from the page fo
 This is an unofficial project. It is **not affiliated with, endorsed by, or sponsored by** Eagle
 Dynamics (DCS World) or Raia Software (Tacview). DCS World and Tacview are trademarks of their
 respective owners.
+
+The BVR Trainer is a game, not a simulation: its aircraft, missile, radar and AI behaviour are
+simplified estimates, not real-world or DCS World data.
 
 Most of the code was written by AI coding assistants (Claude Code and Google Antigravity) under human
 direction. It is provided as-is, without warranty.
