@@ -195,6 +195,28 @@ describe("game: NPC vs NPC", () => {
     expect(w.outcome?.reason).not.toMatch(/Time limit/);
   }, 60_000);
 
+  it("4v2 spawns 2x2 blue (5 nm abreast, 20 nm trail) against 2 red (5 nm abreast) and finishes cleanly", () => {
+    const p = P();
+    p.aircraft.missiles = 8;
+    const human = scenarioById("4v2").build(p, 25000, 1, { redSkill: "normal", blueAi: null });
+    expect(human.jets.filter((j) => j.side === "blue").map((j) => j.id)).toEqual(["B1", "B2", "B3", "B4"]);
+    expect(human.jets.filter((j) => j.side === "red").map((j) => j.id)).toEqual(["R1", "R2"]);
+    expect(human.jets.every((j) => j.missiles === 8)).toBe(true);
+    expect(must(jetById(human, "B1")).pos).toMatchObject({ x: -2.5 * NM, y: 0 });
+    expect(must(jetById(human, "B2")).pos).toMatchObject({ x: 2.5 * NM, y: 0 });
+    expect(must(jetById(human, "B3")).pos).toMatchObject({ x: -2.5 * NM, y: -20 * NM });
+    expect(must(jetById(human, "B4")).pos).toMatchObject({ x: 2.5 * NM, y: -20 * NM });
+    expect(must(jetById(human, "R1")).pos).toMatchObject({ x: -2.5 * NM, y: 60 * NM });
+    expect(must(jetById(human, "R2")).pos).toMatchObject({ x: 2.5 * NM, y: 60 * NM });
+    expect(must(jetById(human, "B1")).targetId).toBe("R1");
+    expect(must(jetById(human, "B2")).targetId).toBe("R2");
+    expect(must(jetById(human, "B3")).targetId).toBe("R1");
+    expect(must(jetById(human, "B4")).targetId).toBe("R2");
+
+    const w = fight("4v2", "normal", "normal", 1);
+    expect(w.outcome?.reason).not.toMatch(/Time limit/);
+  }, 60_000);
+
   it("2v2 NPC fights end in a result, not the time limit", () => {
     for (const seed of [1, 2]) {
       const w = fight("2v2", "normal", "normal", seed);

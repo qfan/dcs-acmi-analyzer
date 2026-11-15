@@ -115,7 +115,7 @@ function preTargetBlue(w: World): void {
   const reds = w.jets.filter((j) => j.side === "red");
   for (let i = 0; i < blues.length; i++) {
     const b = blues[i];
-    const r = reds[i] ?? reds[0];
+    const r = reds.length > 0 ? reds[i % reds.length] : undefined;
     if (b && r) b.targetId = r.id;
   }
 }
@@ -270,6 +270,53 @@ export const SCENARIOS: Scenario[] = [
     npc: true,
     build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
       const w = flights(params, altFt, seed, 60, 2);
+      crewNpcs(w, opts);
+      if (!opts.blueAi) preTargetBlue(w);
+      return w;
+    },
+  },
+  {
+    id: "4v2",
+    title: "Four-ship (2x2) vs two-ship",
+    summary:
+      "4v2 from 60 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
+    lesson:
+      "Lead with the front two-ship to engage and force the bandits defensive while the trailing two-ship 20 nm behind presses the advantage or covers their pump. Click or Shift+click jets to task elements separately.",
+    npc: true,
+    build(params, altFt, seed, opts = DEFAULT_OPTIONS) {
+      const w = makeWorld(params, seed);
+      const altM = altFt * FT;
+      for (let row = 0; row < 2; row++) {
+        const y = row === 0 ? 0 : -row * 20 * NM;
+        for (let col = 0; col < 2; col++) {
+          const n = row * 2 + col + 1;
+          w.jets.push(
+            spawnJet(params, {
+              id: `B${n}`,
+              side: "blue",
+              callsign: `Viper ${n}`,
+              x: (col - 0.5) * 5 * NM,
+              y,
+              altM,
+              hdgDeg: 0,
+            }),
+          );
+        }
+      }
+      for (let col = 0; col < 2; col++) {
+        const n = col + 1;
+        w.jets.push(
+          spawnJet(params, {
+            id: `R${n}`,
+            side: "red",
+            callsign: `Bandit ${n}`,
+            x: (col - 0.5) * 5 * NM,
+            y: 60 * NM,
+            altM,
+            hdgDeg: 180,
+          }),
+        );
+      }
       crewNpcs(w, opts);
       if (!opts.blueAi) preTargetBlue(w);
       return w;
