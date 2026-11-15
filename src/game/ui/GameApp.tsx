@@ -24,6 +24,7 @@ import {
   type World,
   waitingOnMissiles,
 } from "../sim/world.ts";
+import { BGM_TRACKS, type BgmPlayer, createBgmPlayer } from "./bgm.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { DEFAULT_AUTOPAUSE, GameSession, PLAYER_SIDE, TIME_SCALES } from "./session.ts";
@@ -61,7 +62,18 @@ export function GameApp() {
   };
   const [flash, setFlash] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [bgmOn, setBgmOn] = useState(false);
+  const bgmRef = useRef<BgmPlayer | null>(null);
   const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const player = createBgmPlayer();
+    bgmRef.current = player;
+    return () => {
+      player.dispose();
+      bgmRef.current = null;
+    };
+  }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -438,6 +450,28 @@ export function GameApp() {
             </div>
           </>
         )}
+        <button
+          type="button"
+          className={`g-bgm ${bgmOn ? "on" : ""}`}
+          aria-pressed={bgmOn}
+          aria-label={bgmOn ? "Disable background music" : "Enable background music"}
+          disabled={!BGM_TRACKS.length}
+          onClick={(e) => {
+            const next = !bgmOn;
+            setBgmOn(next);
+            bgmRef.current?.setEnabled(next);
+            e.currentTarget.blur(); // keep Space and the game keys working
+          }}
+          title={
+            BGM_TRACKS.length
+              ? bgmOn
+                ? "Background music: ON (click to disable)"
+                : "Background music: OFF (click to enable)"
+              : "No background music tracks available"
+          }
+        >
+          ♫
+        </button>
         <button
           type="button"
           className={`g-fog ${fog ? "on" : ""}`}

@@ -457,6 +457,18 @@ details.g-card[open] summary {
   font-weight: 700;
 }
 
+button.g-bgm {
+  font-size: 14px;
+  line-height: 1;
+  min-width: 28px;
+  color: var(--g-muted);
+}
+button.g-bgm.on {
+  background: var(--g-accent);
+  border-color: var(--g-accent);
+  color: var(--g-accent-text);
+}
+
 button.g-fog {
   font-weight: 600;
 }
