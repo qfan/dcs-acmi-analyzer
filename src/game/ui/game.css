@@ -880,3 +880,8 @@ input.g-relay-url {
     grid-template-columns: 1fr;
   }
 }
+
+.g-version {
+  font-size: 0.6em;
+  font-weight: 400;
+}

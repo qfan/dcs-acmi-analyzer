@@ -3,6 +3,7 @@ import { DEFAULT_MILSIM_TIMELINE } from "../src/analytics/timeline.ts";
 import {
   KNEEBOARD_PLAN_ORDER,
   KNEEBOARD_PLANS,
+  kneeboardColumnLayout,
   laneMembership,
   planGateChain,
   planRows,
@@ -110,5 +111,15 @@ describe("secondsToNextGate", () => {
     expect(secondsToNextGate(ar2, "marNm", 1200)).toBeNull();
     expect(secondsToNextGate({ ...ar2, tacRangeNm: 80 }, "nltCommitNm", 1200)).toBeNull();
     expect(secondsToNextGate(ar2, "nltCommitNm", 0)).toBeNull();
+  });
+});
+
+describe("kneeboard column layout", () => {
+  it("keeps every tier right of the gates by default", () => {
+    expect(kneeboardColumnLayout(false)).toEqual({ left: [], right: ["IR/SAR-1", "SAR-2", "AR-1", "AR-2"] });
+  });
+
+  it("moves AR-1 and AR-2 left of the gates when asked", () => {
+    expect(kneeboardColumnLayout(true)).toEqual({ left: ["AR-1", "AR-2"], right: ["IR/SAR-1", "SAR-2"] });
   });
 });

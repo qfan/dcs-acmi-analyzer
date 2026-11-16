@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { bvrTrainerLabel } from "../../acmi/source.ts";
 import { SettingsPanel } from "../../ui/SettingsPanel.tsx";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { formatDuration } from "../../ui/Summary.tsx";
@@ -17,7 +18,7 @@ import {
   QUALITY_FLAG_ORDER,
   type QualityFlag,
 } from "../model.ts";
-import { type AnalyticsQuery, isUfoShot } from "../query.ts";
+import { type AnalyticsQuery, isBvrTrainerFile, isUfoShot } from "../query.ts";
 import { ANALYTICS_SAMPLES, fetchAnalyticsSample, shouldAutoLoadSamples } from "../samples.ts";
 import { type BatchFileJob, extractFilesInPool } from "../worker/client.ts";
 import { AnalyticsPanels, useAnalyticsDashboard } from "./AnalyticsDashboard.tsx";
@@ -501,6 +502,7 @@ export function AnalyticsApp() {
                 enabledFileIds={query.enabledFileIds}
                 duplicateFileIds={result.duplicateFileIds}
                 qualityExcludedFileIds={result.qualityExcludedFileIds}
+                gameExcludedFileIds={result.gameExcludedFileIds}
                 ufoExcludedShots={result.ufoExcludedShots}
                 query={query}
                 setQuery={setQuery}
@@ -536,6 +538,7 @@ function DatasetCard({
   enabledFileIds,
   duplicateFileIds,
   qualityExcludedFileIds,
+  gameExcludedFileIds,
   ufoExcludedShots,
   query,
   setQuery,
@@ -547,6 +550,7 @@ function DatasetCard({
   enabledFileIds: string[] | null;
   duplicateFileIds: Set<string>;
   qualityExcludedFileIds: Set<string>;
+  gameExcludedFileIds: Set<string>;
   ufoExcludedShots: number;
   query: AnalyticsQuery;
   setQuery: (q: AnalyticsQuery) => void;
@@ -570,7 +574,7 @@ function DatasetCard({
             {qualityExcludedFileIds.size > 0
               ? ` · ${qualityExcludedFileIds.size} skipped by quality label`
               : ""}
-            )
+            {gameExcludedFileIds.size > 0 ? ` · ${gameExcludedFileIds.size} BVR Trainer left out` : ""})
           </h3>
         </div>
         <div className="head-actions">
@@ -585,6 +589,7 @@ function DatasetCard({
         </div>
       </div>
 
+      <GameRecordingsNotice files={files} query={query} setQuery={setQuery} />
       <QualityBar files={files} query={query} setQuery={setQuery} ufoExcludedShots={ufoExcludedShots} />
 
       {expanded && (
@@ -593,11 +598,12 @@ function DatasetCard({
             const checked = enabledFileIds === null || enabledFileIds.includes(f.fileId);
             const isDuplicate = duplicateFileIds.has(f.fileId);
             const isQualityExcluded = qualityExcludedFileIds.has(f.fileId);
+            const isGameExcluded = gameExcludedFileIds.has(f.fileId);
             const a2aKills = f.engagements.filter((e) => e.isKill && !e.isGun).length;
             return (
               <div
                 key={f.fileId}
-                className={`file-chip${checked && !isDuplicate && !isQualityExcluded ? " active" : " muted-chip"}`}
+                className={`file-chip${checked && !isDuplicate && !isQualityExcluded && !isGameExcluded ? " active" : " muted-chip"}`}
               >
                 <label
                   className="file-chip-label"
@@ -612,8 +618,17 @@ function DatasetCard({
                   <span className="muted small">
                     ({a2aKills} missile kill{a2aKills === 1 ? "" : "s"} · {formatDuration(f.durationS)})
                     {isDuplicate ? " · duplicate, skipped" : ""}
+                    {isGameExcluded ? " · game recording, left out" : ""}
                   </span>
                 </label>
+                {isBvrTrainerFile(f) && (
+                  <span
+                    className="badge warn"
+                    title="Recorded by the BVR Trainer game, not DCS: its flight and missile models differ."
+                  >
+                    {bvrTrainerLabel(f.meta?.sourceVersion ?? null)}
+                  </span>
+                )}
                 <QualityBadges file={f} />
                 <button
                   type="button"
@@ -668,6 +683,56 @@ function QualityBadges({ file }: { file: FileAnalytics }) {
       ))}
       {minorUfo && <span className="badge">minor UFO</span>}
     </span>
+  );
+}
+
+/**
+ * Warns when BVR Trainer game recordings are loaded: left out by default so they don't pollute DCS
+ * statistics, with a switch to count them (as their own version cohort).
+ */
+function GameRecordingsNotice({
+  files,
+  query,
+  setQuery,
+}: {
+  files: FileAnalytics[];
+  query: AnalyticsQuery;
+  setQuery: (q: AnalyticsQuery) => void;
+}) {
+  const games = files.filter(isBvrTrainerFile);
+  if (games.length === 0) return null;
+  const n = games.length;
+  const what = `${n} BVR Trainer game recording${n === 1 ? "" : "s"}`;
+  const allGames = n === files.length;
+  return (
+    <div className="notice game-notice" role="status">
+      {query.includeBvrTrainer ? (
+        <>
+          <strong>Mixed data:</strong> {what} {n === 1 ? "is" : "are"} counted. The game's flight and missile
+          models are not DCS's{allGames ? "" : ", so totals and charts blend the two"}. Version splits keep
+          them apart as "BVR Trainer"; filter by version to see DCS alone.{" "}
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setQuery({ ...query, includeBvrTrainer: false, dcsPatches: [] })}
+          >
+            Leave game recordings out
+          </button>
+        </>
+      ) : (
+        <>
+          <strong>{what} left out.</strong> The game's flight and missile models are not DCS's, so its shots
+          would skew DCS statistics.{" "}
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setQuery({ ...query, includeBvrTrainer: true })}
+          >
+            Include them anyway
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 

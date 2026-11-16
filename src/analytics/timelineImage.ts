@@ -1,5 +1,6 @@
 import {
   BVR_TIMELINE_ROWS,
+  type BvrThreatTier,
   type BvrTimelineRowKey,
   type BvrTimelineRowMeta,
   type BvrTimelineTable,
@@ -132,7 +133,27 @@ export interface KneeboardOptions {
    * plan uses (default true). Lanes differ by pattern, not color, so they read in grayscale.
    */
   planLanes?: boolean;
+  /**
+   * Put the AR-1 and AR-2 columns to the left of the gate column (AR-1 | AR-2 | GATE | IR/SAR-1 |
+   * SAR-2), so the most-used Fox-3 numbers sit right next to the gate names. Default false.
+   */
+  arColumnsLeft?: boolean;
   scale?: number;
+}
+
+/** Tiers drawn left of the gate column when `arColumnsLeft` is on. */
+export const LEFT_SIDE_TIERS: readonly BvrThreatTier[] = ["AR-1", "AR-2"];
+
+/** Left-to-right column layout of the card: tier columns either side of the gate column, chart order kept. */
+export function kneeboardColumnLayout(arColumnsLeft: boolean): {
+  left: BvrThreatTier[];
+  right: BvrThreatTier[];
+} {
+  if (!arColumnsLeft) return { left: [], right: [...THREAT_TIER_ORDER] };
+  return {
+    left: THREAT_TIER_ORDER.filter((t) => LEFT_SIDE_TIERS.includes(t)),
+    right: THREAT_TIER_ORDER.filter((t) => !LEFT_SIDE_TIERS.includes(t)),
+  };
 }
 
 /** Lane order on the "all" card, left to right. */
@@ -407,12 +428,19 @@ export function renderKneeboardCanvas(
   const innerW = W - M * 2;
   const gateColW = 300;
   const tierColW = (innerW - gateColW) / THREAT_TIER_ORDER.length;
-  const tierX = (i: number) => M + gateColW + i * tierColW;
+  const layout = kneeboardColumnLayout(opts.arColumnsLeft ?? false);
+  /** Left edge of the gate column. */
+  const gateX = M + layout.left.length * tierColW;
+  /** Left edge of a tier's column. */
+  const tierX = (tier: BvrThreatTier) => {
+    const li = layout.left.indexOf(tier);
+    return li >= 0 ? M + li * tierColW : gateX + gateColW + layout.right.indexOf(tier) * tierColW;
+  };
   const bonus = opts.strikeFighterAdd2Nm ? 2 : 0;
   const lanesOn = plan === "all" && (opts.planLanes ?? true);
   const laneW = 15;
   const lanesW = lanesOn ? LANE_PLANS.length * laneW + 8 : 0;
-  const laneX = (j: number) => M + gateColW - lanesW + 2 + j * laneW + laneW / 2;
+  const laneX = (j: number) => gateX + gateColW - lanesW + 2 + j * laneW + laneW / 2;
 
   // ── Title block ──
   let y = M + 30;
@@ -458,10 +486,10 @@ export function renderKneeboardCanvas(
   ctx.fillStyle = pal.headerFg;
   ctx.textAlign = "left";
   ctx.font = `700 15px ${FONT}`;
-  ctx.fillText("GATE", M + 10, y + 26);
+  ctx.fillText("GATE", gateX + 10, y + 26);
   ctx.font = `500 11px ${FONT}`;
   ctx.fillStyle = pal.muted;
-  ctx.fillText("Threat tier →", M + 10, y + 44);
+  ctx.fillText(layout.left.length ? "← Threat tier →" : "Threat tier →", gateX + 10, y + 44);
   if (lanesOn) {
     // Rotated plan names above each lane.
     ctx.fillStyle = pal.headerFg;
@@ -475,9 +503,9 @@ export function renderKneeboardCanvas(
       ctx.restore();
     });
   }
-  THREAT_TIER_ORDER.forEach((tier, i) => {
+  THREAT_TIER_ORDER.forEach((tier) => {
     const meta = THREAT_TIER_META[tier];
-    const cx = tierX(i) + tierColW / 2;
+    const cx = tierX(tier) + tierColW / 2;
     ctx.textAlign = "center";
     ctx.fillStyle = pal.headerFg;
     ctx.font = `800 18px ${FONT}`;
@@ -539,25 +567,25 @@ export function renderKneeboardCanvas(
     if (isCritical) {
       // Shape cue for the out / commit gates, so they don't rely on red alone.
       ctx.fillStyle = pal.accent;
-      ctx.fillRect(M + 1, y, 5, rowH - 1);
+      ctx.fillRect(gateX + 1, y, 5, rowH - 1);
     }
     ctx.textAlign = "left";
     ctx.fillStyle = isCritical ? pal.accent : pal.fg;
     ctx.font = `800 16px ${FONT}`;
-    ctx.fillText(`${row.code}${row.hasStrikeFighterStar ? "*" : ""}`, M + 10, y + (tight ? 19 : 21));
+    ctx.fillText(`${row.code}${row.hasStrikeFighterStar ? "*" : ""}`, gateX + 10, y + (tight ? 19 : 21));
     ctx.fillStyle = pal.muted;
     ctx.font = `500 11px ${FONT}`;
     const desc = planMeta.descriptions[row.key] ?? CARD_DESCRIPTIONS[row.key];
     wrapLines(ctx, desc, gateColW - 18 - lanesW, 2).forEach((ln, li) => {
-      ctx.fillText(ln, M + 10, y + (tight ? 33 : 36) + li * (tight ? 11 : 12));
+      ctx.fillText(ln, gateX + 10, y + (tight ? 33 : 36) + li * (tight ? 11 : 12));
     });
 
-    THREAT_TIER_ORDER.forEach((tier, i) => {
+    THREAT_TIER_ORDER.forEach((tier) => {
       const v = table[tier][row.key] + (row.hasStrikeFighterStar ? bonus : 0);
       ctx.textAlign = "center";
       ctx.fillStyle = isCritical ? pal.accent : pal.fg;
       ctx.font = `800 26px ${FONT}`;
-      ctx.fillText(fmtNm(v), tierX(i) + tierColW / 2, y + rowH / 2 + 9);
+      ctx.fillText(fmtNm(v), tierX(tier) + tierColW / 2, y + rowH / 2 + 9);
 
       if (closureKt) {
         const s = secondsToNextGate(table[tier], row.key, closureKt, bonus, chain);
@@ -565,7 +593,7 @@ export function renderKneeboardCanvas(
           ctx.textAlign = "right";
           ctx.fillStyle = pal.muted;
           ctx.font = `600 10px ${FONT}`;
-          ctx.fillText(`↓ ${Math.round(s)}s`, tierX(i) + tierColW - 5, y + rowH - 5);
+          ctx.fillText(`↓ ${Math.round(s)}s`, tierX(tier) + tierColW - 5, y + rowH - 5);
         }
       }
     });
@@ -605,8 +633,10 @@ export function renderKneeboardCanvas(
 
   // vertical column rules across header + body
   ctx.fillStyle = pal.rule;
-  for (let i = 0; i < THREAT_TIER_ORDER.length; i++) {
-    ctx.fillRect(Math.round(tierX(i)), tableTop, 1, y - tableTop);
+  // One rule at the left edge of every column except the first (the outer border covers that).
+  const colEdges = [gateX, ...THREAT_TIER_ORDER.map(tierX)].filter((x) => x > M + 0.5);
+  for (const x of colEdges) {
+    ctx.fillRect(Math.round(x), tableTop, 1, y - tableTop);
   }
   ctx.strokeStyle = pal.fg;
   ctx.lineWidth = 1.5;

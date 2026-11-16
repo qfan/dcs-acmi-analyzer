@@ -4,6 +4,7 @@ import {
   type FileAnalytics,
   type MissileEngagement,
   TRACK_STRIDE,
+  versionCohortKey,
   type WeaponClass,
 } from "./model.ts";
 import { mean, percentile } from "./query.ts";
@@ -1085,7 +1086,7 @@ export function compareCohorts(
   for (const e of engagements) {
     let key = "Unknown";
     if (mode === "dcsPatch") {
-      key = e.dcsPatch || "Unknown Version";
+      key = versionCohortKey(e);
     } else if (mode === "month") {
       key = e.recordedAt ? e.recordedAt.slice(0, 7) : "Unknown Date";
     } else {
@@ -1171,7 +1172,7 @@ export function compareCohorts(
 
       return {
         cohortKey,
-        label: mode === "dcsPatch" && !cohortKey.startsWith("Unknown") ? `DCS ${cohortKey}` : cohortKey,
+        label: mode === "dcsPatch" && /^\d/.test(cohortKey) ? `DCS ${cohortKey}` : cohortKey,
         fileCount,
         shots: list.length,
         kills: kills.length,
@@ -1822,7 +1823,7 @@ export function analyzeSuddenReactions(
   // Per-DCS-patch breakdown
   const patchAcc = new Map<string, { survived: number; kills: number; ranges: number[]; ttis: number[] }>();
   for (const s of cleanSamples) {
-    const key = s.e.dcsPatch || "Unknown Version";
+    const key = versionCohortKey(s.e);
     let p = patchAcc.get(key);
     if (!p) {
       p = { survived: 0, kills: 0, ranges: [], ttis: [] };

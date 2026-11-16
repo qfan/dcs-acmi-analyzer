@@ -1,4 +1,5 @@
 import type { AcmiObject, Recording } from "../acmi/model.ts";
+import { detectRecordingSource } from "../acmi/source.ts";
 import { indexAt, T_HEADING, T_PITCH, T_YAW } from "../acmi/tracks.ts";
 import {
   type Analysis,
@@ -392,7 +393,10 @@ export function extractFileAnalytics(
   const geo = new Geo(rec);
   const decoyIndex = new DecoyIndex(rec, geo);
   const objs = rec.objects;
-  const { dcsVersion, dcsPatch } = parseDcsVersion(rec.globals.DataSource);
+  const { kind: source, version: sourceVersion } = detectRecordingSource(rec.globals);
+  // A game recording has no DCS build: never let "BVR Trainer" pose as a DCS patch.
+  const { dcsVersion, dcsPatch } =
+    source === "bvr-trainer" ? { dcsVersion: null, dcsPatch: null } : parseDcsVersion(rec.globals.DataSource);
   const recordedAt = rec.globals.RecordingTime || rec.referenceTime || null;
 
   // Map remove/re-add glitch chains so we can find the victim life alive at weapon launch time
@@ -620,6 +624,8 @@ export function extractFileAnalytics(
       targetSource,
       initial,
       dcsPatch,
+      source,
+      sourceVersion,
       recordedAt,
       flight,
       track,
@@ -685,6 +691,8 @@ export function extractFileAnalytics(
       targetSource: "kill",
       initial,
       dcsPatch,
+      source,
+      sourceVersion,
       recordedAt,
       flight,
       track,
@@ -712,6 +720,8 @@ export function extractFileAnalytics(
     dcsVersion,
     dcsPatch,
     recorder: rec.globals.DataRecorder || null,
+    source,
+    sourceVersion,
     recordedAt,
     author: rec.globals.Author || null,
     sessionKey: `${recordedAt ?? fileName}|${missionTitle}|${Math.round(durationS / 10) * 10}`,

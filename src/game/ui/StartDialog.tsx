@@ -1,5 +1,6 @@
 /** The New game dialog: a short header, then Single player and Multiplayer tabs. */
 import type { ReactNode } from "react";
+import { BVR_TRAINER_VERSION } from "../../acmi/source.ts";
 import { AI_SKILL_CHOICES, skillChoiceLabel } from "../ai/doctrine.ts";
 import { ALTITUDES_FT, SCENARIOS, type ScenarioOptions, scenarioById } from "../sim/scenarios.ts";
 
@@ -94,7 +95,9 @@ export function StartDialog({
     // biome-ignore lint/a11y/noStaticElementInteractions: clicking the backdrop closes the dialog; Escape does too
     <div className="g-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
       <div className="g-modal g-start" role="dialog" aria-label="New game">
-        <h2>BVR Trainer</h2>
+        <h2>
+          BVR Trainer <span className="g-muted g-version">v{BVR_TRAINER_VERSION}</span>
+        </h2>
         <p className="g-muted g-intro">
           F/A-18C vs F/A-18C with AIM-120Cs. Altitude matters: thin air up high lets missiles fly much
           further.{" "}
