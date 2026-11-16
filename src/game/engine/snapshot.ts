@@ -184,13 +184,18 @@ export function applySnapshot(w: World, snap: Snapshot): GameEvent[] {
     w.events = [];
     w.eventOffset = snap.eventsFrom;
   }
-  const byId = new Map(w.missiles.map((m, i) => [m.id, i]));
-  for (const m of snap.missiles) {
-    const i = byId.get(m.id);
-    if (i === undefined) {
-      byId.set(m.id, w.missiles.length);
-      w.missiles.push(m);
-    } else w.missiles[i] = m;
+  if (w.infinite) {
+    // Infinite mode drops ended missiles from the sim world each step, so snap.missiles is the full live set.
+    w.missiles = snap.missiles;
+  } else {
+    const byId = new Map(w.missiles.map((m, i) => [m.id, i]));
+    for (const m of snap.missiles) {
+      const i = byId.get(m.id);
+      if (i === undefined) {
+        byId.set(m.id, w.missiles.length);
+        w.missiles.push(m);
+      } else w.missiles[i] = m;
+    }
   }
   // Events arrive in order; skip any already applied (a resync can overlap the stream).
   const next = w.eventOffset + w.events.length;
