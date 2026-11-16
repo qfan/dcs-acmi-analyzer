@@ -1002,6 +1002,7 @@ export function BvrTimelineCard({
   /** Round the image's gates up to whole nm (the table keeps its decimals). */
   const [kneeboardRoundUp, setKneeboardRoundUp] = useState(true);
   const [kneeboardLanes, setKneeboardLanes] = useState(true);
+  const [kneeboardArLeft, setKneeboardArLeft] = useState(false);
   const kneeboardRef = useRef<HTMLCanvasElement>(null);
 
   // Redraw the preview whenever the table or an image option changes, so edits show up live.
@@ -1019,6 +1020,7 @@ export function BvrTimelineCard({
         gateTimesClosureKt: gateClosureKt,
         roundUpNm: kneeboardRoundUp,
         planLanes: kneeboardLanes,
+        arColumnsLeft: kneeboardArLeft,
         sourceLabel:
           (isBaseline
             ? band && hasScaledGates
@@ -1037,6 +1039,7 @@ export function BvrTimelineCard({
     gateClosureKt,
     kneeboardRoundUp,
     kneeboardLanes,
+    kneeboardArLeft,
     priorTable,
     band,
     hasScaledGates,
@@ -1207,6 +1210,17 @@ export function BvrTimelineCard({
                 onChange={(e) => setKneeboardRoundUp(e.target.checked)}
               />{" "}
               Round up to whole nm
+            </label>
+            <label
+              className="toggle"
+              title="Move the AR-1 and AR-2 columns to the left of the gate names (AR-1 | AR-2 | GATE | IR/SAR-1 | SAR-2), so the Fox-3 numbers sit right next to each gate"
+            >
+              <input
+                type="checkbox"
+                checked={kneeboardArLeft}
+                onChange={(e) => setKneeboardArLeft(e.target.checked)}
+              />{" "}
+              AR-1 / AR-2 columns left of gates
             </label>
             {kneeboardPlan === "all" && (
               <label
