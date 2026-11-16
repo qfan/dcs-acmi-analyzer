@@ -1,4 +1,6 @@
+import type { TFunction } from "i18next";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   cloneParams,
   DEFAULT_PARAMS,
@@ -7,13 +9,6 @@ import {
   PARAM_FIELDS,
   type ParamField,
 } from "../sim/params.ts";
-
-const GROUP_TITLES: Record<keyof GameParams, string> = {
-  missile: "Missile",
-  aircraft: "Aircraft",
-  radar: "Radar",
-  countermeasures: "Chaff & flares",
-};
 
 type Draft = Record<string, string | boolean>;
 
@@ -31,7 +26,7 @@ function toDraft(p: GameParams): Draft {
 }
 
 /** Turns the form back into parameters; returns the fields that do not parse. */
-function fromDraft(d: Draft, base: GameParams): { params: GameParams; errors: string[] } {
+function fromDraft(d: Draft, base: GameParams, t: TFunction): { params: GameParams; errors: string[] } {
   const p = cloneParams(base);
   const errors: string[] = [];
   for (const f of PARAM_FIELDS) {
@@ -42,7 +37,7 @@ function fromDraft(d: Draft, base: GameParams): { params: GameParams; errors: st
     else if (f.kind === "number") {
       const n = Number(raw);
       if (!Number.isFinite(n) || String(raw).trim() === "") errors.push(f.label);
-      else if (f.int && !Number.isInteger(n)) errors.push(`${f.label} (whole number)`);
+      else if (f.int && !Number.isInteger(n)) errors.push(`${f.label} (${t("game.params.wholeNumber")})`);
       else if (f.min !== undefined && n < f.min) errors.push(`${f.label} (≥ ${f.min})`);
       else if (f.max !== undefined && n > f.max) errors.push(`${f.label} (≤ ${f.max})`);
       else dst[f.key] = n;
@@ -53,9 +48,9 @@ function fromDraft(d: Draft, base: GameParams): { params: GameParams; errors: st
         .map(Number);
       const want = (dst[f.key] as number[]).length;
       const min = f.min;
-      if (arr.length !== want || !arr.every(Number.isFinite))
-        errors.push(`${f.label} (needs ${want} numbers)`);
-      else if (min !== undefined && arr.some((x) => x < min)) errors.push(`${f.label} (each ≥ ${min})`);
+      if (arr.length !== want || !arr.every(Number.isFinite)) {
+        errors.push(`${f.label} (${t("game.params.needsNumbers", { count: want })})`);
+      } else if (min !== undefined && arr.some((x) => x < min)) errors.push(`${f.label} (each ≥ ${min})`);
       else dst[f.key] = arr;
     }
   }
@@ -71,12 +66,13 @@ export function ParamEditor({
   onSave: (p: GameParams | null) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState<Draft>(() => toDraft(params));
   const [errors, setErrors] = useState<string[]>([]);
   const [json, setJson] = useState<string | null>(null);
 
   const save = () => {
-    const r = fromDraft(draft, params);
+    const r = fromDraft(draft, params, t);
     setErrors(r.errors);
     if (r.errors.length === 0) onSave(r.params);
   };
@@ -85,17 +81,13 @@ export function ParamEditor({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: clicking the backdrop closes the dialog; Escape does too
     <div className="g-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="g-modal g-params" role="dialog" aria-label="Game parameters">
-        <h2>Parameters</h2>
-        <p className="g-muted">
-          Rough estimates of the F/A-18C and AIM-120C, close to what the analyzer measures in DCS. Change
-          anything; the launch zone uses the same model, so it follows. Changes apply when a scenario starts
-          or restarts, and are kept in this browser.
-        </p>
+      <div className="g-modal g-params" role="dialog" aria-label={t("game.params.aria")}>
+        <h2>{t("game.params.title")}</h2>
+        <p className="g-muted">{t("game.params.intro")}</p>
         <div className="g-params-grid">
           {groups.map((g) => (
             <fieldset key={g}>
-              <legend>{GROUP_TITLES[g]}</legend>
+              <legend>{t(`game.params.groups.${g}`)}</legend>
               {PARAM_FIELDS.filter((f) => f.group === g).map((f) => {
                 const k = keyOf(f);
                 const v = draft[k];
@@ -133,7 +125,9 @@ export function ParamEditor({
             </fieldset>
           ))}
         </div>
-        {errors.length > 0 && <p className="g-error">Check: {errors.join(", ")}</p>}
+        {errors.length > 0 && (
+          <p className="g-error">{t("game.params.checkErrors", { errors: errors.join(", ") })}</p>
+        )}
         {json !== null && (
           <div className="g-json">
             <textarea value={json} onChange={(e) => setJson(e.target.value)} rows={8} spellCheck={false} />
@@ -144,20 +138,20 @@ export function ParamEditor({
                   setDraft(toDraft(mergeParams(JSON.parse(json))));
                   setErrors([]);
                 } catch {
-                  setErrors(["the JSON could not be read"]);
+                  setErrors([t("game.params.jsonInvalid")]);
                 }
               }}
             >
-              Load this JSON into the form
+              {t("game.params.loadJsonBtn")}
             </button>
           </div>
         )}
         <div className="g-row g-end">
           <button
             type="button"
-            onClick={() => setJson(JSON.stringify(fromDraft(draft, params).params, null, 2))}
+            onClick={() => setJson(JSON.stringify(fromDraft(draft, params, t).params, null, 2))}
           >
-            Export / import JSON
+            {t("game.params.exportImportJsonBtn")}
           </button>
           <button
             type="button"
@@ -166,14 +160,14 @@ export function ParamEditor({
               setErrors([]);
             }}
           >
-            Reset to defaults
+            {t("game.params.resetDefaultsBtn")}
           </button>
           <span className="g-grow" />
           <button type="button" onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button type="button" className="g-primary" onClick={save}>
-            Save
+            {t("game.params.saveBtn")}
           </button>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { aspectWords, type Engagement, engagementAt } from "../map/engagement.ts";
 import { type MapData, type MapTrack, pilotAt, sampleAt } from "../map/mapData.ts";
 import { SECONDARY_COLOR, sideColor } from "../map/render.ts";
@@ -24,38 +25,39 @@ interface Props {
 
 /** Selected objects, the engagement between them, and camera follow. Overlaid on the map. */
 export function SelectionPanel(p: Props) {
+  const { t } = useTranslation();
   const u = p.settings.units;
   const e = p.expanded && p.primary && p.secondary ? engagementAt(p.data, p.primary, p.secondary, p.t) : null;
   const actions = (
     <div className="sel-actions">
       <label className="follow">
-        Camera
+        {t("map.selection.camera")}
         <select value={p.follow} onChange={(ev) => p.setFollow(ev.target.value as FollowMode)}>
-          <option value="off">Free</option>
+          <option value="off">{t("map.selection.followOff")}</option>
           <option value="primary" disabled={!p.primary}>
-            Follow primary
+            {t("map.selection.followPrimary")}
           </option>
           <option value="secondary" disabled={!p.secondary}>
-            Follow secondary
+            {t("map.selection.followSecondary")}
           </option>
           <option value="pair" disabled={!p.primary || !p.secondary}>
-            Follow the pair
+            {t("map.selection.followPair")}
           </option>
         </select>
       </label>
       {p.primary && p.secondary && (
-        <button type="button" className="link small" title="Swap primary and secondary" onClick={p.onSwap}>
-          ⇄ swap
+        <button type="button" className="link small" title={t("map.selection.swapTitle")} onClick={p.onSwap}>
+          {t("map.selection.swap")}
         </button>
       )}
       <button
         type="button"
         className="link small sel-toggle"
         aria-expanded={p.expanded}
-        title={p.expanded ? "Hide the details" : "Show the details"}
+        title={p.expanded ? t("map.selection.hideTitle") : t("map.selection.showTitle")}
         onClick={() => p.setExpanded(!p.expanded)}
       >
-        {p.expanded ? "▴ hide" : "▾ details"}
+        {p.expanded ? t("map.selection.hide") : t("map.selection.details")}
       </button>
     </div>
   );
@@ -76,16 +78,14 @@ export function SelectionPanel(p: Props) {
           type="button"
           className={`secondary small-btn${p.armSecondary ? " on" : ""}`}
           aria-pressed={p.armSecondary}
-          title="Then click another object (or Ctrl+right-click one at any time)"
+          title={t("map.selection.pickSecondaryTitle")}
           onClick={() => p.setArmSecondary(!p.armSecondary)}
         >
-          {p.armSecondary ? "Click an object for the secondary…" : "Pick secondary…"}
+          {p.armSecondary ? t("map.selection.clickSecondary") : t("map.selection.pickSecondary")}
         </button>
       )}
       {e && <EngagementBlock e={e} u={u} />}
-      {p.primary && p.secondary && !e && (
-        <p className="muted small">The pair don't both exist at this time.</p>
-      )}
+      {p.primary && p.secondary && !e && <p className="muted small">{t("map.selection.pairNotPresent")}</p>}
       {actions}
     </div>
   );
@@ -107,20 +107,23 @@ function ObjectName({ track, which, t }: { track: MapTrack; which: PickRole; t: 
 }
 
 function RoleMark({ which }: { which: PickRole }) {
+  const { t } = useTranslation();
   return (
     <span
       className={`role-mark ${which}`}
       style={which === "secondary" ? { borderColor: SECONDARY_COLOR } : undefined}
-      title={which === "primary" ? "Primary" : "Secondary"}
+      title={which === "primary" ? t("map.selection.primary") : t("map.selection.secondary")}
     />
   );
 }
 
 function ObjectCard(props: Props & { track: MapTrack; which: PickRole }) {
+  const { t: tr } = useTranslation();
   const { track, which: role, data, t } = props;
   const u = props.settings.units;
   const s = sampleAt(data, track, t);
   const pilot = pilotAt(track, t);
+  const roleLabel = role === "primary" ? tr("map.selection.primary") : tr("map.selection.secondary");
   return (
     <div className={`sel-card ${role}`}>
       <div className="map-info-title">
@@ -131,7 +134,7 @@ function ObjectCard(props: Props & { track: MapTrack; which: PickRole }) {
         <button
           type="button"
           className="link close"
-          aria-label={`Clear the ${role} selection`}
+          aria-label={tr("map.selection.clearSelectionAria", { role: roleLabel })}
           onClick={() => props.onClear(role)}
         >
           ×
@@ -142,16 +145,17 @@ function ObjectCard(props: Props & { track: MapTrack; which: PickRole }) {
           <div>
             {fmtAlt(Number.isFinite(s.alt) ? s.alt : null, u.altitude)}
             {Math.abs(s.vz) >= 2
-              ? ` · ${s.vz > 0 ? "climbing" : "descending"} ${fmtVz(s.vz, u.altitude)}`
+              ? ` · ${s.vz > 0 ? tr("map.selection.climbing") : tr("map.selection.descending")} ${fmtVz(s.vz, u.altitude)}`
               : ""}
           </div>
           <div>
             {/* True speed along the flight path (ground speed alone misreads vertical manoeuvres). */}
-            {fmtSpeed(Math.hypot(s.speed, s.vz), u.speed)} · heading {Math.round(s.hdg)}°
+            {fmtSpeed(Math.hypot(s.speed, s.vz), u.speed)} ·{" "}
+            {tr("map.selection.heading", { deg: Math.round(s.hdg) })}
           </div>
         </>
       ) : (
-        <div className="muted small">Not present at this time.</div>
+        <div className="muted small">{tr("map.selection.notPresent")}</div>
       )}
     </div>
   );
@@ -159,47 +163,63 @@ function ObjectCard(props: Props & { track: MapTrack; which: PickRole }) {
 
 const deg = (v: number) => (Number.isFinite(v) ? `${Math.round(v)}°` : "–");
 
+type AspectWordKey = "on its tail" | "rear quarter" | "beam" | "forward quarter" | "head-on";
+function isAspectWordKey(w: string): w is AspectWordKey {
+  return (
+    w === "on its tail" || w === "rear quarter" || w === "beam" || w === "forward quarter" || w === "head-on"
+  );
+}
+
 function EngagementBlock({ e, u }: { e: Engagement; u: Settings["units"] }) {
+  const { t } = useTranslation();
   const closing = e.closure >= 0;
   const above = e.altDiff >= 0;
+  const rawAspect = aspectWords(e.aspectDeg);
+  const aspectWord = isAspectWordKey(rawAspect) ? t(`map.selection.aspectWords.${rawAspect}`) : "";
+  const elevText =
+    e.elevation === "high"
+      ? t("map.selection.elevHigh")
+      : e.elevation === "low"
+        ? t("map.selection.elevLow")
+        : t("map.selection.elevLevel");
   const rows: [string, string, string][] = [
     [
-      "Range",
-      `${fmtDist(e.range, u.distance)}${Math.abs(e.altDiff) > 300 ? ` (${fmtDist(e.horizontalRange, u.distance)} horizontal)` : ""}`,
-      "Straight-line distance from the primary to the secondary.",
+      t("map.selection.range"),
+      Math.abs(e.altDiff) > 300
+        ? t("map.selection.rangeHorizontal", {
+            dist: fmtDist(e.range, u.distance),
+            horiz: fmtDist(e.horizontalRange, u.distance),
+          })
+        : fmtDist(e.range, u.distance),
+      t("map.selection.rangeHelp"),
     ],
     [
-      "Closure",
-      `${fmtSpeed(Math.abs(e.closure), u.speed)} ${closing ? "closing" : "opening"}${
-        e.timeToMergeS !== null && e.timeToMergeS < 600 ? ` · merge in ${Math.round(e.timeToMergeS)} s` : ""
+      t("map.selection.closure"),
+      `${fmtSpeed(Math.abs(e.closure), u.speed)} ${closing ? t("map.selection.closing") : t("map.selection.opening")}${
+        e.timeToMergeS !== null && e.timeToMergeS < 600
+          ? ` · ${t("map.selection.mergeIn", { s: Math.round(e.timeToMergeS) })}`
+          : ""
       }`,
-      "How fast the range is shrinking (closing) or growing (opening).",
+      t("map.selection.closureHelp"),
     ],
     [
-      "Target is",
-      `${e.clock} o'clock ${e.elevation === "level" ? "level" : e.elevation}, ${fmtShortDist(Math.abs(e.altDiff), u.altitude)} ${above ? "above" : "below"}`,
-      "Where the secondary appears from the primary's cockpit (12 o'clock = nose).",
+      t("map.selection.targetIs"),
+      t("map.selection.targetIsValue", {
+        clock: e.clock,
+        elev: elevText,
+        altDiff: fmtShortDist(Math.abs(e.altDiff), u.altitude),
+        dir: above ? t("map.selection.above") : t("map.selection.below"),
+      }),
+      t("map.selection.targetIsHelp"),
     ],
+    [t("map.selection.ata"), deg(e.ataDeg), t("map.selection.ataHelp")],
     [
-      "Off our nose (ATA)",
-      deg(e.ataDeg),
-      "Antenna train angle: angle between the primary's nose and the line of sight to the secondary. 0° = dead ahead.",
+      t("map.selection.aspect"),
+      `${deg(e.aspectDeg)}${aspectWord ? ` · ${aspectWord}` : ""}`,
+      t("map.selection.aspectHelp"),
     ],
-    [
-      "Aspect",
-      `${deg(e.aspectDeg)}${aspectWords(e.aspectDeg) ? ` · ${aspectWords(e.aspectDeg)}` : ""}`,
-      "Aspect angle: angle from the secondary's tail to the primary. 0° = on its tail, 90° = beam, 180° = nose-on.",
-    ],
-    [
-      "Angle off tail",
-      deg(e.angleOffTailDeg),
-      "Heading crossing angle: angle between the two flight paths. 0° = same direction, 180° = opposite.",
-    ],
-    [
-      "We're off its nose",
-      deg(e.targetAtaDeg),
-      "The secondary's ATA: angle between its nose and the primary. Small = it's pointing at us.",
-    ],
+    [t("map.selection.angleOffTail"), deg(e.angleOffTailDeg), t("map.selection.angleOffTailHelp")],
+    [t("map.selection.targetAta"), deg(e.targetAtaDeg), t("map.selection.targetAtaHelp")],
   ];
   return (
     <dl className="kv compact engagement">

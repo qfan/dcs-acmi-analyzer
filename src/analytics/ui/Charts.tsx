@@ -1,18 +1,15 @@
 import type { KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import type { AltitudeUnit, DistanceUnit } from "../../settings/schema.ts";
 import { distanceUnitM, distanceUnitName, fmtAlt, fmtDist } from "../../settings/units.ts";
 import {
   ALT_RELATION_COLORS,
-  ALT_RELATION_LABELS,
   ALT_RELATION_ORDER,
   type AltitudeRelation,
-  ASPECT_LABELS,
   ASPECT_ORDER,
-  ASPECT_SHORT_LABELS,
   type AspectCategory,
   type ClassificationThresholds,
   type MissileEngagement,
-  WEAPON_CLASS_LABELS,
 } from "../model.ts";
 import type { ConditionCell, QueryResult, RangeBin, WeaponSummary } from "../query.ts";
 
@@ -63,6 +60,7 @@ export function ConditionMatrix({
   onToggleAspect,
   onToggleAltRelation,
 }: MatrixProps) {
+  const { t } = useTranslation();
   const isCellActive = (asp: AspectCategory, alt: AltitudeRelation) => {
     const aMatch = selectedAspects.length === 0 || selectedAspects.includes(asp);
     const rMatch = selectedAltRelations.length === 0 || selectedAltRelations.includes(alt);
@@ -79,28 +77,26 @@ export function ConditionMatrix({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Initial Condition Distribution Matrix (Aspect × Altitude Relation)</h3>
-          <p className="muted small matrix-sub">
-            Click any cell, row, or column to filter by launcher–target initial condition.
-          </p>
+          <h3>{t("analytics.charts.matrixTitle")}</h3>
+          <p className="muted small matrix-sub">{t("analytics.charts.matrixSub")}</p>
         </div>
-        <fieldset className="mode-switch" aria-label="Matrix color metric">
+        <fieldset className="mode-switch" aria-label={t("analytics.charts.matrixMetricAria")}>
           <button
             type="button"
             className={metric === "kills" ? "on" : ""}
             onClick={() => onSetMetric("kills")}
           >
-            Kills
+            {t("analytics.charts.kills")}
           </button>
           <button
             type="button"
             className={metric === "shots" ? "on" : ""}
             onClick={() => onSetMetric("shots")}
           >
-            Shots
+            {t("analytics.charts.shots")}
           </button>
           <button type="button" className={metric === "pk" ? "on" : ""} onClick={() => onSetMetric("pk")}>
-            Pk %
+            {t("analytics.charts.pkPct")}
           </button>
         </fieldset>
       </div>
@@ -109,7 +105,7 @@ export function ConditionMatrix({
         <table className="matrix-table">
           <thead>
             <tr>
-              <th>Target Aspect \ Altitude Relation</th>
+              <th>{t("analytics.charts.matrixCorner")}</th>
               {ALT_RELATION_ORDER.map((alt) => {
                 const active = selectedAltRelations.includes(alt);
                 return (
@@ -118,15 +114,15 @@ export function ConditionMatrix({
                       type="button"
                       className={`matrix-head-btn${active ? " active" : ""}`}
                       onClick={() => onToggleAltRelation(alt)}
-                      title="Filter by this altitude relation"
+                      title={t("analytics.charts.filterAltTitle")}
                     >
                       <span className="dot" style={{ background: ALT_RELATION_COLORS[alt] }} />
-                      {ALT_RELATION_LABELS[alt]}
+                      {t(`analytics.models.altRelation.${alt}`)}
                     </button>
                   </th>
                 );
               })}
-              <th className="num">Row Total</th>
+              <th className="num">{t("analytics.charts.rowTotal")}</th>
             </tr>
           </thead>
           <tbody>
@@ -141,9 +137,9 @@ export function ConditionMatrix({
                       type="button"
                       className={`matrix-head-btn${rowActive ? " active" : ""}`}
                       onClick={() => onToggleAspect(asp)}
-                      title="Filter by this target aspect"
+                      title={t("analytics.charts.filterAspectTitle")}
                     >
-                      {ASPECT_LABELS[asp]}
+                      {t(`analytics.models.aspect.${asp}`)}
                     </button>
                   </th>
                   {row.map((cell) => {
@@ -172,7 +168,7 @@ export function ConditionMatrix({
                               <>
                                 <span className="cell-big">{cell.kills}</span>
                                 <span className="cell-unit">
-                                  kill{cell.kills === 1 ? "" : "s"}
+                                  {t("analytics.charts.killsUnit", { count: cell.kills })}
                                   {cell.kills > 0 ? ` (${Math.round(cell.killShare * 100)}%)` : ""}
                                 </span>
                               </>
@@ -181,8 +177,8 @@ export function ConditionMatrix({
                               <>
                                 <span className="cell-big">{cell.shots}</span>
                                 <span className="cell-unit">
-                                  shot{cell.shots === 1 ? "" : "s"} ({cell.kills} kill
-                                  {cell.kills === 1 ? "" : "s"})
+                                  {t("analytics.charts.shotsUnit", { count: cell.shots })} (
+                                  {t("analytics.charts.killsUnit", { count: cell.kills })})
                                 </span>
                               </>
                             )}
@@ -192,7 +188,10 @@ export function ConditionMatrix({
                                   {cell.pk !== null ? `${Math.round(cell.pk * 100)}%` : "–"}
                                 </span>
                                 <span className="cell-unit">
-                                  {cell.kills}/{cell.shots} kills
+                                  {t("analytics.charts.killsSlashShots", {
+                                    kills: cell.kills,
+                                    shots: cell.shots,
+                                  })}
                                 </span>
                               </>
                             )}
@@ -200,10 +199,19 @@ export function ConditionMatrix({
                           {cell.shots > 0 && (
                             <div className="cell-sub muted small">
                               <span>
-                                {cell.kills}/{cell.shots} ({Math.round((cell.pk ?? 0) * 100)}% Pk)
+                                {t("analytics.charts.pkInline", {
+                                  kills: cell.kills,
+                                  shots: cell.shots,
+                                  pct: Math.round((cell.pk ?? 0) * 100),
+                                })}
                               </span>
                               {cell.medianKillRangeM !== null && (
-                                <span> · med {fmtDist(cell.medianKillRangeM, distanceUnit)}</span>
+                                <span>
+                                  {" "}
+                                  {t("analytics.charts.medRange", {
+                                    dist: fmtDist(cell.medianKillRangeM, distanceUnit),
+                                  })}
+                                </span>
                               )}
                             </div>
                           )}
@@ -215,12 +223,14 @@ export function ConditionMatrix({
                     {rowSum && (
                       <>
                         <div>
-                          <strong>{rowSum.kills}</strong> kills{" "}
+                          <strong>{rowSum.kills}</strong> {t("analytics.charts.killsWord")}{" "}
                           <span className="muted small">({Math.round(rowSum.killShare * 100)}%)</span>
                         </div>
                         <div className="muted small">
-                          {rowSum.shots} shots ·{" "}
-                          {rowSum.pk !== null ? `${Math.round(rowSum.pk * 100)}% Pk` : "–"}
+                          {rowSum.shots} {t("analytics.charts.shotsWord")} ·{" "}
+                          {rowSum.pk !== null
+                            ? `${Math.round(rowSum.pk * 100)}% ${t("analytics.charts.pkWord")}`
+                            : "–"}
                         </div>
                       </>
                     )}
@@ -231,28 +241,33 @@ export function ConditionMatrix({
           </tbody>
           <tfoot>
             <tr className="matrix-foot-row">
-              <th>Column Total</th>
+              <th>{t("analytics.charts.colTotal")}</th>
               {altitudeBreakdown.map((col) => (
                 <td key={col.key} className="matrix-total-cell">
                   <div>
-                    <strong>{col.kills}</strong> kills{" "}
+                    <strong>{col.kills}</strong> {t("analytics.charts.killsWord")}{" "}
                     <span className="muted small">({Math.round(col.killShare * 100)}%)</span>
                   </div>
                   <div className="muted small">
-                    {col.shots} shots · {col.pk !== null ? `${Math.round(col.pk * 100)}% Pk` : "–"}
+                    {col.shots} {t("analytics.charts.shotsWord")} ·{" "}
+                    {col.pk !== null ? `${Math.round(col.pk * 100)}% ${t("analytics.charts.pkWord")}` : "–"}
                     {col.medianKillRangeM !== null
-                      ? ` · med ${fmtDist(col.medianKillRangeM, distanceUnit)}`
+                      ? ` ${t("analytics.charts.medRange", {
+                          dist: fmtDist(col.medianKillRangeM, distanceUnit),
+                        })}`
                       : ""}
                   </div>
                 </td>
               ))}
               <td className="num matrix-total-cell">
                 <div>
-                  <strong>{totalKills}</strong> kills
+                  <strong>{totalKills}</strong> {t("analytics.charts.killsWord")}
                 </div>
                 <div className="muted small">
-                  {totalShots} shots ·{" "}
-                  {totalShots > 0 ? `${Math.round((totalKills / totalShots) * 100)}% Pk` : "–"}
+                  {totalShots} {t("analytics.charts.shotsWord")} ·{" "}
+                  {totalShots > 0
+                    ? `${Math.round((totalKills / totalShots) * 100)}% ${t("analytics.charts.pkWord")}`
+                    : "–"}
                 </div>
               </td>
             </tr>
@@ -288,6 +303,7 @@ export function RangeDistributionChart({
   activeRangeFilter,
   onSelectBinRange,
 }: RangeChartProps) {
+  const { t } = useTranslation();
   const unitName = distanceUnitName(distanceUnit);
   const unitM = distanceUnitM(distanceUnit);
 
@@ -320,10 +336,8 @@ export function RangeDistributionChart({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Initial Distance Distribution (Launcher ↔ Target at Launch)</h3>
-          <p className="muted small matrix-sub">
-            Stacked by altitude relation. Click a distance bar to filter to that range bracket.
-          </p>
+          <h3>{t("analytics.charts.rangeDistTitle")}</h3>
+          <p className="muted small matrix-sub">{t("analytics.charts.rangeDistSub")}</p>
         </div>
         <div className="chart-controls">
           <label className="toggle">
@@ -332,10 +346,10 @@ export function RangeDistributionChart({
               checked={showShotsOverlay}
               onChange={(e) => onToggleShotsOverlay(e.target.checked)}
             />{" "}
-            Show total shots & Pk
+            {t("analytics.charts.showShotsOverlay")}
           </label>
           <label className="small muted">
-            Bin size:{" "}
+            {t("analytics.charts.binSize")}{" "}
             <select value={binStepUnits} onChange={(e) => onChangeBinStepUnits(Number(e.target.value))}>
               {stepOptions.map((s) => (
                 <option key={s} value={s}>
@@ -351,7 +365,7 @@ export function RangeDistributionChart({
         viewBox={`0 0 ${width} ${height}`}
         className="analytics-svg"
         role="img"
-        aria-label="Histogram of initial distance between launcher and target"
+        aria-label={t("analytics.charts.rangeHistAria")}
       >
         {/* Horizontal Y grid lines */}
         {[0, 0.25, 0.5, 0.75, 1].map((f) => {
@@ -409,7 +423,14 @@ export function RangeDistributionChart({
               style={{ cursor: "pointer" }}
             >
               <title>
-                {`${loLabel}–${hiLabel} ${unitName}: ${b.kills} kills / ${b.shots} shots${b.pk !== null ? ` (${Math.round(b.pk * 100)}% Pk)` : ""}`}
+                {t("analytics.charts.rangeBinTip", {
+                  lo: loLabel,
+                  hi: hiLabel,
+                  unit: unitName,
+                  kills: b.kills,
+                  shots: b.shots,
+                  pk: b.pk !== null ? ` (${Math.round(b.pk * 100)}% Pk)` : "",
+                })}
               </title>
               {isSelected && (
                 <rect
@@ -477,7 +498,7 @@ export function RangeDistributionChart({
         })}
 
         <text x={padL + plotW / 2} y={height - 6} textAnchor="middle" fontSize="11.5" fill="var(--muted)">
-          Initial Slant Range ({unitName})
+          {t("analytics.charts.rangeXAxis", { unit: unitName })}
         </text>
       </svg>
 
@@ -485,7 +506,7 @@ export function RangeDistributionChart({
         {ALT_RELATION_ORDER.map((alt) => (
           <span key={alt} className="legend-item">
             <span className="dot" style={{ background: ALT_RELATION_COLORS[alt] }} />
-            {ALT_RELATION_LABELS[alt]}
+            {t(`analytics.models.altRelation.${alt}`)}
           </span>
         ))}
         {showShotsOverlay && (
@@ -497,7 +518,7 @@ export function RangeDistributionChart({
                 border: "1px solid var(--border)",
               }}
             />
-            Total Shots (outer bar)
+            {t("analytics.charts.totalShotsLegend")}
           </span>
         )}
       </div>
@@ -507,7 +528,6 @@ export function RangeDistributionChart({
 
 /** Double-clicking a dot would otherwise select nearby axis labels. */
 const DOT_STYLE = { cursor: "pointer", userSelect: "none" } as const;
-const DBLCLICK_HINT = "\nDouble-click: show on map";
 
 interface PolarPlotProps {
   engagements: MissileEngagement[];
@@ -535,6 +555,7 @@ export function PolarAspectRangePlot({
   onSelectEngagement,
   onShowOnMap,
 }: PolarPlotProps) {
+  const { t } = useTranslation();
   const unitName = distanceUnitName(distanceUnit);
   const unitM = distanceUnitM(distanceUnit);
   const withGeom = engagements.filter((e) => e.initial !== null && (showMisses || e.isKill));
@@ -553,10 +574,10 @@ export function PolarAspectRangePlot({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Target Aspect vs. Initial Range (Polar Plot)</h3>
+          <h3>{t("analytics.charts.polarTitle")}</h3>
           <p className="muted small matrix-sub">
-            180° Head-on (top) → 90° Beam → 0° Tail-on (bottom). Radius = launch range.
-            {onShowOnMap && " Double-click a dot to jump the map to that launch."}
+            {t("analytics.charts.polarSub")}
+            {onShowOnMap && t("analytics.charts.dblClickHint")}
           </p>
         </div>
         <label className="toggle">
@@ -565,7 +586,7 @@ export function PolarAspectRangePlot({
             checked={showMisses}
             onChange={(e) => onToggleShowMisses(e.target.checked)}
           />{" "}
-          Plot non-kill shots
+          {t("analytics.charts.plotNonKill")}
         </label>
       </div>
 
@@ -573,7 +594,7 @@ export function PolarAspectRangePlot({
         viewBox={`0 0 ${size} ${size}`}
         className="analytics-svg polar-svg"
         role="img"
-        aria-label="Polar plot of target aspect angle and initial range"
+        aria-label={t("analytics.charts.polarAria")}
       >
         {/* Range rings */}
         {[0.25, 0.5, 0.75, 1].map((f) => {
@@ -616,16 +637,16 @@ export function PolarAspectRangePlot({
 
         {/* Cardinal aspect labels */}
         <text x={cx} y={16} textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--text)">
-          180° Head-on (Hot)
+          {t("analytics.charts.polarTop")}
         </text>
         <text x={cx} y={size - 8} textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--text)">
-          0° Tail-on (Cold)
+          {t("analytics.charts.polarBottom")}
         </text>
         <text x={size - 6} y={cy + 4} textAnchor="end" fontSize="10.5" fill="var(--muted)">
-          90° Beam
+          {t("analytics.charts.polarBeam")}
         </text>
         <text x={6} y={cy + 4} textAnchor="start" fontSize="10.5" fill="var(--muted)">
-          90° Beam
+          {t("analytics.charts.polarBeam")}
         </text>
 
         {/* Points */}
@@ -654,7 +675,15 @@ export function PolarAspectRangePlot({
               style={DOT_STYLE}
             >
               <title>
-                {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — ${ASPECT_SHORT_LABELS[ic.aspectCategory]} (${Math.round(ic.aspectDeg)}°), ${ALT_RELATION_LABELS[ic.altitudeRelation]}, Range ${fmtDist(ic.slantRangeM, distanceUnit)}${onShowOnMap ? DBLCLICK_HINT : ""}`}
+                {t("analytics.charts.polarDotTip", {
+                  weapon: e.weaponName,
+                  outcome: e.isKill ? t("analytics.charts.killTag") : e.outcome,
+                  aspect: t(`analytics.models.aspectShort.${ic.aspectCategory}`),
+                  deg: Math.round(ic.aspectDeg),
+                  altRel: t(`analytics.models.altRelation.${ic.altitudeRelation}`),
+                  range: fmtDist(ic.slantRangeM, distanceUnit),
+                  hint: onShowOnMap ? t("analytics.charts.dblClickTooltip") : "",
+                })}
               </title>
               {isSelected && (
                 <circle cx={px} cy={py} r={9} fill="none" stroke="var(--text)" strokeWidth={2} />
@@ -699,6 +728,7 @@ export function AltitudeScatterPlot({
   onSelectEngagement,
   onShowOnMap,
 }: AltPlotProps) {
+  const { t } = useTranslation();
   const isFeet = altitudeUnit.startsWith("ft");
   const kAlt = isFeet ? 3.28084 : 1;
   const altUnitLabel = isFeet ? "ft" : "m";
@@ -752,11 +782,12 @@ export function AltitudeScatterPlot({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Launcher vs. Target Altitude at Launch</h3>
+          <h3>{t("analytics.charts.altScatterTitle")}</h3>
           <p className="muted small matrix-sub">
-            Diagonal band = Co-Altitude (±{fmtAlt(thresholds.coAltBandM, altitudeUnit)}). Below diagonal =
-            High→Low; above = Low→High.
-            {onShowOnMap && " Double-click a dot to jump the map to that launch."}
+            {t("analytics.charts.altScatterSub", {
+              band: fmtAlt(thresholds.coAltBandM, altitudeUnit),
+            })}
+            {onShowOnMap && t("analytics.charts.dblClickHint")}
           </p>
         </div>
       </div>
@@ -765,7 +796,7 @@ export function AltitudeScatterPlot({
         viewBox={`0 0 ${width} ${height}`}
         className="analytics-svg"
         role="img"
-        aria-label="Scatter plot of shooter altitude versus target altitude at launch"
+        aria-label={t("analytics.charts.altScatterAria")}
       >
         {/* Grid lines */}
         {[0, 0.25, 0.5, 0.75, 1].map((f) => {
@@ -821,7 +852,7 @@ export function AltitudeScatterPlot({
 
         {/* Region labels */}
         <text x={padL + 8} y={padT + 16} fontSize="10" fill="#ec4899" fontWeight="600">
-          Low → High (Look-up)
+          {t("analytics.charts.lowToHighRegion")}
         </text>
         <text
           x={width - padR - 8}
@@ -831,7 +862,7 @@ export function AltitudeScatterPlot({
           fill="#f59e0b"
           fontWeight="600"
         >
-          High → Low (Look-down)
+          {t("analytics.charts.highToLowRegion")}
         </text>
 
         {/* Points */}
@@ -853,7 +884,15 @@ export function AltitudeScatterPlot({
               style={DOT_STYLE}
             >
               <title>
-                {`${e.weaponName} (${e.isKill ? "KILL" : e.outcome}) — Shooter ${fmtAlt(e.shooter!.altM, altitudeUnit)} → Target ${fmtAlt(e.target!.altM, altitudeUnit)} (${ALT_RELATION_LABELS[ic.altitudeRelation]}), Range ${fmtDist(ic.slantRangeM, distanceUnit)}${onShowOnMap ? DBLCLICK_HINT : ""}`}
+                {t("analytics.charts.altDotTip", {
+                  weapon: e.weaponName,
+                  outcome: e.isKill ? t("analytics.charts.killTag") : e.outcome,
+                  shooterAlt: fmtAlt(e.shooter!.altM, altitudeUnit),
+                  targetAlt: fmtAlt(e.target!.altM, altitudeUnit),
+                  altRel: t(`analytics.models.altRelation.${ic.altitudeRelation}`),
+                  range: fmtDist(ic.slantRangeM, distanceUnit),
+                  hint: onShowOnMap ? t("analytics.charts.dblClickTooltip") : "",
+                })}
               </title>
               {isSelected && (
                 <circle cx={sx} cy={sy} r={9} fill="none" stroke="var(--text)" strokeWidth={2} />
@@ -868,7 +907,7 @@ export function AltitudeScatterPlot({
         })}
 
         <text x={padL + plotW / 2} y={height - 6} textAnchor="middle" fontSize="11" fill="var(--muted)">
-          Shooter Altitude at Launch ({altUnitLabel})
+          {t("analytics.charts.shooterAltAxis", { unit: altUnitLabel })}
         </text>
         <text
           x={14}
@@ -878,7 +917,7 @@ export function AltitudeScatterPlot({
           fill="var(--muted)"
           transform={`rotate(-90 14 ${padT + plotH / 2})`}
         >
-          Target Altitude ({altUnitLabel})
+          {t("analytics.charts.targetAltAxis", { unit: altUnitLabel })}
         </text>
       </svg>
     </section>
@@ -898,6 +937,7 @@ export function WeaponBreakdownCard({
   distanceUnit,
   onToggleWeapon,
 }: WeaponBreakdownProps) {
+  const { t } = useTranslation();
   if (weapons.length === 0) return null;
   const maxShots = Math.max(1, ...weapons.map((w) => Math.max(w.shots, w.kills)));
 
@@ -905,22 +945,22 @@ export function WeaponBreakdownCard({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Kills & Launch Range by Weapon</h3>
-          <p className="muted small matrix-sub">Click a weapon row to filter the query to that weapon.</p>
+          <h3>{t("analytics.charts.weaponBreakdownTitle")}</h3>
+          <p className="muted small matrix-sub">{t("analytics.charts.weaponBreakdownSub")}</p>
         </div>
       </div>
       <div className="table-wrap">
         <table className="weapon-table">
           <thead>
             <tr>
-              <th>Weapon</th>
-              <th>Class</th>
-              <th className="num">Kills</th>
-              <th className="num">Shots</th>
-              <th className="num">Pk</th>
-              <th>Distribution</th>
-              <th className="num">Median Kill Range</th>
-              <th className="num">Min – Max Range</th>
+              <th>{t("analytics.charts.weaponCol")}</th>
+              <th>{t("analytics.charts.classCol")}</th>
+              <th className="num">{t("analytics.charts.kills")}</th>
+              <th className="num">{t("analytics.charts.shots")}</th>
+              <th className="num">{t("analytics.charts.pkWord")}</th>
+              <th>{t("analytics.charts.distributionCol")}</th>
+              <th className="num">{t("analytics.charts.medianKillRangeCol")}</th>
+              <th className="num">{t("analytics.charts.minMaxRangeCol")}</th>
             </tr>
           </thead>
           <tbody>
@@ -938,7 +978,7 @@ export function WeaponBreakdownCard({
                     <strong>{w.weaponName}</strong>
                   </td>
                   <td>
-                    <span className="badge">{WEAPON_CLASS_LABELS[w.weaponClass]}</span>
+                    <span className="badge">{t(`analytics.models.weaponClass.${w.weaponClass}`)}</span>
                   </td>
                   <td className="num">
                     <strong>{w.kills}</strong>

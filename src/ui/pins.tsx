@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 
 /**
  * Pin viewer panels to a rail left or right of the map, using the empty space on wide screens.
@@ -95,6 +96,7 @@ const PinContext = createContext<PinState | null>(null);
  * until something is pinned to them.
  */
 export function PinLayout({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const [pins, setPins] = useState<Pins>(loadPins);
   const wide = useWideEnough();
   const [left, setLeft] = useState<HTMLElement | null>(null);
@@ -119,9 +121,9 @@ export function PinLayout({ children }: { children: ReactNode }) {
   return (
     <PinContext.Provider value={{ pins, setPin, railsOn: wide, rails: { left, right } }}>
       <div className={cls}>
-        <aside ref={setLeft} className="pin-rail pin-rail-left" aria-label="Panels pinned left" />
+        <aside ref={setLeft} className="pin-rail pin-rail-left" aria-label={t("viewer.pins.leftAria")} />
         <div className="pin-main">{children}</div>
-        <aside ref={setRight} className="pin-rail pin-rail-right" aria-label="Panels pinned right" />
+        <aside ref={setRight} className="pin-rail pin-rail-right" aria-label={t("viewer.pins.rightAria")} />
       </div>
     </PinContext.Provider>
   );
@@ -132,6 +134,7 @@ export function PinLayout({ children }: { children: ReactNode }) {
  * panel unchanged.
  */
 export function Pinnable({ id, title, children }: { id: PanelId; title: string; children: ReactNode }) {
+  const { t } = useTranslation();
   const ctx = useContext(PinContext);
   if (!ctx) return <>{children}</>;
   const side = ctx.pins[id] ?? null;
@@ -139,12 +142,14 @@ export function Pinnable({ id, title, children }: { id: PanelId; title: string; 
 
   const button = (to: PinSide) => {
     const active = side === to;
-    const label = to === "left" ? "◧ Left" : "Right ◨";
+    const label = to === "left" ? t("viewer.pins.leftBtn") : t("viewer.pins.rightBtn");
     const tip = !ctx.railsOn
-      ? `Pinning needs a window at least ${RAILS_MIN_WIDTH_PX} px wide`
+      ? t("viewer.pins.needWide", { px: RAILS_MIN_WIDTH_PX })
       : active
-        ? `Unpin "${title}" back into the main column`
-        : `Pin "${title}" to the ${to} of the map`;
+        ? t("viewer.pins.unpinTip", { title })
+        : to === "left"
+          ? t("viewer.pins.pinLeftTip", { title })
+          : t("viewer.pins.pinRightTip", { title });
     return (
       <button
         type="button"
@@ -154,7 +159,7 @@ export function Pinnable({ id, title, children }: { id: PanelId; title: string; 
         disabled={!ctx.railsOn}
         onClick={() => ctx.setPin(id, active ? null : to)}
       >
-        {active ? `✕ ${to === "left" ? "Left" : "Right"}` : label}
+        {active ? (to === "left" ? t("viewer.pins.unpinLeft") : t("viewer.pins.unpinRight")) : label}
       </button>
     );
   };
@@ -166,7 +171,7 @@ export function Pinnable({ id, title, children }: { id: PanelId; title: string; 
       style={rail ? { order: PANEL_ORDER.indexOf(id) } : undefined}
       data-pinned={rail ? side : undefined}
     >
-      <fieldset className="pin-bar" aria-label={`Pin ${title}`}>
+      <fieldset className="pin-bar" aria-label={t("viewer.pins.barAria", { title })}>
         {button("left")}
         {button("right")}
       </fieldset>

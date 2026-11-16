@@ -1,4 +1,6 @@
+import type { TFunction } from "i18next";
 import { Fragment, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import type { RecordingSummary } from "../acmi/summary.ts";
 import type { Analysis, Kill, PilotStats } from "../analysis/analyze.ts";
 import { settingsStore, useSettings } from "../settings/react.ts";
@@ -10,6 +12,7 @@ import {
   type Filter,
   formatClock,
   formatElapsed,
+  type KillNoteItem,
   type KillRecord,
   killMatches,
   killRecords,
@@ -34,6 +37,7 @@ interface Props {
 }
 
 export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
+  const { t } = useTranslation();
   const { settings } = useSettings();
   const clock = settings.time.clock;
   const setClock = (c: Clock) => settingsStore.update({ time: { clock: c } });
@@ -58,7 +62,7 @@ export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
 
   return (
     <>
-      <Pinnable id="filters" title="Filters">
+      <Pinnable id="filters" title={t("analysis.filtersTitle")}>
         <FilterBar
           filter={filter}
           setFilter={setFilter}
@@ -70,22 +74,30 @@ export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
         />
       </Pinnable>
 
-      <Pinnable id="kills" title="Kills and losses">
+      <Pinnable id="kills" title={t("analysis.killsTitle")}>
         <section className="card">
-          <h3>Kills and losses ({filtered ? `${visibleKills.length} of ${kills.length}` : kills.length})</h3>
+          <h3>
+            {filtered
+              ? t("analysis.killsCountFiltered", { visible: visibleKills.length, total: kills.length })
+              : t("analysis.killsCount", { count: kills.length })}
+          </h3>
           {analysis.scrambled.objects > 0 && (
             <p className="notice">
-              {analysis.scrambled.protectedHeader ? "This is a protected multiplayer recording: the" : "The"}{" "}
-              positions of {analysis.scrambled.objects.toLocaleString()} object
-              {analysis.scrambled.objects === 1 ? "" : "s"} ({analysis.scrambled.aircraft.toLocaleString()}{" "}
-              aircraft) are scrambled in the file, so who shot whom can't be worked out for them. They are
-              left out of the kill list below. Only Tacview with the server's key can restore these positions.
+              {t(
+                analysis.scrambled.protectedHeader
+                  ? "analysis.scrambledProtected"
+                  : "analysis.scrambledUnprotected",
+                {
+                  objects: analysis.scrambled.objects.toLocaleString(),
+                  aircraft: analysis.scrambled.aircraft.toLocaleString(),
+                },
+              )}
             </p>
           )}
           {kills.length === 0 ? (
-            <p className="muted">Nothing was destroyed in this recording.</p>
+            <p className="muted">{t("analysis.nothingDestroyed")}</p>
           ) : visibleKills.length === 0 ? (
-            <p className="muted">No kills match the filter.</p>
+            <p className="muted">{t("analysis.noKillsMatch")}</p>
           ) : (
             <KillTable records={visibleKills} fmt={fmt} refTime={refTime} onShowOnMap={onShowOnMap} />
           )}
@@ -94,9 +106,9 @@ export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
       </Pinnable>
 
       {analysis.pilots.length > 0 && (
-        <Pinnable id="pilots" title="Pilots and units">
+        <Pinnable id="pilots" title={t("analysis.pilotsTitle")}>
           <section className="card">
-            <h3>Pilots and units</h3>
+            <h3>{t("analysis.pilotsTitle")}</h3>
             <PilotTable
               pilots={visiblePilots}
               sides={sides}
@@ -108,7 +120,7 @@ export function AnalysisView({ summary, analysis, onShowOnMap }: Props) {
       )}
 
       {shots.length > 0 && (
-        <Pinnable id="shots" title="Shots">
+        <Pinnable id="shots" title={t("analysis.shotsTitle")}>
           <ShotsTable all={shots} visible={visibleShots} filtered={filtered} fmt={fmt} />
         </Pinnable>
       )}
@@ -125,14 +137,15 @@ function FilterBar(props: {
   setClock: (c: Clock) => void;
   hasTimeOfDay: boolean;
 }) {
+  const { t } = useTranslation();
   const { filter, setFilter } = props;
   const active = filter.side !== "" || filter.pilot !== "" || filter.text !== "";
   return (
-    <section className="card filter-bar" aria-label="Filters">
+    <section className="card filter-bar" aria-label={t("analysis.filtersAria")}>
       <label>
-        <span>Side</span>
+        <span>{t("analysis.side")}</span>
         <select value={filter.side} onChange={(e) => setFilter({ ...filter, side: e.target.value })}>
-          <option value="">All sides</option>
+          <option value="">{t("analysis.allSides")}</option>
           {props.sides.map((s) => (
             <option key={s} value={s}>
               {s}
@@ -141,9 +154,9 @@ function FilterBar(props: {
         </select>
       </label>
       <label>
-        <span>Pilot</span>
+        <span>{t("analysis.pilot")}</span>
         <select value={filter.pilot} onChange={(e) => setFilter({ ...filter, pilot: e.target.value })}>
-          <option value="">Everyone</option>
+          <option value="">{t("analysis.everyone")}</option>
           {[...props.pilots]
             .sort((a, b) => a.key.localeCompare(b.key))
             .map((p) => (
@@ -154,26 +167,26 @@ function FilterBar(props: {
         </select>
       </label>
       <label className="grow">
-        <span>Search</span>
+        <span>{t("analysis.search")}</span>
         <input
           type="search"
-          placeholder="Pilot, aircraft, weapon…"
+          placeholder={t("analysis.searchPlaceholder")}
           value={filter.text}
           onChange={(e) => setFilter({ ...filter, text: e.target.value })}
         />
       </label>
       {props.hasTimeOfDay && (
         <label>
-          <span>Times</span>
+          <span>{t("analysis.times")}</span>
           <select value={props.clock} onChange={(e) => props.setClock(e.target.value as Clock)}>
-            <option value="elapsed">Since start</option>
-            <option value="timeOfDay">Mission time of day</option>
+            <option value="elapsed">{t("analysis.sinceStart")}</option>
+            <option value="timeOfDay">{t("analysis.missionTimeOfDay")}</option>
           </select>
         </label>
       )}
       {active && (
         <button type="button" className="secondary" onClick={() => setFilter(NO_FILTER)}>
-          Clear
+          {t("common.clear")}
         </button>
       )}
     </section>
@@ -191,6 +204,7 @@ function KillTable({
   refTime: string | null;
   onShowOnMap?: (k: Kill) => void;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (id: string) => {
     const next = new Set(open);
@@ -203,11 +217,11 @@ function KillTable({
       <table>
         <thead>
           <tr>
-            <th className="num">Time</th>
-            <th>Lost</th>
-            <th>Killed by</th>
-            <th>Weapon</th>
-            <th>Notes</th>
+            <th className="num">{t("analysis.timeCol")}</th>
+            <th>{t("analysis.lostCol")}</th>
+            <th>{t("analysis.killedByCol")}</th>
+            <th>{t("analysis.weaponCol")}</th>
+            <th>{t("analysis.notesCol")}</th>
           </tr>
         </thead>
         <tbody>
@@ -222,7 +236,7 @@ function KillTable({
                       type="button"
                       className="row-toggle"
                       aria-expanded={isOpen}
-                      aria-label={isOpen ? "Hide details" : "Show details"}
+                      aria-label={isOpen ? t("analysis.hideDetailsAria") : t("analysis.showDetailsAria")}
                       onClick={(e) => {
                         e.stopPropagation();
                         toggle(id);
@@ -240,17 +254,28 @@ function KillTable({
                       <Who p={r.killer} />
                     ) : r.kill.cause === "collision" ? (
                       <>
-                        Collision with <Who p={r.other} />
+                        {t("analysis.collisionWith")} <Who p={r.other} />
                       </>
                     ) : (
-                      <span className="muted">{r.cause}</span>
+                      <span className="muted">{t(`analysis.causes.${r.kill.cause}`)}</span>
                     )}
                   </td>
                   <td>{r.weapon}</td>
                   <td>
-                    {r.notes.map((n) => (
-                      <span key={n} className={`badge ${noteKind(n)}`}>
-                        {n}
+                    {r.noteItems.map((item) => (
+                      <span
+                        key={
+                          item.kind === "alsoHitBy"
+                            ? `alsoHitBy:${item.assists}`
+                            : item.kind === "wentDownAfterHit"
+                              ? `wentDown:${item.seconds}`
+                              : item.kind === "confidence"
+                                ? `conf:${item.level}`
+                                : item.kind
+                        }
+                        className={`badge ${noteKind(item)}`}
+                      >
+                        {noteLabel(item, t)}
                       </span>
                     ))}
                   </td>
@@ -282,54 +307,74 @@ function KillDetailsPanel({
   refTime: string | null;
   onShowOnMap?: (k: Kill) => void;
 }) {
+  const { t } = useTranslation();
   const { settings } = useSettings();
   const u: Settings["units"] = settings.units;
   const k = r.kill;
   const d = k.details;
   const tod = timeOfDay(refTime, k.time);
+  const afterHit =
+    k.secondsAfterHit !== null && k.secondsAfterHit > 0.5
+      ? t("analysis.details.afterHitSuffix", { seconds: k.secondsAfterHit.toFixed(1) })
+      : "";
   return (
     <div className="details">
       {onShowOnMap && (
         <button type="button" className="secondary small-btn details-map" onClick={() => onShowOnMap(k)}>
-          Show on map
+          {t("analysis.showOnMap")}
         </button>
       )}
       <p>
         {k.cause === "weapon" && d ? (
-          <>
-            <strong>{partyLabel(r.killer) || "An unknown shooter"}</strong> fired {article(r.weapon)}{" "}
-            <strong>{r.weapon}</strong> at {fmt(d.launchTime)} from {fmtDist(d.launchRangeM, u.distance)}. It
-            reached <strong>{partyLabel(r.victim)}</strong> {d.flightTimeS.toFixed(1)} s later, passing within{" "}
-            {fmtShortDist(d.missDistanceM, u.altitude)}
-            {k.secondsAfterHit !== null && k.secondsAfterHit > 0.5
-              ? `, and the target went down ${k.secondsAfterHit.toFixed(1)} s after that`
-              : ""}
-            .
-          </>
+          <Trans
+            i18nKey="analysis.details.weaponNarrative"
+            values={{
+              shooter: partyLabel(r.killer) || t("analysis.details.unknownShooter"),
+              weapon: r.weapon,
+              launchTime: fmt(d.launchTime),
+              launchRange: fmtDist(d.launchRangeM, u.distance),
+              victim: partyLabel(r.victim),
+              flightTime: d.flightTimeS.toFixed(1),
+              missDist: fmtShortDist(d.missDistanceM, u.altitude),
+              afterHit,
+            }}
+            components={[<strong key="0" />, <strong key="1" />]}
+          />
         ) : k.cause === "collision" ? (
-          <>
-            <strong>{partyLabel(r.victim)}</strong> and <strong>{partyLabel(r.other)}</strong> disappeared
-            within a second of each other, less than 100 m apart, with no weapon nearby.
-          </>
+          <Trans
+            i18nKey="analysis.details.collisionNarrative"
+            values={{
+              victim: partyLabel(r.victim),
+              other: partyLabel(r.other),
+            }}
+            components={[<strong key="0" />, <strong key="1" />]}
+          />
         ) : (
-          <>
-            <strong>{partyLabel(r.victim)}</strong> disappeared with no weapon nearby,{" "}
-            {k.ejected ? "and the pilot ejected" : "while descending fast or at ground level"}.
-          </>
+          <Trans
+            i18nKey="analysis.details.otherNarrative"
+            values={{
+              victim: partyLabel(r.victim),
+              reason: k.ejected ? t("analysis.details.ejectedReason") : t("analysis.details.crashReason"),
+            }}
+            components={[<strong key="0" />]}
+          />
         )}
       </p>
       <dl className="kv compact">
-        <dt>Time</dt>
+        <dt>{t("analysis.details.timeLabel")}</dt>
         <dd>
-          {formatElapsed(k.time)} after start{tod ? ` · ${tod} UTC mission time` : ""}
+          {t("analysis.details.timeValue", {
+            elapsed: formatElapsed(k.time),
+            tod: tod ? t("analysis.details.todSuffix", { tod }) : "",
+          })}
         </dd>
         {d && (
           <>
-            <dt>Shooter at launch</dt>
+            <dt>{t("analysis.details.shooterAtLaunch")}</dt>
             <dd>
               {fmtAlt(d.shooterAltM, u.altitude)}, {fmtSpeed(d.shooterSpeedMs, u.speed)}
             </dd>
-            <dt>Target at launch</dt>
+            <dt>{t("analysis.details.targetAtLaunch")}</dt>
             <dd>
               {fmtAlt(d.victimAltM, u.altitude)}, {fmtSpeed(d.victimSpeedMs, u.speed)}
             </dd>
@@ -337,42 +382,57 @@ function KillDetailsPanel({
         )}
         {r.assists.length > 0 && (
           <>
-            <dt>Also hit by</dt>
+            <dt>{t("analysis.details.alsoHitBy")}</dt>
             <dd>{r.assists.map(partyLabel).join(", ")}</dd>
           </>
         )}
-        <dt>Confidence</dt>
-        <dd>{confidenceText(k)}</dd>
-        <dt>Object IDs</dt>
+        <dt>{t("analysis.details.confidence")}</dt>
+        <dd>{confidenceText(k, t)}</dd>
+        <dt>{t("analysis.details.objectIds")}</dt>
         <dd className="muted">
-          lost {r.victim.id}
-          {r.killer ? ` · shooter ${r.killer.id}` : ""}
+          {t("analysis.details.objectIdsValue", {
+            victimId: r.victim.id,
+            killerPart: r.killer ? t("analysis.details.killerIdPart", { killerId: r.killer.id }) : "",
+          })}
         </dd>
       </dl>
     </div>
   );
 }
 
-function confidenceText(k: KillRecord["kill"]): string {
+function confidenceText(k: KillRecord["kill"], t: TFunction): string {
   if (k.cause !== "weapon")
     return k.confidence === "medium"
-      ? "Medium: clear physical evidence (ejection, ground level, or another aircraft lost at the same spot)."
-      : "Low: the aircraft was descending fast, but there is no other evidence.";
-  if (k.confidence === "high")
-    return "High: the shooter was right next to the weapon at launch, and the target went down within 2 s of the hit.";
-  if (k.confidence === "medium")
-    return "Medium: the target went down some seconds after the hit, or the shooter is less certain.";
-  return "Low: a long time passed between the hit and the loss, or the shooter is uncertain.";
+      ? t("analysis.details.confOtherMed")
+      : t("analysis.details.confOtherLow");
+  if (k.confidence === "high") return t("analysis.details.confWeaponHigh");
+  if (k.confidence === "medium") return t("analysis.details.confWeaponMed");
+  return t("analysis.details.confWeaponLow");
 }
 
-function article(word: string): string {
-  return /^[aeiou]/i.test(word) ? "an" : "a";
-}
-
-function noteKind(n: string): string {
-  if (n === "friendly fire" || n.endsWith("confidence")) return "warn";
-  if (n === "pilot ejected") return "info";
+function noteKind(item: KillNoteItem): string {
+  if (item.kind === "friendlyFire" || item.kind === "confidence") return "warn";
+  if (item.kind === "pilotEjected") return "info";
   return "";
+}
+
+function noteLabel(item: KillNoteItem, t: TFunction): string {
+  switch (item.kind) {
+    case "friendlyFire":
+      return t("analysis.notes.friendlyFire");
+    case "pilotEjected":
+      return t("analysis.notes.pilotEjected");
+    case "shooterAlreadyDown":
+      return t("analysis.notes.shooterAlreadyDown");
+    case "wentDownAfterHit":
+      return t("analysis.notes.wentDownAfterHit", { seconds: item.seconds });
+    case "alsoHitBy":
+      return t("analysis.notes.alsoHitBy", { assists: item.assists });
+    case "confidence":
+      return item.level === "medium"
+        ? t("analysis.notes.mediumConfidence")
+        : t("analysis.notes.lowConfidence");
+  }
 }
 
 function PilotTable({
@@ -386,22 +446,23 @@ function PilotTable({
   selected: string;
   onSelect: (key: string) => void;
 }) {
-  if (pilots.length === 0) return <p className="muted">No pilots match the filter.</p>;
+  const { t } = useTranslation();
+  if (pilots.length === 0) return <p className="muted">{t("analysis.noPilotsMatch")}</p>;
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Pilot</th>
-            <th>Flying</th>
-            <th className="num" title="Air / ground / sea">
-              Kills
+            <th>{t("analysis.pilot")}</th>
+            <th>{t("analysis.flyingCol")}</th>
+            <th className="num" title={t("analysis.killsColTitle")}>
+              {t("analysis.killsCol")}
             </th>
-            <th className="num">Deaths</th>
-            <th className="num">Shots</th>
-            <th className="num">Gun bursts</th>
-            <th className="num" title="Shots and gun bursts that hit something">
-              Hits
+            <th className="num">{t("analysis.deathsCol")}</th>
+            <th className="num">{t("analysis.shotsCol")}</th>
+            <th className="num">{t("analysis.gunBurstsCol")}</th>
+            <th className="num" title={t("analysis.hitsColTitle")}>
+              {t("analysis.hitsCol")}
             </th>
           </tr>
         </thead>
@@ -412,7 +473,9 @@ function PilotTable({
                 <button
                   type="button"
                   className="link"
-                  title={selected === p.key ? "Show everyone" : "Show only this pilot"}
+                  title={
+                    selected === p.key ? t("analysis.showEveryoneTitle") : t("analysis.showOnlyPilotTitle")
+                  }
                   onClick={() => onSelect(p.key)}
                 >
                   <SideDot side={sides.get(p.key) ?? ""} />
@@ -428,7 +491,11 @@ function PilotTable({
                     ({p.airKills}/{p.groundKills}/{p.seaKills})
                   </span>
                 )}
-                {p.friendlyKills > 0 && <span className="badge warn">{p.friendlyKills} friendly</span>}
+                {p.friendlyKills > 0 && (
+                  <span className="badge warn">
+                    {t("analysis.friendlyBadge", { count: p.friendlyKills })}
+                  </span>
+                )}
               </td>
               <td className="num">{p.deaths}</td>
               <td className="num">{p.shots}</td>
@@ -453,6 +520,7 @@ function ShotsTable({
   filtered: boolean;
   fmt: (t: number) => string;
 }) {
+  const { t } = useTranslation();
   const [showGuns, setShowGuns] = useState(false);
   const [showAll, setShowAll] = useState(false);
   if (all.length === 0) return null;
@@ -463,28 +531,31 @@ function ShotsTable({
     <section className="card">
       <div className="card-head">
         <h3>
-          Shots ({all.length - gunCount} weapons{gunCount ? `, ${gunCount} gun bursts` : ""}
-          {filtered ? `; ${shown.length} shown` : ""})
+          {t("analysis.shotsHeading", {
+            weapons: all.length - gunCount,
+            guns: gunCount ? t("analysis.shotsGunsPart", { count: gunCount }) : "",
+            shown: filtered ? t("analysis.shotsShownPart", { count: shown.length }) : "",
+          })}
         </h3>
         {gunCount > 0 && (
           <label className="toggle">
-            <input type="checkbox" checked={showGuns} onChange={(e) => setShowGuns(e.target.checked)} /> Show
-            gun bursts
+            <input type="checkbox" checked={showGuns} onChange={(e) => setShowGuns(e.target.checked)} />{" "}
+            {t("analysis.showGunBursts")}
           </label>
         )}
       </div>
       {shown.length === 0 ? (
-        <p className="muted">No shots match the filter.</p>
+        <p className="muted">{t("analysis.noShotsMatch")}</p>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th className="num">Time</th>
-                <th>Fired by</th>
-                <th>Weapon</th>
-                <th>Locked target</th>
-                <th>Result</th>
+                <th className="num">{t("analysis.timeCol")}</th>
+                <th>{t("analysis.firedByCol")}</th>
+                <th>{t("analysis.weaponCol")}</th>
+                <th>{t("analysis.lockedTargetCol")}</th>
+                <th>{t("analysis.resultCol")}</th>
               </tr>
             </thead>
             <tbody>
@@ -496,19 +567,19 @@ function ShotsTable({
                       <>
                         <Who p={r.shooter} />
                         {r.shot.shooter && r.shot.shooter.confidence !== "high" && (
-                          <span className="badge warn">{r.shot.shooter.confidence}</span>
+                          <span className="badge warn">
+                            {r.shot.shooter.confidence === "medium"
+                              ? t("analysis.confidenceBadge.medium")
+                              : t("analysis.confidenceBadge.low")}
+                          </span>
                         )}
                       </>
                     ) : (
                       <span
                         className="muted"
-                        title={
-                          r.shot.firstSeenInFlight
-                            ? "Fired before the recording started, or out of the recorder's view"
-                            : ""
-                        }
+                        title={r.shot.firstSeenInFlight ? t("analysis.unknownInFlightTitle") : ""}
                       >
-                        {r.shot.firstSeenInFlight ? "Unknown (first seen in flight)" : "Unknown"}
+                        {r.shot.firstSeenInFlight ? t("analysis.unknownInFlight") : t("common.unknown")}
                       </span>
                     )}
                   </td>
@@ -520,16 +591,18 @@ function ShotsTable({
                   <td>
                     {r.shot.outcome === "hit" ? (
                       <>
-                        Hit{" "}
-                        {r.targets.map((t, i) => (
-                          <span key={t.uid}>
+                        {t("analysis.hitPrefix")}{" "}
+                        {r.targets.map((tgt, i) => (
+                          <span key={tgt.uid}>
                             {i > 0 && ", "}
-                            <Who p={t} />
+                            <Who p={tgt} />
                           </span>
                         ))}
                       </>
                     ) : (
-                      <span className="muted">{r.result}</span>
+                      <span className="muted">
+                        {r.shot.outcome === "active" ? t("analysis.stillFlyingAtEnd") : t("analysis.missed")}
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -540,7 +613,7 @@ function ShotsTable({
       )}
       {!showAll && shown.length > SHOT_LIMIT && (
         <button type="button" className="secondary more" onClick={() => setShowAll(true)}>
-          Show all {shown.length.toLocaleString()}
+          {t("analysis.showAll", { count: shown.length })}
         </button>
       )}
     </section>
@@ -548,47 +621,44 @@ function ShotsTable({
 }
 
 function Footnotes({ analysis }: { analysis: Analysis }) {
+  const { t } = useTranslation();
   const rw = analysis.removedWithoutEvidence;
   return (
     <>
       {rw.aircraft + rw.other > 0 && (
         <p className="muted footnote-left">
-          Also removed without any sign of being hit, colliding or crashing (not counted as losses):{" "}
-          {[
-            rw.aircraft
-              ? `${rw.aircraft} aircraft (player left, despawned, or out of the recorder's view)`
-              : "",
-            rw.other ? `${rw.other} other units` : "",
-          ]
-            .filter(Boolean)
-            .join(" and ")}
-          .
+          {t("analysis.footnotes.removedWithoutEvidence", {
+            parts: [
+              rw.aircraft ? t("analysis.footnotes.removedAircraft", { count: rw.aircraft }) : "",
+              rw.other ? t("analysis.footnotes.removedOther", { count: rw.other }) : "",
+            ]
+              .filter(Boolean)
+              .join(t("analysis.footnotes.andJoiner")),
+          })}
         </p>
       )}
       {analysis.massRemovals.length > 0 && (
         <p className="muted footnote-left">
-          Not counted as losses:{" "}
-          {analysis.massRemovals
-            .map((m) =>
-              m.atEnd
-                ? `${m.count} object${m.count === 1 ? "" : "s"} removed when the recording ended`
-                : `${m.count} objects removed together at ${formatElapsed(m.time)} (mission script or server reset)`,
-            )
-            .join("; ")}
-          .
+          {t("analysis.footnotes.notCountedAsLosses", {
+            parts: analysis.massRemovals
+              .map((m) =>
+                m.atEnd
+                  ? t("analysis.footnotes.massAtEnd", { count: m.count })
+                  : t("analysis.footnotes.massAtTime", { count: m.count, time: formatElapsed(m.time) }),
+              )
+              .join("; "),
+          })}
         </p>
       )}
-      <p className="muted footnote-left">
-        These recordings do not say who killed whom, so it is worked out from the data: who launched each
-        weapon, and which object it passed closest to when it disappeared. Click a row for details.
-      </p>
+      <p className="muted footnote-left">{t("analysis.footnotes.methodology")}</p>
     </>
   );
 }
 
 /** "Pilot (Aircraft)" with a side-coloured dot. */
 function Who({ p }: { p: Party | null }) {
-  if (!p) return <span className="muted">Unknown</span>;
+  const { t } = useTranslation();
+  if (!p) return <span className="muted">{t("common.unknown")}</span>;
   return (
     <span className="who">
       <SideDot side={p.side} />

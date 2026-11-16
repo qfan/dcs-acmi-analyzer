@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import type { FileAnalytics, MissileEngagement } from "../analytics/model.ts";
 import { AnalyticsPanels, useAnalyticsDashboard } from "../analytics/ui/AnalyticsDashboard.tsx";
 import { extractFilesInPool } from "../analytics/worker/client.ts";
@@ -44,6 +45,7 @@ export function RecordingAnalytics({
   name: string;
   onShowOnMap?: (e: MissileEngagement) => void;
 }) {
+  const { t } = useTranslation();
   const [enabled, setEnabled] = useState(readEnabled);
   const [state, setState] = useState<ExtractState | null>(null);
 
@@ -76,25 +78,34 @@ export function RecordingAnalytics({
       <section className="card">
         <div className="card-head">
           <div>
-            <h3>Missile analytics</h3>
+            <h3>{t("viewer.recordingAnalytics.title")}</h3>
             <p className="muted small">
-              Shot geometry, kill conditions, defeat modes and pilot stats for this recording. Patch
-              comparison and the BVR timeline validator need many recordings, so they stay on the{" "}
-              <a href="./analytics.html">Analytics page</a>.
+              <Trans
+                i18nKey="viewer.recordingAnalytics.desc"
+                components={[
+                  <a key="0" href="./analytics.html">
+                    Analytics
+                  </a>,
+                ]}
+              />
             </p>
           </div>
           <label className="toggle">
-            <input type="checkbox" checked={enabled} onChange={(e) => toggle(e.target.checked)} /> Enable
-            analytics
+            <input type="checkbox" checked={enabled} onChange={(e) => toggle(e.target.checked)} />{" "}
+            {t("viewer.recordingAnalytics.enable")}
           </label>
         </div>
         {state?.phase === "loading" && (
           <div>
-            <p className="muted small">Extracting shots… {Math.round(state.progress * 100)}%</p>
+            <p className="muted small">
+              {t("viewer.recordingAnalytics.extracting", { pct: Math.round(state.progress * 100) })}
+            </p>
             <progress max={1} value={state.progress} style={{ width: "100%" }} />
           </div>
         )}
-        {state?.phase === "error" && <p className="notice">Analytics failed: {state.message}</p>}
+        {state?.phase === "error" && (
+          <p className="notice">{t("viewer.recordingAnalytics.failed", { error: state.message })}</p>
+        )}
       </section>
       {state?.phase === "done" && (
         <SingleFileDashboard analytics={state.analytics} onShowOnMap={onShowOnMap} />
@@ -110,13 +121,14 @@ function SingleFileDashboard({
   analytics: FileAnalytics;
   onShowOnMap?: (e: MissileEngagement) => void;
 }) {
+  const { t } = useTranslation();
   const files = useMemo(() => [analytics], [analytics]);
   // One recording on its own: nothing to pollute, so a BVR Trainer fight shows its own shots.
   const dash = useAnalyticsDashboard(files, SINGLE_FILE_QUERY);
   if (analytics.engagements.length === 0) {
     return (
       <section className="card">
-        <p className="muted">No weapon launches were found in this recording.</p>
+        <p className="muted">{t("viewer.recordingAnalytics.noLaunches")}</p>
       </section>
     );
   }

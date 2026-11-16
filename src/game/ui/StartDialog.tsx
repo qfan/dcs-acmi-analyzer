@@ -1,7 +1,9 @@
 /** The New game dialog: a short header, then Single player and Multiplayer tabs. */
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { BVR_TRAINER_VERSION } from "../../acmi/source.ts";
-import { AI_SKILL_CHOICES, skillChoiceLabel } from "../ai/doctrine.ts";
+import { LanguageSelector } from "../../i18n/LanguageSelector.tsx";
+import { AI_SKILL_CHOICES } from "../ai/doctrine.ts";
 import { ALTITUDES_FT, SCENARIOS, type ScenarioOptions, scenarioById } from "../sim/scenarios.ts";
 
 export const LOADOUT_MISSILES = [4, 6, 8, 10] as const;
@@ -16,7 +18,7 @@ export function FightSettings({
   onMissiles,
   fog,
   onFog,
-  fogLabels = ["Off: see everything", "On: radar and RWR only"],
+  fogLabels,
   disabled = false,
 }: {
   altFt: number;
@@ -28,10 +30,12 @@ export function FightSettings({
   fogLabels?: [string, string];
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
+  const resolvedFogLabels = fogLabels ?? [t("game.startDialog.fogOff"), t("game.startDialog.fogOn")];
   return (
     <>
       <div className="g-row">
-        <span className="g-label">Start altitude</span>
+        <span className="g-label">{t("game.startDialog.startAltitude")}</span>
         <div className="g-seg">
           {ALTITUDES_FT.map((a) => (
             <button
@@ -41,13 +45,13 @@ export function FightSettings({
               className={a === altFt ? "on" : ""}
               onClick={() => onAlt(a)}
             >
-              {(a / 1000).toFixed(0)}k ft
+              {t("game.startDialog.altKft", { k: (a / 1000).toFixed(0) })}
             </button>
           ))}
         </div>
       </div>
       <div className="g-row">
-        <span className="g-label">Loadout</span>
+        <span className="g-label">{t("game.startDialog.loadout")}</span>
         <div className="g-seg">
           {LOADOUT_MISSILES.map((n) => (
             <button
@@ -56,21 +60,21 @@ export function FightSettings({
               disabled={disabled}
               className={n === missiles ? "on" : ""}
               onClick={() => onMissiles(n)}
-              title="Missiles per jet for both sides"
+              title={t("game.startDialog.missilesTitle")}
             >
-              {n} missiles
+              {t("game.startDialog.missilesCount", { count: n })}
             </button>
           ))}
         </div>
       </div>
       <div className="g-row">
-        <span className="g-label">Fog of war</span>
+        <span className="g-label">{t("game.startDialog.fogOfWar")}</span>
         <div className="g-seg">
           <button type="button" disabled={disabled} className={fog ? "" : "on"} onClick={() => onFog(false)}>
-            {fogLabels[0]}
+            {resolvedFogLabels[0]}
           </button>
           <button type="button" disabled={disabled} className={fog ? "on" : ""} onClick={() => onFog(true)}>
-            {fogLabels[1]}
+            {resolvedFogLabels[1]}
           </button>
         </div>
       </div>
@@ -91,19 +95,20 @@ export function StartDialog({
   single: ReactNode;
   multi: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: clicking the backdrop closes the dialog; Escape does too
     <div className="g-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="g-modal g-start" role="dialog" aria-label="New game">
-        <h2>
-          BVR Trainer <span className="g-muted g-version">v{BVR_TRAINER_VERSION}</span>
-        </h2>
+      <div className="g-modal g-start" role="dialog" aria-label={t("game.startDialog.aria")}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <h2>
+            {t("game.title")} <span className="g-muted g-version">v{BVR_TRAINER_VERSION}</span>
+          </h2>
+          <LanguageSelector />
+        </div>
         <p className="g-muted g-intro">
-          F/A-18C vs F/A-18C with AIM-120Cs. Altitude matters: thin air up high lets missiles fly much
-          further.{" "}
-          <span className="g-disclaimer-inline">
-            Unofficial training game, simplified values; full notice at the bottom of the side panel.
-          </span>
+          {t("game.startDialog.intro")}{" "}
+          <span className="g-disclaimer-inline">{t("game.startDialog.disclaimer")}</span>
         </p>
         <div className="g-tabs" role="tablist">
           <button
@@ -113,7 +118,7 @@ export function StartDialog({
             className={tab === "single" ? "on" : ""}
             onClick={() => onTab("single")}
           >
-            Single player
+            {t("game.startDialog.singleTab")}
           </button>
           <button
             type="button"
@@ -122,14 +127,14 @@ export function StartDialog({
             className={tab === "multi" ? "on" : ""}
             onClick={() => onTab("multi")}
           >
-            Multiplayer
+            {t("game.startDialog.multiTab")}
           </button>
         </div>
         <div role="tabpanel">{tab === "single" ? single : multi}</div>
         {onClose && (
           <div className="g-row g-end">
             <button type="button" onClick={onClose}>
-              Close
+              {t("common.close")}
             </button>
           </div>
         )}
@@ -163,6 +168,7 @@ export function SinglePlayerTab({
   onFog: (on: boolean) => void;
   onStart: () => void;
 }) {
+  const { t } = useTranslation();
   const sel = scenarioById(scenarioId);
   return (
     <>
@@ -170,12 +176,14 @@ export function SinglePlayerTab({
         {SCENARIOS.filter((s) => !s.mpOnly).map((s) => (
           <label key={s.id} className={`g-scn ${s.id === scenarioId ? "on" : ""}`}>
             <input type="radio" name="scn" checked={s.id === scenarioId} onChange={() => onScenario(s.id)} />
-            <b>{s.title}</b>
-            <span className="g-muted">{s.summary}</span>
+            <b>{t(`game.scenarios.${s.id}.title`, { defaultValue: s.title })}</b>
+            <span className="g-muted">
+              {t(`game.scenarios.${s.id}.summary`, { defaultValue: s.summary })}
+            </span>
           </label>
         ))}
       </div>
-      <p className="g-lesson">{sel.lesson}</p>
+      <p className="g-lesson">{t(`game.scenarios.${sel.id}.lesson`, { defaultValue: sel.lesson })}</p>
       <FightSettings
         altFt={altFt}
         onAlt={onAlt}
@@ -187,7 +195,7 @@ export function SinglePlayerTab({
       {sel.npc && (
         <>
           <div className="g-row">
-            <span className="g-label">Bandits</span>
+            <span className="g-label">{t("game.startDialog.bandits")}</span>
             <div className="g-seg">
               {AI_SKILL_CHOICES.map((k) => (
                 <button
@@ -195,15 +203,15 @@ export function SinglePlayerTab({
                   key={k}
                   className={options.redSkill === k ? "on" : ""}
                   onClick={() => onOptions({ ...options, redSkill: k })}
-                  title={k === "random" ? "Pick Easy, Normal, or Hard per NPC at spawn time" : undefined}
+                  title={k === "random" ? t("game.startDialog.randomRedTitle") : undefined}
                 >
-                  {skillChoiceLabel(k)}
+                  {t(`game.skill.${k}`)}
                 </button>
               ))}
             </div>
           </div>
           <div className="g-row">
-            <span className="g-label">Blue</span>
+            <span className="g-label">{t("game.startDialog.blue")}</span>
             <div className="g-seg">
               {!sel.allNpc && (
                 <button
@@ -211,7 +219,7 @@ export function SinglePlayerTab({
                   className={options.blueAi === null ? "on" : ""}
                   onClick={() => onOptions({ ...options, blueAi: null })}
                 >
-                  You fly
+                  {t("game.startDialog.youFly")}
                 </button>
               )}
               {AI_SKILL_CHOICES.map((k) => {
@@ -224,11 +232,11 @@ export function SinglePlayerTab({
                     onClick={() => onOptions({ ...options, blueAi: k })}
                     title={
                       k === "random"
-                        ? "Pick Easy, Normal, or Hard per Blue NPC at spawn time"
-                        : "The NPC flies blue too: watch NPC vs NPC"
+                        ? t("game.startDialog.randomBlueTitle")
+                        : t("game.startDialog.watchNpcTitle")
                     }
                   >
-                    NPC {skillChoiceLabel(k)}
+                    {t("game.startDialog.npcSkill", { skill: t(`game.skill.${k}`) })}
                   </button>
                 );
               })}
@@ -238,7 +246,7 @@ export function SinglePlayerTab({
       )}
       <div className="g-row g-end">
         <button type="button" className="g-primary" onClick={onStart}>
-          Start
+          {t("game.startDialog.startBtn")}
         </button>
       </div>
     </>

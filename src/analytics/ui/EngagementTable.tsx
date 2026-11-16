@@ -1,16 +1,9 @@
 import { Fragment, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import type { Settings } from "../../settings/schema.ts";
 import { fmtAlt, fmtDist, fmtShortDist, fmtSpeed } from "../../settings/units.ts";
 import { formatElapsed } from "../../ui/records.ts";
-import {
-  ALT_RELATION_COLORS,
-  ALT_RELATION_LABELS,
-  ASPECT_LABELS,
-  ASPECT_SHORT_LABELS,
-  type MissileEngagement,
-  type PlatformSnapshot,
-  WEAPON_CLASS_LABELS,
-} from "../model.ts";
+import { ALT_RELATION_COLORS, type MissileEngagement, type PlatformSnapshot } from "../model.ts";
 
 interface Props {
   engagements: MissileEngagement[];
@@ -27,6 +20,7 @@ type SortKey = "range" | "time" | "shooterAlt" | "targetAlt" | "aspect" | "closu
 const ROW_LIMIT = 200;
 
 export function EngagementTable({ engagements, kills, units, selectedId, onSelectId, onShowOnMap }: Props) {
+  const { t } = useTranslation();
   const [tableScope, setTableScope] = useState<"kills" | "all">("kills");
   const [sortKey, setSortKey] = useState<SortKey>("range");
   const [sortDesc, setSortDesc] = useState(true);
@@ -75,68 +69,75 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
       <div className="card-head">
         <div>
           <h3>
-            Matching {tableScope === "kills" ? "Kills" : "Shots"} ({sourceRows.length.toLocaleString()})
+            {tableScope === "kills"
+              ? t("analytics.table.titleKills", { count: sourceRows.length })
+              : t("analytics.table.titleShots", { count: sourceRows.length })}
           </h3>
           <p className="muted small matrix-sub">
-            Click any row to inspect its complete launch-time initial condition geometry.
-            {onShowOnMap && " Map jumps to a few seconds before the launch with shooter and target selected."}
+            {t("analytics.table.sub")}
+            {onShowOnMap && t("analytics.table.subShowOnMap")}
           </p>
         </div>
-        <fieldset className="mode-switch" aria-label="Table scope">
+        <fieldset className="mode-switch" aria-label={t("analytics.table.scopeAria")}>
           <button
             type="button"
             className={tableScope === "kills" ? "on" : ""}
             onClick={() => setTableScope("kills")}
           >
-            Kills Only ({kills.length})
+            {t("analytics.table.killsOnly", { count: kills.length })}
           </button>
           <button
             type="button"
             className={tableScope === "all" ? "on" : ""}
             onClick={() => setTableScope("all")}
           >
-            All Matching Shots ({engagements.length})
+            {t("analytics.table.allMatchingShots", { count: engagements.length })}
           </button>
         </fieldset>
       </div>
 
       {sourceRows.length === 0 ? (
-        <p className="muted">No engagements match the current filters.</p>
+        <p className="muted">{t("analytics.table.noMatch")}</p>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                {onShowOnMap ? <th aria-label="Show on map" /> : null}
-                <th>Recording</th>
+                {onShowOnMap ? <th aria-label={t("analytics.table.showOnMapAria")} /> : null}
+                <th>{t("analytics.table.recordingCol")}</th>
                 <th className="num">
                   <button type="button" className="link" onClick={() => toggleSort("time")}>
-                    Launch{sortArrow("time")}
+                    {t("analytics.table.launchCol")}
+                    {sortArrow("time")}
                   </button>
                 </th>
-                <th>Outcome</th>
-                <th>Weapon</th>
-                <th>Launcher</th>
-                <th>Target</th>
+                <th>{t("analytics.table.outcomeCol")}</th>
+                <th>{t("analytics.table.weaponCol")}</th>
+                <th>{t("analytics.table.launcherCol")}</th>
+                <th>{t("analytics.table.targetCol")}</th>
                 <th className="num">
                   <button type="button" className="link" onClick={() => toggleSort("range")}>
-                    Initial Range{sortArrow("range")}
+                    {t("analytics.table.initialRangeCol")}
+                    {sortArrow("range")}
                   </button>
                 </th>
-                <th>Altitude Relation</th>
+                <th>{t("analytics.table.altRelationCol")}</th>
                 <th className="num">
                   <button type="button" className="link" onClick={() => toggleSort("aspect")}>
-                    Target Aspect{sortArrow("aspect")}
+                    {t("analytics.table.targetAspectCol")}
+                    {sortArrow("aspect")}
                   </button>
                 </th>
                 <th className="num">
                   <button type="button" className="link" onClick={() => toggleSort("closure")}>
-                    Closure{sortArrow("closure")}
+                    {t("analytics.table.closureCol")}
+                    {sortArrow("closure")}
                   </button>
                 </th>
                 <th className="num">
                   <button type="button" className="link" onClick={() => toggleSort("flightTime")}>
-                    TOF{sortArrow("flightTime")}
+                    {t("analytics.table.tofCol")}
+                    {sortArrow("flightTime")}
                   </button>
                 </th>
               </tr>
@@ -156,13 +157,13 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                           <button
                             type="button"
                             className="secondary small-btn"
-                            title="Jump the map to this shot"
+                            title={t("analytics.table.jumpToMapTitle")}
                             onClick={(ev) => {
                               ev.stopPropagation();
                               onShowOnMap(e);
                             }}
                           >
-                            Map
+                            {t("analytics.table.mapBtn")}
                           </button>
                         </td>
                       )}
@@ -195,14 +196,17 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                         {e.ufo && e.ufo.shooter + e.ufo.target > 0 && (
                           <span
                             className="badge warn"
-                            title={`Off-path ("UFO") samples around this shot: shooter ${e.ufo.shooter}, target ${e.ufo.target}. Launch geometry and miss distance may be wrong.`}
+                            title={t("analytics.table.ufoTitle", {
+                              shooter: e.ufo.shooter,
+                              target: e.ufo.target,
+                            })}
                           >
                             UFO
                           </span>
                         )}
                         {e.targetSource === "inferred" && (
-                          <span className="badge" title="Target inferred from trajectory / launch cone">
-                            inferred
+                          <span className="badge" title={t("analytics.table.inferredTitle")}>
+                            {t("analytics.table.inferredBadge")}
                           </span>
                         )}
                       </td>
@@ -216,7 +220,7 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                               className="dot"
                               style={{ background: ALT_RELATION_COLORS[ic.altitudeRelation] }}
                             />
-                            {ALT_RELATION_LABELS[ic.altitudeRelation]}
+                            {t(`analytics.models.altRelation.${ic.altitudeRelation}`)}
                           </span>
                         ) : (
                           <span className="muted">–</span>
@@ -225,7 +229,7 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                       <td className="num">
                         {ic ? (
                           <span>
-                            {ASPECT_SHORT_LABELS[ic.aspectCategory]}{" "}
+                            {t(`analytics.models.aspectShort.${ic.aspectCategory}`)}{" "}
                             <span className="muted small">({Math.round(ic.aspectDeg)}°)</span>
                           </span>
                         ) : (
@@ -242,7 +246,7 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
                         <td colSpan={onShowOnMap ? 12 : 11}>
                           {onShowOnMap && (
                             <button type="button" className="small-btn" onClick={() => onShowOnMap(e)}>
-                              Show on map
+                              {t("analytics.table.showOnMapBtn")}
                             </button>
                           )}
                           <EngagementDetailsCard e={e} units={units} />
@@ -259,7 +263,7 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
 
       {!showAll && sortedRows.length > ROW_LIMIT && (
         <button type="button" className="secondary more" onClick={() => setShowAll(true)}>
-          Show all {sortedRows.length.toLocaleString()} rows
+          {t("analytics.table.showAllRows", { count: sortedRows.length })}
         </button>
       )}
     </section>
@@ -267,15 +271,21 @@ export function EngagementTable({ engagements, kills, units, selectedId, onSelec
 }
 
 function OutcomeBadge({ e }: { e: MissileEngagement }) {
-  if (e.isKill) return <span className="badge badge-kill">KILL</span>;
-  if (e.outcome === "hit-damaged") return <span className="badge info">HIT</span>;
-  if (e.outcome === "intercept") return <span className="badge info">INTERCEPT</span>;
-  if (e.outcome === "active") return <span className="badge">ACTIVE</span>;
-  return <span className="badge">MISS</span>;
+  const { t } = useTranslation();
+  if (e.isKill) return <span className="badge badge-kill">{t("analytics.table.outcomes.kill")}</span>;
+  if (e.outcome === "hit-damaged") {
+    return <span className="badge info">{t("analytics.table.outcomes.hit")}</span>;
+  }
+  if (e.outcome === "intercept") {
+    return <span className="badge info">{t("analytics.table.outcomes.intercept")}</span>;
+  }
+  if (e.outcome === "active") return <span className="badge">{t("analytics.table.outcomes.active")}</span>;
+  return <span className="badge">{t("analytics.table.outcomes.miss")}</span>;
 }
 
 function PlatformWho({ p, units }: { p: PlatformSnapshot | null; units: Settings["units"] }) {
-  if (!p) return <span className="muted">Unknown</span>;
+  const { t } = useTranslation();
+  if (!p) return <span className="muted">{t("common.unknown")}</span>;
   const sideCls = `side-bg-${(p.side || "grey").toLowerCase()}`;
   return (
     <span className="who">
@@ -293,6 +303,7 @@ function PlatformWho({ p, units }: { p: PlatformSnapshot | null; units: Settings
 }
 
 function EngagementDetailsCard({ e, units }: { e: MissileEngagement; units: Settings["units"] }) {
+  const { t: tr } = useTranslation();
   const ic = e.initial;
   const s = e.shooter;
   const t = e.target;
@@ -300,57 +311,79 @@ function EngagementDetailsCard({ e, units }: { e: MissileEngagement; units: Sett
   return (
     <div className="details engagement-details-grid">
       <div>
-        <h4>Initial Condition Summary</h4>
+        <h4>{tr("analytics.table.details.icSummary")}</h4>
         <dl className="kv compact">
-          <dt>Recording</dt>
+          <dt>{tr("analytics.table.details.recording")}</dt>
           <dd>{e.fileName}</dd>
-          <dt>Weapon</dt>
+          <dt>{tr("analytics.table.details.weapon")}</dt>
           <dd>
-            <strong>{e.weaponName}</strong> ({WEAPON_CLASS_LABELS[e.weaponClass]})
-            {e.isGun ? ` · ${e.rounds} rounds` : ""}
+            <strong>{e.weaponName}</strong> ({tr(`analytics.models.weaponClass.${e.weaponClass}`)})
+            {e.isGun ? tr("analytics.table.details.rounds", { count: e.rounds }) : ""}
           </dd>
-          <dt>Launch → Outcome</dt>
+          <dt>{tr("analytics.table.details.launchOutcome")}</dt>
           <dd>
-            Launched at {formatElapsed(e.launchTime)}
-            {e.killTime !== null ? ` · Target destroyed at ${formatElapsed(e.killTime)}` : ""}
-            {e.flightTimeS !== null ? ` (${e.flightTimeS.toFixed(1)} s flight time)` : ""}
+            {tr("analytics.table.details.launchedAt", { time: formatElapsed(e.launchTime) })}
+            {e.killTime !== null
+              ? tr("analytics.table.details.destroyedAt", { time: formatElapsed(e.killTime) })
+              : ""}
+            {e.flightTimeS !== null
+              ? tr("analytics.table.details.flightTime", { s: e.flightTimeS.toFixed(1) })
+              : ""}
           </dd>
           {ic && (
             <>
-              <dt>Initial Range</dt>
+              <dt>{tr("analytics.table.details.initialRange")}</dt>
               <dd>
-                <strong>{fmtDist(ic.slantRangeM, units.distance)}</strong> slant (
-                {fmtDist(ic.horizontalRangeM, units.distance)} horizontal)
+                {tr("analytics.table.details.slantHoriz", {
+                  slant: fmtDist(ic.slantRangeM, units.distance),
+                  horiz: fmtDist(ic.horizontalRangeM, units.distance),
+                })}
                 {e.fPoleRangeM !== null
-                  ? ` · F-pole at impact: ${fmtDist(e.fPoleRangeM, units.distance)}`
+                  ? tr("analytics.table.details.fPole", {
+                      dist: fmtDist(e.fPoleRangeM, units.distance),
+                    })
                   : ""}
               </dd>
-              <dt>Altitude Relation</dt>
+              <dt>{tr("analytics.table.details.altRelation")}</dt>
               <dd>
-                <strong>{ALT_RELATION_LABELS[ic.altitudeRelation]}</strong> · Target{" "}
-                {fmtShortDist(Math.abs(ic.altDiffM), units.altitude)} {ic.altDiffM >= 0 ? "above" : "below"}{" "}
-                shooter (look angle {ic.lookAngleDeg >= 0 ? "+" : ""}
-                {ic.lookAngleDeg.toFixed(1)}°)
+                <strong>{tr(`analytics.models.altRelation.${ic.altitudeRelation}`)}</strong> ·{" "}
+                {tr("analytics.table.details.altDetail", {
+                  diff: fmtShortDist(Math.abs(ic.altDiffM), units.altitude),
+                  dir:
+                    ic.altDiffM >= 0
+                      ? tr("analytics.table.details.above")
+                      : tr("analytics.table.details.below"),
+                  look: `${ic.lookAngleDeg >= 0 ? "+" : ""}${ic.lookAngleDeg.toFixed(1)}`,
+                })}
               </dd>
-              <dt>Target Aspect</dt>
+              <dt>{tr("analytics.table.details.targetAspect")}</dt>
               <dd>
-                <strong>{ASPECT_LABELS[ic.aspectCategory]}</strong> · {Math.round(ic.aspectDeg)}° aspect (HCA{" "}
-                {Math.round(ic.hcaDeg)}°)
+                <strong>{tr(`analytics.models.aspect.${ic.aspectCategory}`)}</strong> ·{" "}
+                {tr("analytics.table.details.aspectDetail", {
+                  deg: Math.round(ic.aspectDeg),
+                  hca: Math.round(ic.hcaDeg),
+                })}
               </dd>
-              <dt>Boresight & Clock</dt>
+              <dt>{tr("analytics.table.details.boresightClock")}</dt>
               <dd>
-                Target at {ic.clock} o&apos;clock · Shooter ATA {Math.round(ic.shooterAtaDeg)}° · Target ATA{" "}
-                {Math.round(ic.targetAtaDeg)}°
+                {tr("analytics.table.details.clockDetail", {
+                  clock: ic.clock,
+                  sAta: Math.round(ic.shooterAtaDeg),
+                  tAta: Math.round(ic.targetAtaDeg),
+                })}
               </dd>
-              <dt>Closure Rate</dt>
+              <dt>{tr("analytics.table.details.closureRate")}</dt>
               <dd>
-                {fmtSpeed(Math.abs(ic.closureMs), units.speed)} {ic.closureMs >= 0 ? "closing" : "opening"}
+                {fmtSpeed(Math.abs(ic.closureMs), units.speed)}{" "}
+                {ic.closureMs >= 0
+                  ? tr("analytics.table.details.closing")
+                  : tr("analytics.table.details.opening")}
               </dd>
             </>
           )}
           {e.missDistanceM !== null && (
             <>
-              <dt>Closest Approach</dt>
+              <dt>{tr("analytics.table.details.closestApproach")}</dt>
               <dd>{fmtShortDist(e.missDistanceM, units.altitude)}</dd>
             </>
           )}
@@ -358,54 +391,72 @@ function EngagementDetailsCard({ e, units }: { e: MissileEngagement; units: Sett
       </div>
 
       <div>
-        <h4>Launcher & Target State at Launch</h4>
+        <h4>{tr("analytics.table.details.launcherTargetState")}</h4>
         <dl className="kv compact">
-          <dt>Launcher</dt>
+          <dt>{tr("analytics.table.details.launcher")}</dt>
           <dd>
             {s ? (
               <>
                 <strong>{s.pilot ? `${s.pilot} (${s.name})` : s.name}</strong> [{s.side}]
                 <br />
-                Alt: {fmtAlt(s.altM, units.altitude)} · Speed: {fmtSpeed(s.speedMs, units.speed)}
+                {tr("analytics.table.details.altSpeed", {
+                  alt: fmtAlt(s.altM, units.altitude),
+                  speed: fmtSpeed(s.speedMs, units.speed),
+                })}
                 {s.mach !== null ? ` (Mach ${s.mach.toFixed(2)})` : ""}
-                {s.headingDeg !== null ? ` · Hdg ${Math.round(s.headingDeg)}°` : ""}
+                {s.headingDeg !== null
+                  ? tr("analytics.table.details.hdg", { deg: Math.round(s.headingDeg) })
+                  : ""}
                 {s.pitchDeg !== null
-                  ? ` · Pitch ${s.pitchDeg >= 0 ? "+" : ""}${Math.round(s.pitchDeg)}°`
+                  ? tr("analytics.table.details.pitch", {
+                      deg: `${s.pitchDeg >= 0 ? "+" : ""}${Math.round(s.pitchDeg)}`,
+                    })
                   : ""}
               </>
             ) : (
-              "Unknown"
+              tr("common.unknown")
             )}
           </dd>
-          <dt>Target</dt>
+          <dt>{tr("analytics.table.details.target")}</dt>
           <dd>
             {t ? (
               <>
                 <strong>{t.pilot ? `${t.pilot} (${t.name})` : t.name}</strong> [{t.side}]
-                {e.targetEjected ? " · Pilot ejected" : ""}
+                {e.targetEjected ? tr("analytics.table.details.ejected") : ""}
                 <br />
-                Alt: {fmtAlt(t.altM, units.altitude)} · Speed: {fmtSpeed(t.speedMs, units.speed)}
+                {tr("analytics.table.details.altSpeed", {
+                  alt: fmtAlt(t.altM, units.altitude),
+                  speed: fmtSpeed(t.speedMs, units.speed),
+                })}
                 {t.mach !== null ? ` (Mach ${t.mach.toFixed(2)})` : ""}
-                {t.headingDeg !== null ? ` · Hdg ${Math.round(t.headingDeg)}°` : ""}
+                {t.headingDeg !== null
+                  ? tr("analytics.table.details.hdg", { deg: Math.round(t.headingDeg) })
+                  : ""}
                 {t.pitchDeg !== null
-                  ? ` · Pitch ${t.pitchDeg >= 0 ? "+" : ""}${Math.round(t.pitchDeg)}°`
+                  ? tr("analytics.table.details.pitch", {
+                      deg: `${t.pitchDeg >= 0 ? "+" : ""}${Math.round(t.pitchDeg)}`,
+                    })
                   : ""}
               </>
             ) : (
-              "Unknown"
+              tr("common.unknown")
             )}
           </dd>
-          <dt>Attribution</dt>
+          <dt>{tr("analytics.table.details.attribution")}</dt>
           <dd>
-            Confidence: <strong>{e.confidence}</strong> · Target source: <strong>{e.targetSource}</strong>
-            {e.friendlyFire ? " · Friendly Fire" : ""}
+            {tr("analytics.table.details.confidence")} <strong>{e.confidence}</strong>
+            {tr("analytics.table.details.targetSource")} <strong>{e.targetSource}</strong>
+            {e.friendlyFire ? tr("analytics.table.details.friendlyFire") : ""}
           </dd>
           {e.ufo && e.ufo.shooter + e.ufo.target > 0 && (
             <>
-              <dt>Track quality</dt>
+              <dt>{tr("analytics.table.details.trackQuality")}</dt>
               <dd>
-                Off-path ("UFO") samples from 10 s before launch to 5 s after the shot: shooter{" "}
-                <strong>{e.ufo.shooter}</strong> · target <strong>{e.ufo.target}</strong>
+                <Trans
+                  i18nKey="analytics.table.details.ufoSamples"
+                  values={{ shooter: e.ufo.shooter, target: e.ufo.target }}
+                  components={[<strong key="0" />, <strong key="1" />]}
+                />
               </dd>
             </>
           )}

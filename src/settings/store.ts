@@ -127,21 +127,32 @@ export function exportJson(state: SettingsState): string {
   );
 }
 
-export function importJson(text: string): { ok: true; state: SettingsState } | { ok: false; error: string } {
+export type SettingsErrorCode =
+  | "invalidJson"
+  | "notSettingsFile"
+  | "newerVersion"
+  | "emptyProfileName"
+  | "profileNameTooLong"
+  | "builtInProfileName";
+
+export function importJson(
+  text: string,
+): { ok: true; state: SettingsState } | { ok: false; error: string; errorCode: SettingsErrorCode } {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    return { ok: false, error: "This file is not valid JSON." };
+    return { ok: false, error: "This file is not valid JSON.", errorCode: "invalidJson" };
   }
   const r = raw as { format?: unknown; version?: unknown; settings?: unknown; profiles?: unknown };
   if (!r || typeof r !== "object" || r.format !== EXPORT_FORMAT)
-    return { ok: false, error: "This is not an ACMI Viewer settings file." };
+    return { ok: false, error: "This is not an ACMI Viewer settings file.", errorCode: "notSettingsFile" };
   const version = typeof r.version === "number" ? r.version : 1;
   if (version > SETTINGS_VERSION)
     return {
       ok: false,
       error: "These settings come from a newer version of the viewer. Please update it first.",
+      errorCode: "newerVersion",
     };
   return {
     ok: true,
@@ -159,7 +170,7 @@ export interface SettingsStore {
   subscribe(fn: () => void): () => void;
   update(partial: DeepPartial<Settings>): void;
   applyProfile(p: Profile): void;
-  saveProfile(name: string): { ok: boolean; error?: string };
+  saveProfile(name: string): { ok: boolean; error?: string; errorCode?: SettingsErrorCode };
   deleteProfile(name: string): void;
   replace(state: SettingsState): void;
   reset(): void;
@@ -189,10 +200,15 @@ export function createSettingsStore(storage: StorageLike | null): SettingsStore 
     },
     saveProfile(name) {
       const n = name.trim();
-      if (!n) return { ok: false, error: "Give the profile a name." };
-      if (n.length > 60) return { ok: false, error: "That name is too long." };
+      if (!n) return { ok: false, error: "Give the profile a name.", errorCode: "emptyProfileName" };
+      if (n.length > 60)
+        return { ok: false, error: "That name is too long.", errorCode: "profileNameTooLong" };
       if (BUILT_IN_PROFILES.some((b) => b.name === n))
-        return { ok: false, error: "That name belongs to a built-in profile." };
+        return {
+          ok: false,
+          error: "That name belongs to a built-in profile.",
+          errorCode: "builtInProfileName",
+        };
       const others = state.profiles.filter((p) => p.name !== n);
       commit({ ...state, profiles: [...others, { name: n, settings: state.settings }] });
       return { ok: true };

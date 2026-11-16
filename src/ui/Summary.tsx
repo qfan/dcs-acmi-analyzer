@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { ObjectSummary } from "../acmi/summary.ts";
 import { useSettings } from "../settings/react.ts";
 import type { ParseOutcome } from "../worker/client.ts";
@@ -27,6 +28,7 @@ const isAircraft = (o: ObjectSummary) =>
 const isWeapon = (o: ObjectSummary) => o.tags.includes("Weapon");
 
 export function Summary({ name, file, outcome }: { name: string; file: Blob; outcome: ParseOutcome }) {
+  const { t } = useTranslation();
   const clock = useSettings().settings.time.clock;
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const r = outcome.summary;
@@ -52,24 +54,14 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
           <h2>{g.Title || name}</h2>
           <p className="muted file-name">{name}</p>
           <div className="stats">
-            <Stat label="Duration" value={formatDuration(duration)} />
-            <Stat label="Aircraft" value={aircraft.length.toLocaleString()} />
-            <Stat label="Weapons released" value={weapons.length.toLocaleString()} />
-            <Stat label="Objects" value={r.objects.length.toLocaleString()} />
-            <Stat label="Events" value={r.events.length.toLocaleString()} />
+            <Stat label={t("viewer.summary.duration")} value={formatDuration(duration)} />
+            <Stat label={t("viewer.summary.aircraft")} value={aircraft.length.toLocaleString()} />
+            <Stat label={t("viewer.summary.weaponsReleased")} value={weapons.length.toLocaleString()} />
+            <Stat label={t("viewer.summary.objects")} value={r.objects.length.toLocaleString()} />
+            <Stat label={t("viewer.summary.events")} value={r.events.length.toLocaleString()} />
           </div>
-          {r.container.incomplete && (
-            <p className="notice">
-              This zip archive was never finished (the recording was probably interrupted). The data that was
-              there has been recovered.
-            </p>
-          )}
-          {r.truncated && (
-            <p className="notice">
-              This recording appears unfinished: the file ends partway through a line. Everything before that
-              point was read.
-            </p>
-          )}
+          {r.container.incomplete && <p className="notice">{t("viewer.summary.incompleteZip")}</p>}
+          {r.truncated && <p className="notice">{t("viewer.summary.truncated")}</p>}
         </section>
 
         {outcome.map && outcome.map.tracks.length > 0 && (
@@ -96,7 +88,7 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
             }
           />
         )}
-        <Pinnable id="analytics" title="Missile analytics">
+        <Pinnable id="analytics" title={t("viewer.summary.missileAnalyticsTitle")}>
           <RecordingAnalytics
             file={file}
             name={name}
@@ -121,29 +113,29 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
 
         {outcome.analysisError && (
           <section className="card">
-            <p className="notice">The kill analysis failed: {outcome.analysisError}</p>
+            <p className="notice">{t("viewer.summary.analysisFailed", { error: outcome.analysisError })}</p>
           </section>
         )}
 
-        <Pinnable id="aircraft" title="Aircraft">
+        <Pinnable id="aircraft" title={t("viewer.summary.aircraft")}>
           <section className="card">
-            <h3>Aircraft ({aircraft.length})</h3>
+            <h3>{t("viewer.summary.aircraftCount", { count: aircraft.length })}</h3>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Pilot</th>
-                    <th>Type</th>
-                    <th>Group</th>
-                    <th>Side</th>
-                    <th className="num">Appeared</th>
-                    <th className="num">Gone</th>
+                    <th>{t("viewer.summary.pilot")}</th>
+                    <th>{t("viewer.summary.type")}</th>
+                    <th>{t("viewer.summary.group")}</th>
+                    <th>{t("viewer.summary.side")}</th>
+                    <th className="num">{t("viewer.summary.appeared")}</th>
+                    <th className="num">{t("viewer.summary.gone")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {aircraft.map((o) => (
                     <tr key={o.uid}>
-                      <td>{o.pilot || <span className="muted">AI</span>}</td>
+                      <td>{o.pilot || <span className="muted">{t("common.ai")}</span>}</td>
                       <td>{o.name}</td>
                       <td>{o.group}</td>
                       <td>
@@ -160,15 +152,15 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
         </Pinnable>
 
         {weapons.length > 0 && (
-          <Pinnable id="weapons" title="Weapons released">
+          <Pinnable id="weapons" title={t("viewer.summary.weaponsReleased")}>
             <section className="card">
-              <h3>Weapons released</h3>
+              <h3>{t("viewer.summary.weaponsReleased")}</h3>
               <table>
                 <thead>
                   <tr>
-                    <th>Weapon</th>
-                    <th>Type</th>
-                    <th className="num">Count</th>
+                    <th>{t("viewer.summary.weapon")}</th>
+                    <th>{t("viewer.summary.type")}</th>
+                    <th className="num">{t("viewer.summary.count")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -191,16 +183,16 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
         )}
 
         {r.events.length > 0 && (
-          <Pinnable id="events" title="Events">
+          <Pinnable id="events" title={t("viewer.summary.eventsTitle")}>
             <section className="card">
-              <h3>Events ({r.events.length})</h3>
+              <h3>{t("viewer.summary.eventsCount", { count: r.events.length })}</h3>
               <table>
                 <thead>
                   <tr>
-                    <th className="num">Time</th>
-                    <th>Event</th>
-                    <th>Objects</th>
-                    <th>Text</th>
+                    <th className="num">{t("viewer.summary.time")}</th>
+                    <th>{t("viewer.summary.event")}</th>
+                    <th>{t("viewer.summary.objectsCol")}</th>
+                    <th>{t("viewer.summary.text")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -218,9 +210,9 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
           </Pinnable>
         )}
 
-        <Pinnable id="recording" title="Recording">
+        <Pinnable id="recording" title={t("viewer.summary.recordingTitle")}>
           <section className="card">
-            <h3>Recording</h3>
+            <h3>{t("viewer.summary.recordingTitle")}</h3>
             <dl className="kv">
               {GLOBAL_ORDER.filter((k) => g[k] !== undefined).map((k) => (
                 <Row key={k} k={k} v={g[k] ?? ""} />
@@ -228,16 +220,24 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
               {otherGlobals.map((k) => (
                 <Row key={k} k={k} v={g[k] ?? ""} />
               ))}
-              <Row k="File format" v={`${r.fileType ?? "?"} ${r.fileVersion ?? ""}`} />
+              <Row k={t("viewer.summary.fileFormat")} v={`${r.fileType ?? "?"} ${r.fileVersion ?? ""}`} />
               <Row
-                k="Container"
+                k={t("viewer.summary.container")}
                 v={r.container.kind === "zip" ? `zip → ${r.container.entryName ?? "?"}` : r.container.kind}
               />
               <Row
-                k="Size"
-                v={`${formatBytes(r.stats.rawBytes)} on disk, ${formatBytes(r.stats.textBytes)} text, ${r.stats.logicalLines.toLocaleString()} lines, ${r.stats.frames.toLocaleString()} time frames`}
+                k={t("viewer.summary.size")}
+                v={t("viewer.summary.sizeValue", {
+                  raw: formatBytes(r.stats.rawBytes),
+                  text: formatBytes(r.stats.textBytes),
+                  lines: r.stats.logicalLines.toLocaleString(),
+                  frames: r.stats.frames.toLocaleString(),
+                })}
               />
-              <Row k="Read in" v={`${outcome.elapsedMs.toFixed(0)} ms`} />
+              <Row
+                k={t("viewer.summary.readIn")}
+                v={t("viewer.summary.readInValue", { ms: outcome.elapsedMs.toFixed(0) })}
+              />
             </dl>
             {[...LONG_TEXT]
               .filter((k) => g[k])
@@ -250,20 +250,20 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
           </section>
         </Pinnable>
 
-        <Pinnable id="types" title="Object types">
+        <Pinnable id="types" title={t("viewer.summary.objectTypesTitle")}>
           <section className="card">
-            <h3>Object types</h3>
+            <h3>{t("viewer.summary.objectTypesTitle")}</h3>
             <table>
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th className="num">Count</th>
+                  <th>{t("viewer.summary.type")}</th>
+                  <th className="num">{t("viewer.summary.count")}</th>
                 </tr>
               </thead>
               <tbody>
-                {types.map(([t, n]) => (
-                  <tr key={t}>
-                    <td>{t}</td>
+                {types.map(([tp, n]) => (
+                  <tr key={tp}>
+                    <td>{tp}</td>
                     <td className="num">{n.toLocaleString()}</td>
                   </tr>
                 ))}
@@ -273,9 +273,9 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
         </Pinnable>
 
         {warningKinds.length > 0 && (
-          <Pinnable id="warnings" title="Parser warnings">
+          <Pinnable id="warnings" title={t("viewer.summary.parserWarningsTitle")}>
             <section className="card">
-              <h3>Parser warnings</h3>
+              <h3>{t("viewer.summary.parserWarningsTitle")}</h3>
               <ul className="warnings">
                 {warningKinds.map(([kind, n]) => (
                   <li key={kind}>
@@ -286,7 +286,11 @@ export function Summary({ name, file, outcome }: { name: string; file: Blob; out
                         .slice(0, 5)
                         .map((w) => (
                           <li key={`${w.lineNo}:${w.message}`}>
-                            {w.lineNo > 0 && <span className="muted">line {w.lineNo}: </span>}
+                            {w.lineNo > 0 && (
+                              <span className="muted">
+                                {t("viewer.summary.linePrefix", { line: w.lineNo })}
+                              </span>
+                            )}
                             {w.message}
                           </li>
                         ))}

@@ -1,4 +1,5 @@
 /** Top-down canvas renderer for the game, in the style of the viewer's 2D map. */
+import i18n from "../../i18n/index.ts";
 import { niceStep, toScreen, type View } from "../../map/render.ts";
 import { desiredHeading, type Jet, mach, velocity, verticalSpeed } from "../sim/aircraft.ts";
 import { DEG, FT, NM } from "../sim/atmosphere.ts";
@@ -608,7 +609,7 @@ function drawSideView(ctx: CanvasRenderingContext2D, v: View, s: SessionView) {
   ctx.textBaseline = "middle";
   ctx.fillStyle = COLORS.gridText;
   ctx.textAlign = "left";
-  ctx.fillText(`Side view · ${axisLabel}`, x0 + 6, y0 + 9);
+  ctx.fillText(i18n.t("game.draw.sideView", { axis: axisLabel }), x0 + 6, y0 + 9);
   for (let ft = 0; ft <= topFt; ft += 10000) {
     const y = Math.round(sy(ft * FT)) + 0.5;
     ctx.strokeStyle = ft === 0 ? "rgba(148, 163, 184, 0.45)" : COLORS.grid;

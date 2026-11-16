@@ -1,18 +1,15 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSettings } from "../../settings/react.ts";
 import { distanceUnitM, distanceUnitName, fmtAlt, fmtDist } from "../../settings/units.ts";
 import {
   A2A_MISSILE_CLASSES,
-  ALT_RELATION_LABELS,
   type AltitudeRelation,
-  ASPECT_SHORT_LABELS,
   type AspectCategory,
   DEFAULT_THRESHOLDS,
   type EngagementDomain,
   type FileAnalytics,
   type MissileEngagement,
-  QUALITY_FLAG_LABELS,
-  WEAPON_CLASS_LABELS,
   WEAPON_CLASS_ORDER,
   type WeaponClass,
 } from "../model.ts";
@@ -337,6 +334,7 @@ function QueryFilterCard({
   hasActiveFilters: boolean;
   singleFile: boolean;
 }) {
+  const { t } = useTranslation();
   const domainKey = query.domains.length === 1 ? query.domains[0]! : "ALL";
   const setDomainKey = (v: string) => {
     if (v === "ALL") setQuery({ ...query, domains: [] });
@@ -362,20 +360,20 @@ function QueryFilterCard({
   const weaponFamilyValue = isAllA2aMissiles ? "A2A-MISSILES" : (query.weaponClasses[0] ?? "");
 
   return (
-    <section className="card analytics-card query-panel" aria-label="Query filters">
+    <section className="card analytics-card query-panel" aria-label={t("analytics.filters.aria")}>
       <div className="query-grid">
         <label>
-          <span>Domain</span>
+          <span>{t("analytics.filters.domain")}</span>
           <select value={domainKey} onChange={(e) => setDomainKey(e.target.value)}>
-            <option value="A2A">Air-to-Air (A2A)</option>
-            <option value="SAM">Surface-to-Air (SAM)</option>
-            <option value="A2G">Air-to-Ground (A2G)</option>
-            <option value="ALL">All Domains</option>
+            <option value="A2A">{t("analytics.filters.domainA2a")}</option>
+            <option value="SAM">{t("analytics.filters.domainSam")}</option>
+            <option value="A2G">{t("analytics.filters.domainA2g")}</option>
+            <option value="ALL">{t("analytics.filters.domainAll")}</option>
           </select>
         </label>
 
         <label>
-          <span>Weapon Family</span>
+          <span>{t("analytics.filters.weaponFamily")}</span>
           <select
             value={weaponFamilyValue}
             onChange={(e) => {
@@ -387,18 +385,18 @@ function QueryFilterCard({
               }
             }}
           >
-            <option value="">All Weapon Families</option>
-            <option value="A2A-MISSILES">All A2A Missiles (Fox-1/2/3)</option>
+            <option value="">{t("analytics.filters.allWeaponFamilies")}</option>
+            <option value="A2A-MISSILES">{t("analytics.filters.allA2aMissiles")}</option>
             {WEAPON_CLASS_ORDER.map((wc) => (
               <option key={wc} value={wc}>
-                {WEAPON_CLASS_LABELS[wc]}
+                {t(`analytics.models.weaponClass.${wc}`)}
               </option>
             ))}
           </select>
         </label>
 
         <label>
-          <span>Specific Weapon</span>
+          <span>{t("analytics.filters.specificWeapon")}</span>
           <select
             value={query.weaponNames[0] ?? ""}
             onChange={(e) => {
@@ -406,7 +404,9 @@ function QueryFilterCard({
               setQuery({ ...query, weaponNames: v ? [v] : [] });
             }}
           >
-            <option value="">All Weapons ({facets.weaponCounts.length})</option>
+            <option value="">
+              {t("analytics.filters.allWeapons", { count: facets.weaponCounts.length })}
+            </option>
             {facets.weaponCounts.map((w) => (
               <option key={w.name} value={w.name}>
                 {w.name} ({w.count})
@@ -416,12 +416,14 @@ function QueryFilterCard({
         </label>
 
         <label>
-          <span>Launcher Aircraft</span>
+          <span>{t("analytics.filters.launcherAircraft")}</span>
           <select
             value={query.shooterAircraft}
             onChange={(e) => setQuery({ ...query, shooterAircraft: e.target.value })}
           >
-            <option value="">All Launchers ({facets.shooterAircraft.length})</option>
+            <option value="">
+              {t("analytics.filters.allLaunchers", { count: facets.shooterAircraft.length })}
+            </option>
             {facets.shooterAircraft.map((a) => (
               <option key={a} value={a}>
                 {a}
@@ -431,12 +433,14 @@ function QueryFilterCard({
         </label>
 
         <label>
-          <span>Target Aircraft</span>
+          <span>{t("analytics.filters.targetAircraft")}</span>
           <select
             value={query.targetAircraft}
             onChange={(e) => setQuery({ ...query, targetAircraft: e.target.value })}
           >
-            <option value="">All Targets ({facets.targetAircraft.length})</option>
+            <option value="">
+              {t("analytics.filters.allTargets", { count: facets.targetAircraft.length })}
+            </option>
             {facets.targetAircraft.map((a) => (
               <option key={a} value={a}>
                 {a}
@@ -447,7 +451,7 @@ function QueryFilterCard({
 
         {!singleFile && (
           <label>
-            <span>DCS Patch</span>
+            <span>{t("analytics.filters.dcsPatch")}</span>
             <select
               value={query.dcsPatches[0] ?? ""}
               onChange={(e) => {
@@ -455,7 +459,9 @@ function QueryFilterCard({
                 setQuery({ ...query, dcsPatches: v ? [v] : [] });
               }}
             >
-              <option value="">All Patches ({facets.dcsPatches.length})</option>
+              <option value="">
+                {t("analytics.filters.allPatches", { count: facets.dcsPatches.length })}
+              </option>
               {facets.dcsPatches.map((p) => (
                 <option key={p} value={p}>
                   {/^\d/.test(p) ? `DCS ${p}` : p}
@@ -466,12 +472,12 @@ function QueryFilterCard({
         )}
 
         <label>
-          <span>Launcher Side</span>
+          <span>{t("analytics.filters.launcherSide")}</span>
           <select
             value={query.shooterSide}
             onChange={(e) => setQuery({ ...query, shooterSide: e.target.value })}
           >
-            <option value="">All Sides</option>
+            <option value="">{t("analytics.filters.allSides")}</option>
             {facets.sides.map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -481,7 +487,7 @@ function QueryFilterCard({
         </label>
 
         <label>
-          <span>Min Range ({distUnitName})</span>
+          <span>{t("analytics.filters.minRange", { unit: distUnitName })}</span>
           <input
             type="number"
             min={0}
@@ -499,12 +505,12 @@ function QueryFilterCard({
         </label>
 
         <label>
-          <span>Max Range ({distUnitName})</span>
+          <span>{t("analytics.filters.maxRange", { unit: distUnitName })}</span>
           <input
             type="number"
             min={0}
             step="any"
-            placeholder="Any"
+            placeholder={t("analytics.filters.any")}
             value={maxRangeDisp}
             onChange={(e) => {
               const val = e.target.value.trim();
@@ -517,10 +523,10 @@ function QueryFilterCard({
         </label>
 
         <label className="grow">
-          <span>Search</span>
+          <span>{t("analytics.filters.search")}</span>
           <input
             type="search"
-            placeholder="Pilot, aircraft, weapon, mission…"
+            placeholder={t("analytics.filters.searchPlaceholder")}
             value={query.searchText}
             onChange={(e) => setQuery({ ...query, searchText: e.target.value })}
           />
@@ -530,24 +536,26 @@ function QueryFilterCard({
       {/* Range presets, Threshold controls, and toggles */}
       <div className="query-subbar">
         <div className="preset-group">
-          <span className="muted small">Range presets:</span>
+          <span className="muted small">{t("analytics.filters.rangePresets")}</span>
           <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(null, null)}>
-            All
+            {t("analytics.filters.presetAll")}
           </button>
           <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(0, 10)}>
-            WVR (&le;{fmtDist(10000, altitudeUnit.startsWith("ft") ? "nm" : "km")})
+            {t("analytics.filters.presetWvr", {
+              dist: fmtDist(10000, altitudeUnit.startsWith("ft") ? "nm" : "km"),
+            })}
           </button>
           <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(10, 35)}>
-            Med BVR (10–35 km)
+            {t("analytics.filters.presetMedBvr")}
           </button>
           <button type="button" className="secondary small-btn" onClick={() => applyRangePreset(35, null)}>
-            Long BVR (&ge;35 km)
+            {t("analytics.filters.presetLongBvr")}
           </button>
         </div>
 
         <div className="threshold-group">
           <label className="small muted">
-            Co-Alt band (±Δh):{" "}
+            {t("analytics.filters.coAltBand")}{" "}
             <select
               value={query.thresholds.coAltBandM}
               onChange={(e) =>
@@ -558,14 +566,16 @@ function QueryFilterCard({
               }
             >
               <option value={500}>±{fmtAlt(500, altitudeUnit)}</option>
-              <option value={1000}>±{fmtAlt(1000, altitudeUnit)} (default)</option>
+              <option value={1000}>
+                ±{fmtAlt(1000, altitudeUnit)} {t("analytics.filters.defaultTag")}
+              </option>
               <option value={1500}>±{fmtAlt(1500, altitudeUnit)}</option>
               <option value={2000}>±{fmtAlt(2000, altitudeUnit)}</option>
             </select>
           </label>
 
           <label className="small muted">
-            High-Alt floor:{" "}
+            {t("analytics.filters.highAltFloor")}{" "}
             <select
               value={query.thresholds.highAltFloorM}
               onChange={(e) =>
@@ -578,25 +588,26 @@ function QueryFilterCard({
               <option value={4572}>{fmtAlt(4572, altitudeUnit)}</option>
               <option value={6096}>{fmtAlt(6096, altitudeUnit)}</option>
               <option value={7620}>{fmtAlt(7620, altitudeUnit)}</option>
-              <option value={9144}>{fmtAlt(9144, altitudeUnit)} (High default)</option>
+              <option value={9144}>
+                {fmtAlt(9144, altitudeUnit)} {t("analytics.filters.highDefaultTag")}
+              </option>
               <option value={10668}>{fmtAlt(10668, altitudeUnit)}</option>
-              <option value={12192}>{fmtAlt(12192, altitudeUnit)} (Ultra-High)</option>
+              <option value={12192}>
+                {fmtAlt(12192, altitudeUnit)} {t("analytics.filters.ultraHighTag")}
+              </option>
             </select>
           </label>
           {!singleFile && (
-            <label
-              className="small muted"
-              title="Exclude pure dogfight recordings with fewer than N BVR missile shots (>10 nm)"
-            >
-              Min BVR/file:{" "}
+            <label className="small muted" title={t("analytics.filters.minBvrPerFileTitle")}>
+              {t("analytics.filters.minBvrPerFile")}{" "}
               <select
                 value={query.minFileBvrShots}
                 onChange={(e) => setQuery({ ...query, minFileBvrShots: Number(e.target.value) })}
               >
-                <option value={0}>Any (0+)</option>
-                <option value={1}>&ge;1 BVR shot</option>
-                <option value={3}>&ge;3 BVR shots</option>
-                <option value={5}>&ge;5 BVR shots</option>
+                <option value={0}>{t("analytics.filters.minBvrAny")}</option>
+                <option value={1}>{t("analytics.filters.minBvrGe", { count: 1 })}</option>
+                <option value={3}>{t("analytics.filters.minBvrGe", { count: 3 })}</option>
+                <option value={5}>{t("analytics.filters.minBvrGe", { count: 5 })}</option>
               </select>
             </label>
           )}
@@ -604,16 +615,13 @@ function QueryFilterCard({
 
         <div className="checks-inline">
           {!singleFile && (
-            <label
-              className="toggle"
-              title="Automatically ignore duplicate copies of the same recording session"
-            >
+            <label className="toggle" title={t("analytics.filters.dedupTitle")}>
               <input
                 type="checkbox"
                 checked={query.deduplicateSessions}
                 onChange={(e) => setQuery({ ...query, deduplicateSessions: e.target.checked })}
               />{" "}
-              De-dup copies
+              {t("analytics.filters.dedup")}
             </label>
           )}
           <label className="toggle">
@@ -622,7 +630,7 @@ function QueryFilterCard({
               checked={query.includeGuns}
               onChange={(e) => setQuery({ ...query, includeGuns: e.target.checked })}
             />{" "}
-            Include guns
+            {t("analytics.filters.includeGuns")}
           </label>
           <label className="toggle">
             <input
@@ -630,7 +638,7 @@ function QueryFilterCard({
               checked={query.excludeFriendlyFire}
               onChange={(e) => setQuery({ ...query, excludeFriendlyFire: e.target.checked })}
             />{" "}
-            Exclude friendly fire
+            {t("analytics.filters.excludeFf")}
           </label>
           <label className="toggle">
             <input
@@ -638,7 +646,7 @@ function QueryFilterCard({
               checked={query.confirmedTargetsOnly}
               onChange={(e) => setQuery({ ...query, confirmedTargetsOnly: e.target.checked })}
             />{" "}
-            Confirmed targets only
+            {t("analytics.filters.confirmedOnly")}
           </label>
         </div>
       </div>
@@ -646,7 +654,7 @@ function QueryFilterCard({
       {/* Active filter chips */}
       {hasActiveFilters && (
         <div className="active-filters-bar">
-          <span className="muted small">Active filters:</span>
+          <span className="muted small">{t("analytics.filters.activeFilters")}</span>
           {query.aspects.map((a) => (
             <button
               key={a}
@@ -654,7 +662,7 @@ function QueryFilterCard({
               className="filter-chip"
               onClick={() => setQuery({ ...query, aspects: query.aspects.filter((x) => x !== a) })}
             >
-              Aspect: {ASPECT_SHORT_LABELS[a]} ×
+              {t("analytics.filters.chipAspect", { label: t(`analytics.models.aspectShort.${a}`) })}
             </button>
           ))}
           {query.altitudeRelations.map((r) => (
@@ -669,7 +677,7 @@ function QueryFilterCard({
                 })
               }
             >
-              Altitude: {ALT_RELATION_LABELS[r]} ×
+              {t("analytics.filters.chipAlt", { label: t(`analytics.models.altRelation.${r}`) })}
             </button>
           ))}
           {query.weaponNames.map((w) => (
@@ -684,7 +692,7 @@ function QueryFilterCard({
                 })
               }
             >
-              Weapon: {w} ×
+              {t("analytics.filters.chipWeapon", { name: w })}
             </button>
           ))}
           {(query.minRangeM !== null || query.maxRangeM !== null) && (
@@ -693,8 +701,10 @@ function QueryFilterCard({
               className="filter-chip"
               onClick={() => setQuery({ ...query, minRangeM: null, maxRangeM: null })}
             >
-              Range: {query.minRangeM !== null ? fmtDist(query.minRangeM, "km") : "0"} –{" "}
-              {query.maxRangeM !== null ? fmtDist(query.maxRangeM, "km") : "∞"} ×
+              {t("analytics.filters.chipRange", {
+                min: query.minRangeM !== null ? fmtDist(query.minRangeM, "km") : "0",
+                max: query.maxRangeM !== null ? fmtDist(query.maxRangeM, "km") : "∞",
+              })}
             </button>
           )}
           {query.excludeQualityFlags.map((flag) => (
@@ -709,7 +719,7 @@ function QueryFilterCard({
                 })
               }
             >
-              Excluding: {QUALITY_FLAG_LABELS[flag]} ×
+              {t("analytics.filters.chipExcluding", { label: t(`analytics.models.qualityFlag.${flag}`) })}
             </button>
           ))}
           {query.excludeUfoShots && (
@@ -718,7 +728,7 @@ function QueryFilterCard({
               className="filter-chip"
               onClick={() => setQuery({ ...query, excludeUfoShots: false })}
             >
-              Excluding: UFO-affected shots ×
+              {t("analytics.filters.chipExcludingUfo")}
             </button>
           )}
           <button
@@ -733,7 +743,7 @@ function QueryFilterCard({
               })
             }
           >
-            Reset all filters
+            {t("analytics.filters.resetAll")}
           </button>
         </div>
       )}
@@ -748,55 +758,67 @@ function KpiStrip({
   kpis: ReturnType<typeof runAnalyticsQuery>["kpis"];
   distanceUnit: "nm" | "km" | "nm+km" | "km+nm";
 }) {
+  const { t } = useTranslation();
   return (
     <section className="kpi-grid">
       <div className="card kpi-card">
-        <div className="stat-label">Matching Kills</div>
+        <div className="stat-label">{t("analytics.kpi.matchingKills")}</div>
         <div className="stat-value">{kpis.totalKills.toLocaleString()}</div>
         <div className="muted small">
-          {kpis.pk !== null ? `${Math.round(kpis.pk * 100)}% overall Pk` : "No shots"}
+          {kpis.pk !== null
+            ? t("analytics.kpi.overallPk", { pct: Math.round(kpis.pk * 100) })
+            : t("analytics.kpi.noShots")}
         </div>
       </div>
 
       <div className="card kpi-card">
-        <div className="stat-label">Matching Shots</div>
+        <div className="stat-label">{t("analytics.kpi.matchingShots")}</div>
         <div className="stat-value">{kpis.totalShots.toLocaleString()}</div>
         <div className="muted small">
-          {kpis.totalHits.toLocaleString()} hits · {kpis.shotsWithTarget.toLocaleString()} with geometry
+          {t("analytics.kpi.shotsSub", {
+            hits: kpis.totalHits.toLocaleString(),
+            geom: kpis.shotsWithTarget.toLocaleString(),
+          })}
         </div>
       </div>
 
       <div className="card kpi-card">
-        <div className="stat-label">Median Initial Kill Range</div>
+        <div className="stat-label">{t("analytics.kpi.medianKillRange")}</div>
         <div className="stat-value">{fmtDist(kpis.medianKillRangeM, distanceUnit)}</div>
         <div className="muted small">
           {kpis.p25KillRangeM !== null && kpis.p75KillRangeM !== null
-            ? `IQR: ${fmtDist(kpis.p25KillRangeM, distanceUnit)} – ${fmtDist(kpis.p75KillRangeM, distanceUnit)}`
+            ? t("analytics.kpi.iqr", {
+                p25: fmtDist(kpis.p25KillRangeM, distanceUnit),
+                p75: fmtDist(kpis.p75KillRangeM, distanceUnit),
+              })
             : "–"}
         </div>
       </div>
 
       <div className="card kpi-card">
-        <div className="stat-label">Mean Kill Range & TOF</div>
+        <div className="stat-label">{t("analytics.kpi.meanKillRangeTof")}</div>
         <div className="stat-value">{fmtDist(kpis.meanKillRangeM, distanceUnit)}</div>
         <div className="muted small">
           {kpis.medianFlightTimeS !== null
-            ? `Median flight time: ${kpis.medianFlightTimeS.toFixed(1)} s`
+            ? t("analytics.kpi.medianFlightTime", { s: kpis.medianFlightTimeS.toFixed(1) })
             : "–"}
         </div>
       </div>
 
       <div className="card kpi-card">
-        <div className="stat-label">Dominant Kill Condition</div>
+        <div className="stat-label">{t("analytics.kpi.dominantCondition")}</div>
         <div className="stat-value kpi-cond">
           {kpis.dominantCondition
-            ? `${ASPECT_SHORT_LABELS[kpis.dominantCondition.aspect]} · ${ALT_RELATION_LABELS[kpis.dominantCondition.altitudeRelation]}`
+            ? `${t(`analytics.models.aspectShort.${kpis.dominantCondition.aspect}`)} · ${t(`analytics.models.altRelation.${kpis.dominantCondition.altitudeRelation}`)}`
             : "–"}
         </div>
         <div className="muted small">
           {kpis.dominantCondition
-            ? `${kpis.dominantCondition.kills} kills (${Math.round(kpis.dominantCondition.share * 100)}% of kills)`
-            : "No kills in selection"}
+            ? t("analytics.kpi.dominantKills", {
+                kills: kpis.dominantCondition.kills,
+                pct: Math.round(kpis.dominantCondition.share * 100),
+              })
+            : t("analytics.kpi.noKillsInSelection")}
         </div>
       </div>
     </section>

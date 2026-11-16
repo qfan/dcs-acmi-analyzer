@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type FitTarget, fitAt } from "../map/fit.ts";
 import {
   type DrawOptions,
@@ -29,6 +30,7 @@ export function Map2D({
   focus,
   settings,
 }: ViewProps) {
+  const { t: tr } = useTranslation();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hitsRef = useRef<ScreenHit[]>([]);
@@ -176,10 +178,10 @@ export function Map2D({
 
   const fitTitle =
     primary !== null && secondary !== null
-      ? "Fit the selected pair"
+      ? tr("map.fitPair")
       : primary !== null || secondary !== null
-        ? "Centre on the selected object"
-        : "Fit everything in the air now";
+        ? tr("map.fitObject")
+        : tr("map.fitAll");
 
   return (
     <div className="map-view" ref={wrapRef}>
@@ -188,7 +190,7 @@ export function Map2D({
         className="map-canvas"
         style={{ width: size.w, height: size.h }}
         tabIndex={0}
-        aria-label="Top-down map. Drag to pan, scroll to zoom. Click or Ctrl+click an aircraft for the primary selection, Ctrl+right-click for the secondary. Space plays or pauses."
+        aria-label={tr("map.aria2d")}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -197,7 +199,7 @@ export function Map2D({
         <button
           type="button"
           className="secondary"
-          aria-label="Zoom in"
+          aria-label={tr("map.zoomIn")}
           onClick={() => view && zoomAt(view.w / 2, view.h / 2, 1.6)}
         >
           +
@@ -205,7 +207,7 @@ export function Map2D({
         <button
           type="button"
           className="secondary"
-          aria-label="Zoom out"
+          aria-label={tr("map.zoomOut")}
           onClick={() => view && zoomAt(view.w / 2, view.h / 2, 1 / 1.6)}
         >
           −
@@ -220,7 +222,7 @@ export function Map2D({
             setView((v) => viewForFit(fitAt(data, t, { primary, secondary }, ground), size.w, size.h, v));
           }}
         >
-          Fit
+          {tr("map.fit")}
         </button>
       </div>
     </div>
