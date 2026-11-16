@@ -1,3 +1,4 @@
+import { detectRecordingSource } from "../acmi/source.ts";
 import {
   analyzeNotchGate,
   analyzeShotTactics,
@@ -27,6 +28,7 @@ import {
   type MissileEngagement,
   QUALITY_RULES,
   type QualityFlag,
+  versionCohortKey,
   type WeaponClass,
 } from "./model.ts";
 
@@ -73,6 +75,11 @@ export interface AnalyticsQuery {
   minFileBvrShots: number;
   /** Automatically skip duplicate copies of the same recording session (default true). */
   deduplicateSessions: boolean;
+  /**
+   * Count BVR Trainer game recordings (default false). Their physics are not DCS's, so they would
+   * pollute DCS statistics; when included they form their own version cohort.
+   */
+  includeBvrTrainer: boolean;
   /** Skip files carrying any of these quality labels (default none: everything counts). */
   excludeQualityFlags: QualityFlag[];
   /** Skip shots whose shooter or target went off-path ("UFO") around the shot. */
@@ -107,6 +114,7 @@ export const DEFAULT_QUERY: AnalyticsQuery = {
   minConfidence: "low",
   minFileBvrShots: 0,
   deduplicateSessions: true,
+  includeBvrTrainer: false,
   excludeQualityFlags: [],
   excludeUfoShots: false,
   notchGateDeg: 15,
@@ -218,6 +226,8 @@ export interface QueryResult {
   duplicateFileIds: Set<string>;
   /** File IDs skipped because of an excluded quality label. */
   qualityExcludedFileIds: Set<string>;
+  /** Selected BVR Trainer game recordings left out because `includeBvrTrainer` is off. */
+  gameExcludedFileIds: Set<string>;
   /** Shots that matched every other filter but were dropped as UFO-affected. */
   ufoExcludedShots: number;
   kpis: {
@@ -266,6 +276,16 @@ const CONF_RANK: Record<"low" | "medium" | "high", number> = {
   medium: 1,
   high: 2,
 };
+
+/**
+ * Recorded by the BVR Trainer game. Also recognises files extracted before `meta.source` existed
+ * (imported datasets) by their recorder name.
+ */
+export function isBvrTrainerFile(f: FileAnalytics): boolean {
+  if (!f.meta) return false;
+  if (f.meta.source) return f.meta.source === "bvr-trainer";
+  return detectRecordingSource({ DataRecorder: f.meta.recorder ?? undefined }).kind === "bvr-trainer";
+}
 
 /** Shooter or target went off-path around the shot (see quality.ts). */
 export function isUfoShot(e: MissileEngagement): boolean {
@@ -345,8 +365,13 @@ export function runAnalyticsQuery(
   // Apply the user's file selection first, then de-duplicate, so disabling one copy of a
   // session falls back to another enabled copy instead of hiding both.
   const qualityExcludedFileIds = new Set<string>();
+  const gameExcludedFileIds = new Set<string>();
   const selectedFiles = files.filter((f) => {
     if (enabledSet && !enabledSet.has(f.fileId)) return false;
+    if (!query.includeBvrTrainer && isBvrTrainerFile(f)) {
+      gameExcludedFileIds.add(f.fileId);
+      return false;
+    }
     if (
       query.excludeQualityFlags.length > 0 &&
       f.quality?.flags.some((flag) => query.excludeQualityFlags.includes(flag))
@@ -373,7 +398,7 @@ export function runAnalyticsQuery(
   const minConfRank = CONF_RANK[query.minConfidence];
 
   for (const f of activeFiles) {
-    if (f.meta?.dcsPatch) facetPatches.add(f.meta.dcsPatch);
+    if (f.meta) facetPatches.add(versionCohortKey(f.meta));
     for (const rawEng of f.engagements) {
       if (!query.includeGuns && rawEng.isGun) continue;
       if (query.excludeFriendlyFire && rawEng.friendlyFire) continue;
@@ -391,12 +416,15 @@ export function runAnalyticsQuery(
       if (rawEng.target?.name) facetTargets.add(rawEng.target.name);
       if (rawEng.shooter?.side) facetSides.add(rawEng.shooter.side);
       if (rawEng.target?.side) facetSides.add(rawEng.target.side);
-      if (rawEng.dcsPatch) facetPatches.add(rawEng.dcsPatch);
+      // Older extractions lack `source` on engagements: fall back to the file's.
+      const versionKey = versionCohortKey({
+        dcsPatch: rawEng.dcsPatch ?? f.meta?.dcsPatch ?? null,
+        source: rawEng.source ?? f.meta?.source,
+        sourceVersion: rawEng.sourceVersion ?? f.meta?.sourceVersion,
+      });
+      facetPatches.add(versionKey);
 
-      if (query.dcsPatches.length > 0) {
-        const patch = rawEng.dcsPatch ?? f.meta?.dcsPatch ?? "Unknown";
-        if (!query.dcsPatches.includes(patch)) continue;
-      }
+      if (query.dcsPatches.length > 0 && !query.dcsPatches.includes(versionKey)) continue;
 
       const e = withThresholds(rawEng, query.thresholds);
 
@@ -769,6 +797,7 @@ export function runAnalyticsQuery(
     tacticsById,
     duplicateFileIds: duplicateIds,
     qualityExcludedFileIds,
+    gameExcludedFileIds,
     ufoExcludedShots,
     kpis: {
       totalShots: matching.length,

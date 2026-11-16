@@ -39,12 +39,12 @@ import { MissileModelsCard, useFittedMissiles } from "./MissilePanels.tsx";
  * Query state and results behind the analytics panels, shared by the multi-file Analytics page and
  * the single-file viewer's "Enable analytics" section.
  */
-export function useAnalyticsDashboard(files: FileAnalytics[]) {
+export function useAnalyticsDashboard(files: FileAnalytics[], initialQuery: AnalyticsQuery = DEFAULT_QUERY) {
   const { settings } = useSettings();
   const units = settings.units;
   const distUnitM = distanceUnitM(units.distance);
 
-  const [query, setQuery] = useState<AnalyticsQuery>(DEFAULT_QUERY);
+  const [query, setQuery] = useState<AnalyticsQuery>(initialQuery);
   const [matrixMetric, setMatrixMetric] = useState<"kills" | "shots" | "pk">("kills");
   const [binStepUnits, setBinStepUnits] = useState<number>(5);
   const [showShotsOverlay, setShowShotsOverlay] = useState(true);
@@ -458,7 +458,7 @@ function QueryFilterCard({
               <option value="">All Patches ({facets.dcsPatches.length})</option>
               {facets.dcsPatches.map((p) => (
                 <option key={p} value={p}>
-                  DCS {p}
+                  {/^\d/.test(p) ? `DCS ${p}` : p}
                 </option>
               ))}
             </select>
@@ -728,6 +728,7 @@ function QueryFilterCard({
               setQuery({
                 ...DEFAULT_QUERY,
                 enabledFileIds: query.enabledFileIds,
+                includeBvrTrainer: query.includeBvrTrainer,
                 thresholds: { ...DEFAULT_THRESHOLDS },
               })
             }

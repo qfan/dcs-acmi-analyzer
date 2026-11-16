@@ -1,3 +1,4 @@
+import { bvrTrainerLabel, type RecordingSourceKind } from "../acmi/source.ts";
 import type { Confidence } from "../analysis/analyze.ts";
 
 /**
@@ -117,6 +118,10 @@ export interface MissileEngagement {
   initial: InitialCondition | null;
   /** DCS patch of the recording (e.g. "2.9.15"), copied from the file for cohort splits. */
   dcsPatch: string | null;
+  /** Copied from the file: BVR Trainer game shots are kept apart from DCS data. */
+  source: RecordingSourceKind;
+  /** BVR Trainer version for game shots, else null. */
+  sourceVersion: string | null;
   /** Real-world recording start (ISO), copied from the file for date cohorts. */
   recordedAt: string | null;
   /** Missile flyout facts measured from the raw track (null for guns / bombs / unknown targets). */
@@ -236,19 +241,36 @@ export interface FileQuality {
  * Bump whenever extraction output changes meaning or shape: cached results with an older
  * version are ignored and the file is re-parsed.
  */
-export const EXTRACTOR_VERSION = 3;
+export const EXTRACTOR_VERSION = 4;
+
+/**
+ * Version cohort of a shot or file: the DCS patch ("2.9.15"), "BVR Trainer 1.0.0" for game
+ * recordings (never mixed into a DCS patch), or "Unknown Version".
+ */
+export function versionCohortKey(x: {
+  dcsPatch: string | null;
+  source?: RecordingSourceKind;
+  sourceVersion?: string | null;
+}): string {
+  if (x.source === "bvr-trainer") return bvrTrainerLabel(x.sourceVersion ?? null);
+  return x.dcsPatch || "Unknown Version";
+}
 
 /** Launch range above which a shot counts as BVR (10 nm). */
 export const BVR_RANGE_M = 10 * 1852;
 
 /** Per-recording metadata used for cohorts (DCS patch, date), de-duplication and session filters. */
 export interface RecordingMeta {
-  /** Full DCS build from `DataSource`, e.g. "2.9.15.9599". */
+  /** Full DCS build from `DataSource`, e.g. "2.9.15.9599". Null for BVR Trainer recordings. */
   dcsVersion: string | null;
   /** Major.minor.patch, e.g. "2.9.15": the usual cohort key for "what changed in this update". */
   dcsPatch: string | null;
   /** Recorder, e.g. "DCS2ACMI 1.9.4.200". */
   recorder: string | null;
+  /** "bvr-trainer" for fights recorded by our game (not DCS physics); "sim" otherwise. */
+  source: RecordingSourceKind;
+  /** BVR Trainer version ("1.0.0"), null for sim files and pre-versioning game files. */
+  sourceVersion: string | null;
   /** Real-world recording start (ISO 8601) from `RecordingTime`. */
   recordedAt: string | null;
   author: string | null;

@@ -6,6 +6,7 @@
  * Sampling: everything every 0.25 s, plus an exact frame whenever a missile ends or a jet dies, so
  * the analyzer sees the true closest approach of a hit.
  */
+import { BVR_TRAINER_SOURCE } from "../acmi/source.ts";
 import type { Jet } from "./sim/aircraft.ts";
 import type { Missile } from "./sim/missile.ts";
 import { DECOY_LIFE_S, type Decoy, type World } from "./sim/world.ts";
@@ -167,8 +168,9 @@ export class AcmiRecorder {
       `0,ReferenceTime=${this.meta.startedAt.toISOString().replace(/\.\d+Z$/, "Z")}`,
       `0,ReferenceLongitude=${REF_LON}`,
       `0,ReferenceLatitude=${REF_LAT}`,
-      "0,DataSource=BVR Trainer",
-      "0,DataRecorder=BVR Trainer",
+      // The analyzer keys on this to keep game fights apart from DCS data (see acmi/source.ts).
+      `0,DataSource=${BVR_TRAINER_SOURCE}`,
+      `0,DataRecorder=${BVR_TRAINER_SOURCE}`,
       `0,Title=${esc(this.meta.title)}`,
     ];
     const body: string[] = [];

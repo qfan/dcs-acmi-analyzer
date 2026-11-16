@@ -3,6 +3,9 @@ import type { FileAnalytics, MissileEngagement } from "../analytics/model.ts";
 import { AnalyticsPanels, useAnalyticsDashboard } from "../analytics/ui/AnalyticsDashboard.tsx";
 import { extractFilesInPool } from "../analytics/worker/client.ts";
 import "../analytics/ui/analytics.css";
+import { type AnalyticsQuery, DEFAULT_QUERY } from "../analytics/query.ts";
+
+const SINGLE_FILE_QUERY: AnalyticsQuery = { ...DEFAULT_QUERY, includeBvrTrainer: true };
 
 const ENABLED_KEY = "acmi-viewer.analytics-enabled";
 
@@ -108,7 +111,8 @@ function SingleFileDashboard({
   onShowOnMap?: (e: MissileEngagement) => void;
 }) {
   const files = useMemo(() => [analytics], [analytics]);
-  const dash = useAnalyticsDashboard(files);
+  // One recording on its own: nothing to pollute, so a BVR Trainer fight shows its own shots.
+  const dash = useAnalyticsDashboard(files, SINGLE_FILE_QUERY);
   if (analytics.engagements.length === 0) {
     return (
       <section className="card">
