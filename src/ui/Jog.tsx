@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   fmtRate,
   JOG_LATCH_PX,
@@ -37,6 +38,7 @@ interface Props {
  * dragging stops. Double-click clears the speed back to real time. Arrow keys nudge it, Escape clears it.
  */
 export function Jog({ hold, speed, playing, onHold, onLatch, onSpeed }: Props) {
+  const { t } = useTranslation();
   const drag = useRef<{ x: number; y: number; base: number; id: number } | null>(null);
   // The latest press state, so a release right after a fast move doesn't read a stale render.
   const last = useRef(hold);
@@ -106,19 +108,18 @@ export function Jog({ hold, speed, playing, onHold, onLatch, onSpeed }: Props) {
         className={cls}
         role="slider"
         tabIndex={0}
-        aria-label="Jog: drag left or right to play backwards or forwards, further for faster. Release to stop, or drag up or down before releasing to keep that speed. Double-click to reset to real time."
-        title={
-          "Jog: drag left/right to play back/forward, further = faster (slow motion to 20×).\n" +
-          "Release to stop, or drag up or down before releasing to keep that speed;\n" +
-          "it also becomes the play button's speed. Click to stop, double-click to reset to real time."
-        }
+        aria-label={t("map.jog.aria")}
+        title={t("map.jog.title")}
         aria-valuemin={-20}
         aria-valuemax={20}
         aria-valuenow={Math.round(rate * 100) / 100}
         aria-valuetext={
           rate === 0
-            ? `stopped, plays at ${speedText}`
-            : `${fmtRate(rate)} ${rate < 0 ? "backwards" : "forwards"}`
+            ? t("map.jog.stoppedValue", { speed: speedText })
+            : t("map.jog.movingValue", {
+                rate: fmtRate(rate),
+                dir: rate < 0 ? t("map.jog.backwards") : t("map.jog.forwards"),
+              })
         }
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -143,12 +144,12 @@ export function Jog({ hold, speed, playing, onHold, onLatch, onSpeed }: Props) {
       <button
         type="button"
         className={`jog-readout${hold || playing ? "" : " muted"}`}
-        title="Reset to real time (1× forward)"
-        aria-label={`Play speed ${speedText}. Reset to real time`}
+        title={t("map.jog.resetTitle")}
+        aria-label={t("map.jog.readoutAria", { speed: speedText })}
         onClick={() => onSpeed(0)}
       >
-        {hold ? (rate === 0 ? "jog" : `${rate < 0 ? "◀" : "▶"} ${fmtRate(rate)}`) : speedText}
-        {latching ? <span className="jog-tag">keep</span> : null}
+        {hold ? (rate === 0 ? t("map.jog.jogWord") : `${rate < 0 ? "◀" : "▶"} ${fmtRate(rate)}`) : speedText}
+        {latching ? <span className="jog-tag">{t("map.jog.keep")}</span> : null}
       </button>
     </div>
   );

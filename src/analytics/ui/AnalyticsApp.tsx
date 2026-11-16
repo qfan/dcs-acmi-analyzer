@@ -1,5 +1,8 @@
+import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { bvrTrainerLabel } from "../../acmi/source.ts";
+import { LanguageSelector } from "../../i18n/LanguageSelector.tsx";
 import { SettingsPanel } from "../../ui/SettingsPanel.tsx";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { formatDuration } from "../../ui/Summary.tsx";
@@ -11,13 +14,7 @@ import {
   serializeDatasetBundle,
   triggerDownload,
 } from "../export.ts";
-import {
-  type FileAnalytics,
-  QUALITY_FLAG_HELP,
-  QUALITY_FLAG_LABELS,
-  QUALITY_FLAG_ORDER,
-  type QualityFlag,
-} from "../model.ts";
+import { type FileAnalytics, QUALITY_FLAG_ORDER, QUALITY_RULES, type QualityFlag } from "../model.ts";
 import { type AnalyticsQuery, isBvrTrainerFile, isUfoShot } from "../query.ts";
 import { ANALYTICS_SAMPLES, fetchAnalyticsSample, shouldAutoLoadSamples } from "../samples.ts";
 import { type BatchFileJob, extractFilesInPool } from "../worker/client.ts";
@@ -39,7 +36,12 @@ interface FileErrorRecord {
 }
 
 export function AnalyticsApp() {
+  const { t } = useTranslation();
   const [files, setFiles] = useState<FileAnalytics[]>([]);
+
+  useEffect(() => {
+    document.title = t("analytics.pageTitle");
+  }, [t]);
   const [errors, setErrors] = useState<FileErrorRecord[]>([]);
   const [batch, setBatch] = useState<LoadingBatch | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -201,12 +203,12 @@ export function AnalyticsApp() {
         ...prev,
         {
           fileId: "samples",
-          fileName: "Built-in samples",
+          fileName: t("analytics.app.builtInSamplesName"),
           message: err instanceof Error ? err.message : String(err),
         },
       ]);
     }
-  }, [ingestJobs]);
+  }, [ingestJobs, t]);
 
   const loadBvrSamplePack = useCallback(async () => {
     try {
@@ -223,12 +225,12 @@ export function AnalyticsApp() {
         ...prev,
         {
           fileId: "bvr-sample-pack",
-          fileName: "BVR Sample Pack",
+          fileName: t("analytics.app.bvrSamplePackName"),
           message: err instanceof Error ? err.message : String(err),
         },
       ]);
     }
-  }, []);
+  }, [t]);
 
   // Auto-load the redacted 11-sortie BVR sample pack by default (or ?sample=default)
   useEffect(() => {
@@ -329,51 +331,51 @@ export function AnalyticsApp() {
     <div className="app analytics-app">
       <header className="topbar">
         <div className="brand-group">
-          <h1>ACMI Missile & Engagement Analytics</h1>
-          <span className="badge info">Multi-File BVR & Patch Query Tool</span>
+          <h1>{t("analytics.app.title")}</h1>
+          <span className="badge info">{t("analytics.app.badge")}</span>
         </div>
         <div className="actions">
           <button type="button" onClick={() => fileInputRef.current?.click()}>
-            + Add ACMI files…
+            {t("analytics.app.addFiles")}
           </button>
           <button
             type="button"
             className="secondary"
-            title="Select an entire folder of .acmi recordings"
+            title={t("analytics.app.addFolderTitle")}
             onClick={() => folderInputRef.current?.click()}
           >
-            + Add Folder…
+            {t("analytics.app.addFolder")}
           </button>
           <button
             type="button"
             className="secondary"
-            title="Load built-in anonymized pack of 11 multiplayer BVR sorties (497 A2A missiles across DCS 2.9.6–2.9.14)"
+            title={t("analytics.app.loadBvrPackTitle")}
             onClick={() => void loadBvrSamplePack()}
           >
-            Load BVR Sample Pack (11 sorties)
+            {t("analytics.app.loadBvrPack")}
           </button>
           <button
             type="button"
             className="secondary"
-            title="Parse 6 small built-in ACM/BVR raw .acmi files via Web Workers"
+            title={t("analytics.app.loadMiniPackTitle", { count: ANALYTICS_SAMPLES.length })}
             onClick={() => void loadBuiltInSamples()}
           >
-            Load Mini ACMI Pack ({ANALYTICS_SAMPLES.length})
+            {t("analytics.app.loadMiniPack", { count: ANALYTICS_SAMPLES.length })}
           </button>
           {files.length > 0 && (
             <>
               <button
                 type="button"
                 className="secondary"
-                title="Replace all player names and mission titles with anonymized tactical callsigns (Viper 1-1, Hornet 2-1, etc.)"
+                title={t("analytics.app.redactNamesTitle")}
                 onClick={redactFiles}
               >
-                Redact Pilot Names
+                {t("analytics.app.redactNames")}
               </button>
               <button
                 type="button"
                 className="secondary"
-                title="Export matching engagements to CSV for Excel/Python"
+                title={t("analytics.app.exportCsvTitle")}
                 onClick={() =>
                   triggerDownload(
                     `acmi-engagements-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -382,12 +384,12 @@ export function AnalyticsApp() {
                   )
                 }
               >
-                Export CSV ({result.engagements.length})
+                {t("analytics.app.exportCsv", { count: result.engagements.length })}
               </button>
               <button
                 type="button"
                 className="secondary"
-                title="Save pre-extracted dataset bundle (.json) for instant reload"
+                title={t("analytics.app.saveJsonTitle")}
                 onClick={() =>
                   triggerDownload(
                     `acmi-dataset-${new Date().toISOString().slice(0, 10)}.json`,
@@ -396,10 +398,10 @@ export function AnalyticsApp() {
                   )
                 }
               >
-                Save Dataset JSON
+                {t("analytics.app.saveJson")}
               </button>
               <button type="button" className="secondary" onClick={clearAllFiles}>
-                Clear all
+                {t("analytics.app.clearAll")}
               </button>
             </>
           )}
@@ -409,11 +411,12 @@ export function AnalyticsApp() {
             aria-haspopup="dialog"
             onClick={() => settingsDialogRef.current?.showModal()}
           >
-            Units & Settings
+            {t("analytics.app.unitsAndSettings")}
           </button>
-          <a href="./index.html" className="nav-link-btn" title="Open the single-recording ACMI Viewer">
-            Single-File Viewer →
+          <a href="./index.html" className="nav-link-btn" title={t("analytics.app.singleFileViewerTitle")}>
+            {t("analytics.app.singleFileViewer")}
           </a>
+          <LanguageSelector className="secondary" />
           <input
             ref={fileInputRef}
             type="file"
@@ -449,9 +452,15 @@ export function AnalyticsApp() {
           <section className="card batch-progress-card">
             <div className="card-head">
               <span>
-                Parsing & extracting initial conditions: <strong>{batch.doneFiles}</strong> of{" "}
-                <strong>{batch.totalFiles}</strong> recordings ({batch.workerCount} parallel worker
-                {batch.workerCount === 1 ? "" : "s"})…
+                <Trans
+                  i18nKey="analytics.app.batchProgress"
+                  values={{
+                    done: batch.doneFiles,
+                    total: batch.totalFiles,
+                    workers: batch.workerCount,
+                  }}
+                  components={[<strong key="0" />, <strong key="1" />]}
+                />
               </span>
               <span className="muted small">{Math.round(batchFraction * 100)}%</span>
             </div>
@@ -462,9 +471,9 @@ export function AnalyticsApp() {
         {errors.length > 0 && (
           <section className="card">
             <div className="card-head">
-              <h3>Could not read {errors.length} file(s)</h3>
+              <h3>{t("analytics.app.errorsTitle", { count: errors.length })}</h3>
               <button type="button" className="secondary small-btn" onClick={() => setErrors([])}>
-                Dismiss
+                {t("analytics.app.dismiss")}
               </button>
             </div>
             <ul className="warnings">
@@ -479,17 +488,14 @@ export function AnalyticsApp() {
 
         {files.length === 0 && !batch ? (
           <div className="empty">
-            <p className="big">Drop one or multiple Tacview .acmi files anywhere on this page</p>
-            <p className="muted">
-              Analyze missile kills, launch ranges, target aspects (Head-on, Beam, Tail-on), and altitude
-              relations (Co-Alt High, Co-Alt Low, High→Low, Low→High) across a set of recordings.
-            </p>
+            <p className="big">{t("analytics.app.emptyTitle")}</p>
+            <p className="muted">{t("analytics.app.emptyDesc")}</p>
             <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "center" }}>
               <button type="button" onClick={() => void loadBvrSamplePack()}>
-                Load BVR Sample Pack (11 sorties · 497 missiles)
+                {t("analytics.app.emptyBvrBtn")}
               </button>
               <button type="button" className="secondary" onClick={() => void loadBuiltInSamples()}>
-                Load Mini ACMI Pack ({ANALYTICS_SAMPLES.length} recordings)
+                {t("analytics.app.emptyMiniBtn", { count: ANALYTICS_SAMPLES.length })}
               </button>
             </div>
           </div>
@@ -520,13 +526,13 @@ export function AnalyticsApp() {
 
       <SiteFooter />
 
-      <dialog ref={settingsDialogRef} className="settings-dialog" aria-label="View settings">
+      <dialog ref={settingsDialogRef} className="settings-dialog" aria-label={t("viewer.settingsAria")}>
         <SettingsPanel onClose={() => settingsDialogRef.current?.close()} />
       </dialog>
 
       {dragging && (
         <div className="drop-overlay">
-          <p>Drop .acmi file(s) to add to analytics</p>
+          <p>{t("analytics.app.dropOverlay")}</p>
         </div>
       )}
     </div>
@@ -558,6 +564,7 @@ function DatasetCard({
   onRemoveFile: (id: string) => void;
   onEnableAll: () => void;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const enabledCount = enabledFileIds ? enabledFileIds.length : files.length;
   const totalEng = files.reduce((s, f) => s + f.engagements.length, 0);
@@ -568,23 +575,34 @@ function DatasetCard({
       <div className="card-head">
         <div>
           <h3>
-            Loaded Recordings ({enabledCount} of {files.length} active · {totalKills} total kills, {totalEng}{" "}
-            weapon events
-            {duplicateFileIds.size > 0 ? ` · ${duplicateFileIds.size} skipped as duplicate session` : ""}
-            {qualityExcludedFileIds.size > 0
-              ? ` · ${qualityExcludedFileIds.size} skipped by quality label`
-              : ""}
-            {gameExcludedFileIds.size > 0 ? ` · ${gameExcludedFileIds.size} BVR Trainer left out` : ""})
+            {t("analytics.app.datasetTitle", {
+              enabled: enabledCount,
+              total: files.length,
+              kills: totalKills,
+              events: totalEng,
+              dup:
+                duplicateFileIds.size > 0
+                  ? t("analytics.app.datasetDupPart", { count: duplicateFileIds.size })
+                  : "",
+              qual:
+                qualityExcludedFileIds.size > 0
+                  ? t("analytics.app.datasetQualPart", { count: qualityExcludedFileIds.size })
+                  : "",
+              game:
+                gameExcludedFileIds.size > 0
+                  ? t("analytics.app.datasetGamePart", { count: gameExcludedFileIds.size })
+                  : "",
+            })}
           </h3>
         </div>
         <div className="head-actions">
           {enabledFileIds !== null && (
             <button type="button" className="secondary small-btn" onClick={onEnableAll}>
-              Enable all ({files.length})
+              {t("analytics.app.enableAll", { count: files.length })}
             </button>
           )}
           <button type="button" className="link small" onClick={() => setExpanded(!expanded)}>
-            {expanded ? "▴ Hide file list" : "▾ Show file list"}
+            {expanded ? t("analytics.app.hideFileList") : t("analytics.app.showFileList")}
           </button>
         </div>
       </div>
@@ -608,24 +626,19 @@ function DatasetCard({
                 <label
                   className="file-chip-label"
                   title={
-                    isDuplicate
-                      ? `${f.fileName}: skipped, another loaded file records the same session`
-                      : f.fileName
+                    isDuplicate ? t("analytics.app.duplicateTitle", { fileName: f.fileName }) : f.fileName
                   }
                 >
                   <input type="checkbox" checked={checked} onChange={() => onToggleFile(f.fileId)} />
                   <span className="file-chip-title">{f.missionTitle}</span>
                   <span className="muted small">
-                    ({a2aKills} missile kill{a2aKills === 1 ? "" : "s"} · {formatDuration(f.durationS)})
-                    {isDuplicate ? " · duplicate, skipped" : ""}
-                    {isGameExcluded ? " · game recording, left out" : ""}
+                    ({t("analytics.app.missileKillsCount", { count: a2aKills })} ·{" "}
+                    {formatDuration(f.durationS)}){isDuplicate ? t("analytics.app.duplicateSkipped") : ""}
+                    {isGameExcluded ? t("analytics.app.gameExcluded") : ""}
                   </span>
                 </label>
                 {isBvrTrainerFile(f) && (
-                  <span
-                    className="badge warn"
-                    title="Recorded by the BVR Trainer game, not DCS: its flight and missile models differ."
-                  >
+                  <span className="badge warn" title={t("analytics.app.bvrBadgeTitle")}>
                     {bvrTrainerLabel(f.meta?.sourceVersion ?? null)}
                   </span>
                 )}
@@ -633,8 +646,8 @@ function DatasetCard({
                 <button
                   type="button"
                   className="file-chip-remove"
-                  title="Remove recording from dataset"
-                  aria-label={`Remove ${f.missionTitle}`}
+                  title={t("analytics.app.removeRecordingTitle")}
+                  aria-label={t("analytics.app.removeRecordingAria", { title: f.missionTitle })}
                   onClick={() => onRemoveFile(f.fileId)}
                 >
                   ×
@@ -648,21 +661,46 @@ function DatasetCard({
   );
 }
 
+function qualityHelpText(flag: QualityFlag, t: TFunction): string {
+  switch (flag) {
+    case "short":
+      return t("analytics.models.qualityHelp.short", { mins: QUALITY_RULES.shortS / 60 });
+    case "few-bvr":
+      return t("analytics.models.qualityHelp.few-bvr", { count: QUALITY_RULES.fewBvrShots });
+    case "ufo-mass":
+      return t("analytics.models.qualityHelp.ufo-mass");
+    case "ufo-some":
+      return t("analytics.models.qualityHelp.ufo-some");
+    case "scrambled":
+      return t("analytics.models.qualityHelp.scrambled");
+    case "no-a2a":
+      return t("analytics.models.qualityHelp.no-a2a");
+    case "no-bvr":
+      return t("analytics.models.qualityHelp.no-bvr");
+  }
+}
+
 /** Tooltip text for a file's quality labels, including the worst UFO aircraft. */
-function qualityTitle(f: FileAnalytics): string {
+function qualityTitle(f: FileAnalytics, t: TFunction): string {
   const q = f.quality;
-  if (!q) return "Quality not assessed (data extracted by an older version).";
-  const lines = q.flags.map((flag) => `${QUALITY_FLAG_LABELS[flag]}: ${QUALITY_FLAG_HELP[flag]}`);
+  if (!q) return t("analytics.app.qualityUnassessed");
+  const lines = q.flags.map(
+    (flag) => `${t(`analytics.models.qualityFlag.${flag}`)}: ${qualityHelpText(flag, t)}`,
+  );
   if (q.offPathSamples > 0) {
     if (lines.length > 0) lines.push("");
     lines.push(
-      `Off-path samples: ${q.offPathSamples} · heavy UFO aircraft: ${q.heavyAircraft} of ${q.trackedAircraft}` +
-        (q.massWindows > 0 ? ` · server-lag windows: ${q.massWindows}` : "") +
-        ` · UFO-affected A2A shots: ${q.ufoShots}`,
+      t("analytics.app.qualityOffPathLine", {
+        offPath: q.offPathSamples,
+        heavy: q.heavyAircraft,
+        tracked: q.trackedAircraft,
+        mass: q.massWindows > 0 ? t("analytics.app.qualityMassPart", { count: q.massWindows }) : "",
+        ufoShots: q.ufoShots,
+      }),
     );
     for (const a of q.aircraft.slice(0, 6)) {
       lines.push(
-        `  ${a.heavy ? "●" : "○"} ${a.name}${a.pilot ? ` (${a.pilot})` : ""}: ${a.offPathSamples} samples in ${a.episodes} episode${a.episodes === 1 ? "" : "s"}`,
+        `  ${a.heavy ? "●" : "○"} ${a.name}${a.pilot ? ` (${a.pilot})` : ""}: ${t("analytics.app.qualityAircraftSamples", { samples: a.offPathSamples, episodes: a.episodes })}`,
       );
     }
   }
@@ -670,18 +708,19 @@ function qualityTitle(f: FileAnalytics): string {
 }
 
 function QualityBadges({ file }: { file: FileAnalytics }) {
+  const { t } = useTranslation();
   const q = file.quality;
   if (!q) return null;
   const minorUfo = q.ufoLevel === "minor";
   if (q.flags.length === 0 && !minorUfo) return null;
   return (
-    <span className="quality-badges" title={qualityTitle(file)}>
+    <span className="quality-badges" title={qualityTitle(file, t)}>
       {QUALITY_FLAG_ORDER.filter((flag) => q.flags.includes(flag)).map((flag) => (
         <span key={flag} className={`badge${flag.startsWith("ufo") || flag === "scrambled" ? " warn" : ""}`}>
-          {QUALITY_FLAG_LABELS[flag]}
+          {t(`analytics.models.qualityFlag.${flag}`)}
         </span>
       ))}
-      {minorUfo && <span className="badge">minor UFO</span>}
+      {minorUfo && <span className="badge">{t("analytics.app.minorUfo")}</span>}
     </span>
   );
 }
@@ -699,36 +738,44 @@ function GameRecordingsNotice({
   query: AnalyticsQuery;
   setQuery: (q: AnalyticsQuery) => void;
 }) {
+  const { t } = useTranslation();
   const games = files.filter(isBvrTrainerFile);
   if (games.length === 0) return null;
   const n = games.length;
-  const what = `${n} BVR Trainer game recording${n === 1 ? "" : "s"}`;
   const allGames = n === files.length;
   return (
     <div className="notice game-notice" role="status">
       {query.includeBvrTrainer ? (
         <>
-          <strong>Mixed data:</strong> {what} {n === 1 ? "is" : "are"} counted. The game's flight and missile
-          models are not DCS's{allGames ? "" : ", so totals and charts blend the two"}. Version splits keep
-          them apart as "BVR Trainer"; filter by version to see DCS alone.{" "}
+          <Trans
+            i18nKey="analytics.app.gameMixedNotice"
+            values={{
+              count: n,
+              blend: allGames ? "" : t("analytics.app.gameBlendPart"),
+            }}
+            components={[<strong key="0" />]}
+          />{" "}
           <button
             type="button"
             className="link-button"
             onClick={() => setQuery({ ...query, includeBvrTrainer: false, dcsPatches: [] })}
           >
-            Leave game recordings out
+            {t("analytics.app.leaveGameOut")}
           </button>
         </>
       ) : (
         <>
-          <strong>{what} left out.</strong> The game's flight and missile models are not DCS's, so its shots
-          would skew DCS statistics.{" "}
+          <Trans
+            i18nKey="analytics.app.gameExcludedNotice"
+            values={{ count: n }}
+            components={[<strong key="0" />]}
+          />{" "}
           <button
             type="button"
             className="link-button"
             onClick={() => setQuery({ ...query, includeBvrTrainer: true })}
           >
-            Include them anyway
+            {t("analytics.app.includeAnyway")}
           </button>
         </>
       )}
@@ -748,6 +795,7 @@ function QualityBar({
   setQuery: (q: AnalyticsQuery) => void;
   ufoExcludedShots: number;
 }) {
+  const { t } = useTranslation();
   const counts = new Map<QualityFlag, number>();
   let ufoShots = 0;
   let unassessed = 0;
@@ -769,7 +817,7 @@ function QualityBar({
     });
   return (
     <div className="quality-bar">
-      {present.length > 0 && <span className="muted small">Labels (click to exclude):</span>}
+      {present.length > 0 && <span className="muted small">{t("analytics.app.labelsClickToExclude")}</span>}
       {present.map((flag) => {
         const excluded = query.excludeQualityFlags.includes(flag);
         return (
@@ -778,29 +826,29 @@ function QualityBar({
             type="button"
             className={`quality-toggle${excluded ? " excluded" : ""}${flag.startsWith("ufo") ? " ufo" : ""}`}
             aria-pressed={excluded}
-            title={`${QUALITY_FLAG_HELP[flag]}\n${excluded ? "Excluded: click to include again." : "Click to exclude these files."}`}
+            title={`${qualityHelpText(flag, t)}\n${excluded ? t("analytics.app.labelExcludedTip") : t("analytics.app.labelIncludeTip")}`}
             onClick={() => toggleFlag(flag)}
           >
             {excluded ? "⊘ " : ""}
-            {QUALITY_FLAG_LABELS[flag]} ({counts.get(flag) ?? 0})
+            {t(`analytics.models.qualityFlag.${flag}`)} ({counts.get(flag) ?? 0})
           </button>
         );
       })}
-      <label
-        className="toggle small"
-        title="Drop single shots whose shooter or target warped from 10 s before launch to 5 s after the shot, even in otherwise clean files."
-      >
+      <label className="toggle small" title={t("analytics.app.excludeUfoShotsTitle")}>
         <input
           type="checkbox"
           checked={query.excludeUfoShots}
           onChange={(e) => setQuery({ ...query, excludeUfoShots: e.target.checked })}
         />{" "}
-        Exclude UFO-affected shots (
-        {query.excludeUfoShots ? `${ufoExcludedShots} dropped` : `${ufoShots} A2A`})
+        {t("analytics.app.excludeUfoShots", {
+          detail: query.excludeUfoShots
+            ? t("analytics.app.ufoDropped", { count: ufoExcludedShots })
+            : t("analytics.app.ufoA2a", { count: ufoShots }),
+        })}
       </label>
       {unassessed > 0 && (
-        <span className="muted small" title="Re-extract the original .acmi files to get quality labels.">
-          · {unassessed} file{unassessed === 1 ? "" : "s"} without quality data
+        <span className="muted small" title={t("analytics.app.unassessedFilesTitle")}>
+          {t("analytics.app.unassessedFiles", { count: unassessed })}
         </span>
       )}
     </div>

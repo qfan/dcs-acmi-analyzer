@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import type { DistanceUnit } from "../../settings/schema.ts";
 import { distanceUnitM, distanceUnitName, fmtDist } from "../../settings/units.ts";
 import {
@@ -6,8 +7,6 @@ import {
   type CohortSplitMode,
   compareCohorts,
   DEFEAT_MODE_COLORS,
-  DEFEAT_MODE_LABELS,
-  DEFENSE_TYPE_LABELS,
   type NotchGateAnalysis,
   type PilotReport,
   type ShotTacticalMetrics,
@@ -20,12 +19,7 @@ import {
   type FittedMissile,
   tierAltitudeScales,
 } from "../missileReach.ts";
-import {
-  A2A_MISSILE_CLASSES,
-  type MissileEngagement,
-  WEAPON_CLASS_LABELS,
-  type WeaponClass,
-} from "../model.ts";
+import { A2A_MISSILE_CLASSES, type MissileEngagement, type WeaponClass } from "../model.ts";
 import type { DefeatModeSummary, DefenseTypeSummary } from "../query.ts";
 import {
   BVR_TIMELINE_ROWS,
@@ -82,27 +76,18 @@ function medianBvrLaunchClosureKt(engagements: MissileEngagement[]): { kt: numbe
   return { kt: Math.round(med / 10) * 10, n: xs.length };
 }
 
-const SAMPLE_CONF_BADGE: Record<
-  "high" | "moderate" | "low",
-  { label: string; color: string; bg: string; title: string }
-> = {
+const SAMPLE_CONF_BADGE: Record<"high" | "moderate" | "low", { color: string; bg: string }> = {
   high: {
-    label: "High N",
     color: "#10b981",
     bg: "rgba(16, 185, 129, 0.14)",
-    title: "High statistical power (>= 40 shots, >= 10 kills across >= 2 sorties)",
   },
   moderate: {
-    label: "Mod N",
     color: "#eab308",
     bg: "rgba(234, 179, 8, 0.15)",
-    title: "Moderate sample size (>= 15 shots, >= 4 kills) — wide confidence intervals",
   },
   low: {
-    label: "Low N (Noisy)",
     color: "#94a3b8",
     bg: "rgba(148, 163, 184, 0.15)",
-    title: "Small sample size (< 15 shots or < 4 kills) — differences are very likely due to chance",
   },
 };
 
@@ -119,6 +104,7 @@ export function PatchComparisonCard({
   distanceUnit: DistanceUnit;
   onTogglePatch: (patch: string) => void;
 }) {
+  const { t } = useTranslation();
   const [splitMode, setSplitMode] = useState<CohortSplitMode>("dcsPatch");
   const [cutoffDate, setCutoffDate] = useState("2025-03-01");
   const [minCohortShots, setMinCohortShots] = useState<number>(0);
@@ -136,21 +122,18 @@ export function PatchComparisonCard({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>DCS Patch &amp; Cohort Comparison ("What Changed in the Last Update?")</h3>
+          <h3>{t("analytics.bvr.patch.title")}</h3>
           <p className="muted small matrix-sub">
-            Compare weapon reach, head-on max kill range, missile Mach, and Pk across DCS patches or recording
-            dates — with <strong>95% confidence intervals</strong> and{" "}
-            <strong>p-values adjusted for the number of comparisons (Holm)</strong> to separate real game
-            changes from small-sample luck.
+            <Trans i18nKey="analytics.bvr.patch.sub" components={[<strong key="0" />, <strong key="1" />]} />
           </p>
         </div>
         <div className="chart-controls">
           <label className="small muted">
-            Min shots:{" "}
+            {t("analytics.bvr.patch.minShots")}{" "}
             <select value={minCohortShots} onChange={(e) => setMinCohortShots(Number(e.target.value))}>
-              <option value={0}>All cohorts</option>
-              <option value={10}>&ge;10 shots</option>
-              <option value={25}>&ge;25 shots</option>
+              <option value={0}>{t("analytics.bvr.patch.allCohorts")}</option>
+              <option value={10}>{t("analytics.bvr.patch.geShots", { count: 10 })}</option>
+              <option value={25}>{t("analytics.bvr.patch.geShots", { count: 25 })}</option>
             </select>
           </label>
           <label className="toggle small muted">
@@ -159,11 +142,11 @@ export function PatchComparisonCard({
               checked={hideNoisyAlerts}
               onChange={(e) => setHideNoisyAlerts(e.target.checked)}
             />{" "}
-            Hide noise-level alerts (adjusted p &ge; 0.15)
+            {t("analytics.bvr.patch.hideNoisy")}
           </label>
           {splitMode === "dateCutoff" && (
             <label className="small muted">
-              Split date:{" "}
+              {t("analytics.bvr.patch.splitDate")}{" "}
               <input
                 type="date"
                 value={cutoffDate}
@@ -172,27 +155,27 @@ export function PatchComparisonCard({
               />
             </label>
           )}
-          <fieldset className="mode-switch" aria-label="Cohort split mode">
+          <fieldset className="mode-switch" aria-label={t("analytics.bvr.patch.splitAria")}>
             <button
               type="button"
               className={splitMode === "dcsPatch" ? "on" : ""}
               onClick={() => setSplitMode("dcsPatch")}
             >
-              By DCS Patch
+              {t("analytics.bvr.patch.byPatch")}
             </button>
             <button
               type="button"
               className={splitMode === "month" ? "on" : ""}
               onClick={() => setSplitMode("month")}
             >
-              By Month
+              {t("analytics.bvr.patch.byMonth")}
             </button>
             <button
               type="button"
               className={splitMode === "dateCutoff" ? "on" : ""}
               onClick={() => setSplitMode("dateCutoff")}
             >
-              Before / After Date
+              {t("analytics.bvr.patch.byDateCutoff")}
             </button>
           </fieldset>
         </div>
@@ -231,13 +214,13 @@ export function PatchComparisonCard({
                     color: sigColor,
                     fontWeight: 600,
                   }}
-                  title={`Two-tailed test (Mann-Whitney U / two-proportion z / order-statistic exceedance), Holm-adjusted for all comparisons shown. ${a.chanceNote}`}
+                  title={t("analytics.bvr.patch.alertTitle", { note: a.chanceNote })}
                 >
                   {a.chanceProb < 0.05
-                    ? `✓ Significant (adj. p=${a.chanceProb.toFixed(3)})`
+                    ? t("analytics.bvr.patch.sig", { p: a.chanceProb.toFixed(3) })
                     : a.chanceProb < 0.15
-                      ? `~ Borderline (adj. p=${a.chanceProb.toFixed(2)})`
-                      : `⚠ Consistent with noise (adj. p=${a.chanceProb.toFixed(2)})`}
+                      ? t("analytics.bvr.patch.borderline", { p: a.chanceProb.toFixed(2) })
+                      : t("analytics.bvr.patch.noise", { p: a.chanceProb.toFixed(2) })}
                 </span>
               </div>
             );
@@ -249,35 +232,32 @@ export function PatchComparisonCard({
         <table className="records">
           <thead>
             <tr>
-              <th>Cohort &amp; Power</th>
-              <th className="num" title="Number of distinct ACMI recordings in this cohort">
-                Sorties
+              <th>{t("analytics.bvr.patch.cohortCol")}</th>
+              <th className="num" title={t("analytics.bvr.patch.sortiesTitle")}>
+                {t("analytics.bvr.patch.sortiesCol")}
               </th>
-              <th className="num">Shots</th>
-              <th className="num">Kills</th>
-              <th className="num" title="Kill probability with Wilson 95% confidence interval">
-                Pk (95% CI)
+              <th className="num">{t("analytics.bvr.patch.shotsCol")}</th>
+              <th className="num">{t("analytics.bvr.patch.killsCol")}</th>
+              <th className="num" title={t("analytics.bvr.patch.pkTitle")}>
+                {t("analytics.bvr.patch.pkCol")}
               </th>
-              <th className="num" title="BVR shots (>= 10 nm) with Wilson 95% confidence interval">
-                BVR (&ge;10 nm)
+              <th className="num" title={t("analytics.bvr.patch.bvrTitle")}>
+                {t("analytics.bvr.patch.bvrCol")}
               </th>
-              <th className="num" title="Median launch range with non-parametric 95% confidence interval">
-                Med Shot (95% CI)
+              <th className="num" title={t("analytics.bvr.patch.medShotTitle")}>
+                {t("analytics.bvr.patch.medShotCol")}
               </th>
-              <th className="num" title="Median kill range with non-parametric 95% confidence interval">
-                Med Kill (95% CI)
+              <th className="num" title={t("analytics.bvr.patch.medKillTitle")}>
+                {t("analytics.bvr.patch.medKillCol")}
               </th>
-              <th className="num">Max Kill Range</th>
-              <th className="num">Head-On Max Kill</th>
-              <th className="num" title="Median peak missile Mach with 95% confidence interval">
-                Med Peak Mach (95% CI)
+              <th className="num">{t("analytics.bvr.patch.maxKillCol")}</th>
+              <th className="num">{t("analytics.bvr.patch.headOnMaxCol")}</th>
+              <th className="num" title={t("analytics.bvr.patch.medMachTitle")}>
+                {t("analytics.bvr.patch.medMachCol")}
               </th>
-              <th className="num">50% Notch Gate</th>
-              <th
-                className="num"
-                title="Smallest Holm-adjusted p-value of the tests against the preceding cohort (lower = less likely to be noise)"
-              >
-                Adj. p vs Prev
+              <th className="num">{t("analytics.bvr.patch.notchGateCol")}</th>
+              <th className="num" title={t("analytics.bvr.patch.adjPTitle")}>
+                {t("analytics.bvr.patch.adjPCol")}
               </th>
             </tr>
           </thead>
@@ -307,9 +287,9 @@ export function PatchComparisonCard({
                           color: confBadge.color,
                           fontWeight: 600,
                         }}
-                        title={confBadge.title}
+                        title={t(`analytics.bvr.sampleConf.${c.sampleConfidence}.title`)}
                       >
-                        {confBadge.label}
+                        {t(`analytics.bvr.sampleConf.${c.sampleConfidence}.label`)}
                       </span>
                     </div>
                   </td>
@@ -400,7 +380,7 @@ export function PatchComparisonCard({
                                 : "var(--muted)",
                           fontWeight: c.vsPrevChanceP < 0.1 ? 600 : 400,
                         }}
-                        title={`Smallest Holm-adjusted two-tailed p-value vs. previous cohort (p = ${c.vsPrevChanceP.toFixed(3)})`}
+                        title={t("analytics.bvr.patch.adjPValTitle", { p: c.vsPrevChanceP.toFixed(3) })}
                       >
                         p={c.vsPrevChanceP.toFixed(2)}
                       </span>
@@ -431,6 +411,7 @@ export function DefeatAndDefenseCard({
   totalKills: number;
   distanceUnit: DistanceUnit;
 }) {
+  const { t } = useTranslation();
   const nonZeroDefeats = defeatBreakdown.filter((d) => d.count > 0);
 
   return (
@@ -439,21 +420,19 @@ export function DefeatAndDefenseCard({
       <section className="card analytics-card">
         <div className="card-head">
           <div>
-            <h3>Missile Outcome & Defeat Mode Classification</h3>
-            <p className="muted small matrix-sub">
-              Classifies every shot by terminal energy, CPA miss distance, and target notch/maneuver state.
-            </p>
+            <h3>{t("analytics.bvr.defeat.title")}</h3>
+            <p className="muted small matrix-sub">{t("analytics.bvr.defeat.sub")}</p>
           </div>
         </div>
         <div className="table-wrap">
           <table className="records">
             <thead>
               <tr>
-                <th>Outcome / Defeat Mode</th>
-                <th className="num">Count</th>
-                <th className="num">Share</th>
-                <th className="num">Med Launch Range</th>
-                <th className="num">Med End Mach</th>
+                <th>{t("analytics.bvr.defeat.modeCol")}</th>
+                <th className="num">{t("analytics.bvr.defeat.countCol")}</th>
+                <th className="num">{t("analytics.bvr.defeat.shareCol")}</th>
+                <th className="num">{t("analytics.bvr.defeat.medRangeCol")}</th>
+                <th className="num">{t("analytics.bvr.defeat.medEndMachCol")}</th>
               </tr>
             </thead>
             <tbody>
@@ -467,7 +446,7 @@ export function DefeatAndDefenseCard({
                         marginRight: 6,
                       }}
                     />
-                    <strong>{DEFEAT_MODE_LABELS[d.mode]}</strong>
+                    <strong>{t(`analytics.bvr.defeatMode.${d.mode}`)}</strong>
                   </td>
                   <td className="num">{d.count}</td>
                   <td className="num">{Math.round(d.share * 100)}%</td>
@@ -484,15 +463,16 @@ export function DefeatAndDefenseCard({
       <section className="card analytics-card">
         <div className="card-head">
           <div>
-            <h3>Target Defensive Reaction & Survival Rate</h3>
-            <p className="muted small matrix-sub">
-              Behavioral defense inferred from post-launch turn rate, missile-LOS aspect, and chaff/flares.
-            </p>
+            <h3>{t("analytics.bvr.defense.title")}</h3>
+            <p className="muted small matrix-sub">{t("analytics.bvr.defense.sub")}</p>
           </div>
           {totalKills > 0 && (
-            <span className="badge warn" title="Killed with no measurable turn or countermeasure">
-              Died unaware: {diedUnawareCount}/{totalKills} (
-              {Math.round((diedUnawareCount / totalKills) * 100)}%)
+            <span className="badge warn" title={t("analytics.bvr.defense.diedUnawareTitle")}>
+              {t("analytics.bvr.defense.diedUnaware", {
+                unaware: diedUnawareCount,
+                total: totalKills,
+                pct: Math.round((diedUnawareCount / totalKills) * 100),
+              })}
             </span>
           )}
         </div>
@@ -500,19 +480,19 @@ export function DefeatAndDefenseCard({
           <table className="records">
             <thead>
               <tr>
-                <th>Target Defense Action</th>
-                <th className="num">Targeted</th>
-                <th className="num">Survived</th>
-                <th className="num">Killed</th>
-                <th className="num">Survival % (95% CI)</th>
-                <th className="num">Med Reaction</th>
+                <th>{t("analytics.bvr.defense.actionCol")}</th>
+                <th className="num">{t("analytics.bvr.defense.targetedCol")}</th>
+                <th className="num">{t("analytics.bvr.defense.survivedCol")}</th>
+                <th className="num">{t("analytics.bvr.defense.killedCol")}</th>
+                <th className="num">{t("analytics.bvr.defense.survivalCol")}</th>
+                <th className="num">{t("analytics.bvr.defense.medReactionCol")}</th>
               </tr>
             </thead>
             <tbody>
               {defenseBreakdown.map((d) => (
                 <tr key={d.defense}>
                   <td>
-                    <strong>{DEFENSE_TYPE_LABELS[d.defense]}</strong>
+                    <strong>{t(`analytics.bvr.defenseType.${d.defense}`)}</strong>
                   </td>
                   <td className="num">{d.shots}</td>
                   <td className="num">{d.survived}</td>
@@ -553,6 +533,7 @@ export function NotchAnalyzerCard({
   notchGateDeg: number;
   onChangeNotchGateDeg: (deg: number) => void;
 }) {
+  const { t } = useTranslation();
   const width = 620;
   const height = 210;
   const padL = 42;
@@ -568,15 +549,12 @@ export function NotchAnalyzerCard({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Empirical Notch Gate & Logistic Regression Seeker Analyzer (Fox-1 / Fox-3 / SAM)</h3>
-          <p className="muted small matrix-sub">
-            Tests whether a pre-defined ±{notchGateDeg}° beam gate explains radar-missile survival, and fits a
-            logistic regression curve to auto-detect the empirical 50% survival boundary.
-          </p>
+          <h3>{t("analytics.bvr.notch.title")}</h3>
+          <p className="muted small matrix-sub">{t("analytics.bvr.notch.sub", { deg: notchGateDeg })}</p>
         </div>
         <div className="chart-controls">
           <label className="small muted">
-            Pre-defined Notch Gate (90° ± Δ°):{" "}
+            {t("analytics.bvr.notch.sliderLabel")}{" "}
             <input
               type="range"
               min={5}
@@ -593,7 +571,7 @@ export function NotchAnalyzerCard({
 
       <div className="notch-kpis">
         <div className="notch-kpi-box">
-          <span className="muted small">Survival Inside ±{notchGateDeg}° Gate</span>
+          <span className="muted small">{t("analytics.bvr.notch.inGate", { deg: notchGateDeg })}</span>
           <strong>
             {notch.inGateSurvivalRate !== null
               ? `${Math.round(notch.inGateSurvivalRate * 100)}% (${notch.inGateSurvived}/${notch.inGateShots})`
@@ -601,7 +579,7 @@ export function NotchAnalyzerCard({
           </strong>
         </div>
         <div className="notch-kpi-box">
-          <span className="muted small">Survival Outside ±{notchGateDeg}° Gate</span>
+          <span className="muted small">{t("analytics.bvr.notch.outGate", { deg: notchGateDeg })}</span>
           <strong>
             {notch.outGateSurvivalRate !== null
               ? `${Math.round(notch.outGateSurvivalRate * 100)}% (${notch.outGateSurvived}/${notch.outGateShots})`
@@ -609,22 +587,26 @@ export function NotchAnalyzerCard({
           </strong>
         </div>
         <div className="notch-kpi-box">
-          <span className="muted small">Gate Rule Accuracy / Precision</span>
+          <span className="muted small">{t("analytics.bvr.notch.accuracy")}</span>
           <strong>
-            {notch.gateAccuracy !== null ? `${Math.round(notch.gateAccuracy * 100)}% acc` : "–"}
-            {notch.gatePrecision !== null ? ` · ${Math.round(notch.gatePrecision * 100)}% prec` : ""}
+            {notch.gateAccuracy !== null
+              ? t("analytics.bvr.notch.accShort", { pct: Math.round(notch.gateAccuracy * 100) })
+              : "–"}
+            {notch.gatePrecision !== null
+              ? t("analytics.bvr.notch.precShort", { pct: Math.round(notch.gatePrecision * 100) })
+              : ""}
           </strong>
         </div>
         <div className="notch-kpi-box">
-          <span className="muted small">ML Auto-Detected 50% Beam Gate</span>
+          <span className="muted small">{t("analytics.bvr.notch.mlBeamGate")}</span>
           <strong>
             {notch.empiricalBeamGateDeg !== null
               ? `90° ± ${notch.empiricalBeamGateDeg.toFixed(1)}°`
-              : "Insufficient data (<4 shots)"}
+              : t("analytics.bvr.notch.insufficientData")}
           </strong>
         </div>
         <div className="notch-kpi-box">
-          <span className="muted small">ML 50% Doppler Radial Velocity Gate</span>
+          <span className="muted small">{t("analytics.bvr.notch.mlRadialGate")}</span>
           <strong>
             {notch.empiricalRadialGateMs !== null
               ? `|Vr| ≤ ${Math.round(notch.empiricalRadialGateMs)} m/s (${Math.round(notch.empiricalRadialGateMs * 1.94384)} kt)`
@@ -637,7 +619,7 @@ export function NotchAnalyzerCard({
         viewBox={`0 0 ${width} ${height}`}
         className="analytics-svg"
         role="img"
-        aria-label="Empirical survival rate vs degrees off 90 degree beam"
+        aria-label={t("analytics.bvr.notch.svgAria")}
       >
         {[0, 0.25, 0.5, 0.75, 1].map((f) => {
           const y = padT + plotH * (1 - f);
@@ -668,7 +650,13 @@ export function NotchAnalyzerCard({
           return (
             <g key={b.label}>
               <title>
-                {`${b.label}: ${b.survived}/${b.shots} survived (${b.survivalRate !== null ? Math.round(b.survivalRate * 100) : 0}% observed, ${Math.round(b.fittedProb * 100)}% logistic fit)`}
+                {t("analytics.bvr.notch.barTip", {
+                  label: b.label,
+                  survived: b.survived,
+                  shots: b.shots,
+                  obs: b.survivalRate !== null ? Math.round(b.survivalRate * 100) : 0,
+                  fit: Math.round(b.fittedProb * 100),
+                })}
               </title>
               {b.shots > 0 && (
                 <rect
@@ -720,6 +708,7 @@ export function PilotReportCard({
   distanceUnit: DistanceUnit;
   onSelectPilot: (pilot: string) => void;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   if (pilots.length === 0) return null;
   const visible = expanded ? pilots : pilots.slice(0, 12);
@@ -728,14 +717,14 @@ export function PilotReportCard({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Pilot BVR Report Card ({pilots.length} pilots)</h3>
-          <p className="muted small matrix-sub">
-            Offensive shot range, Pk, F-pole, and defensive survival / reaction time. Click a pilot to filter.
-          </p>
+          <h3>{t("analytics.bvr.pilotReport.title", { count: pilots.length })}</h3>
+          <p className="muted small matrix-sub">{t("analytics.bvr.pilotReport.sub")}</p>
         </div>
         {pilots.length > 12 && (
           <button type="button" className="secondary small-btn" onClick={() => setExpanded(!expanded)}>
-            {expanded ? "Show top 12" : `Show all (${pilots.length})`}
+            {expanded
+              ? t("analytics.bvr.pilotReport.showTop12")
+              : t("analytics.bvr.pilotReport.showAll", { count: pilots.length })}
           </button>
         )}
       </div>
@@ -744,18 +733,18 @@ export function PilotReportCard({
         <table className="records">
           <thead>
             <tr>
-              <th>Pilot</th>
-              <th>Primary Airframe</th>
-              <th className="num">Shots (BVR)</th>
-              <th className="num">Kills</th>
-              <th className="num">Off. Pk</th>
-              <th className="num">Med Shot Range</th>
-              <th className="num">Med F-Pole</th>
-              <th className="num">Med Crank</th>
-              <th className="num">Targeted</th>
-              <th className="num">Deaths (Unaware)</th>
-              <th className="num">Def. Survival</th>
-              <th className="num">Med Reaction</th>
+              <th>{t("analytics.bvr.pilotReport.pilotCol")}</th>
+              <th>{t("analytics.bvr.pilotReport.airframeCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.shotsCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.killsCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.offPkCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.medShotCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.medFPoleCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.medCrankCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.targetedCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.deathsCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.defSurvCol")}</th>
+              <th className="num">{t("analytics.bvr.pilotReport.medReactCol")}</th>
             </tr>
           </thead>
           <tbody>
@@ -764,7 +753,7 @@ export function PilotReportCard({
                 key={p.pilot}
                 style={{ cursor: "pointer" }}
                 onClick={() => onSelectPilot(p.pilot)}
-                title={`Filter engagements to ${p.pilot}`}
+                title={t("analytics.bvr.pilotReport.filterTitle", { pilot: p.pilot })}
               >
                 <td>
                   <strong>{p.pilot}</strong>
@@ -786,7 +775,9 @@ export function PilotReportCard({
                 <td className="num">
                   {p.deaths}
                   {p.diedUnawareCount > 0 && (
-                    <span className="muted small"> ({p.diedUnawareCount} unaware)</span>
+                    <span className="muted small">
+                      {t("analytics.bvr.pilotReport.unawareCount", { count: p.diedUnawareCount })}
+                    </span>
                   )}
                 </td>
                 <td className="num">
@@ -804,24 +795,20 @@ export function PilotReportCard({
   );
 }
 
-const VERDICT_BADGE_STYLE: Record<GateVerdictStatus, { label: string; color: string; bg: string }> = {
+const VERDICT_BADGE_STYLE: Record<GateVerdictStatus, { color: string; bg: string }> = {
   valid: {
-    label: "✓ Validated",
     color: "#10b981",
     bg: "rgba(16, 185, 129, 0.14)",
   },
   optimistic: {
-    label: "⚠ Unsafe / Optimistic",
     color: "#ef4444",
     bg: "rgba(239, 68, 68, 0.16)",
   },
   conservative: {
-    label: "ℹ Conservative",
     color: "#3b82f6",
     bg: "rgba(59, 130, 246, 0.14)",
   },
   "low-data": {
-    label: "Prior Anchor (Low N)",
     color: "#94a3b8",
     bg: "rgba(148, 163, 184, 0.12)",
   },
@@ -960,6 +947,7 @@ export function BvrTimelineCard({
   /** Fitted missile models; when present, an altitude band scales the chart's kinematic gates. */
   fitted?: FittedMissile[] | null;
 }) {
+  const { t } = useTranslation();
   const [table, setTable] = useState<BvrTimelineTable>(() => cloneTimelineTable(DEFAULT_MILSIM_TIMELINE));
   const [strikeFighterAdd2Nm, setStrikeFighterAdd2Nm] = useState(false);
   const [altFilter, setAltFilter] = useState<AltitudeFilter>("all");
@@ -1051,7 +1039,11 @@ export function BvrTimelineCard({
     const planPart =
       kneeboardPlan === "all" ? "" : `-${kneeboardPlan.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
     void saveCanvasPng(canvas, `bvr-timeline${planPart}-${kneeboardTheme}.png`).catch((err) =>
-      alert(`Kneeboard save failed: ${err instanceof Error ? err.message : err}`),
+      alert(
+        t("analytics.bvr.timeline.saveFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      ),
     );
   };
 
@@ -1112,136 +1104,133 @@ export function BvrTimelineCard({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Mil-Sim BVR Timeline & MAR Statistical Validator (F/A-18C Kneeboard vs. Empirical ACMI)</h3>
+          <h3>{t("analytics.bvr.timeline.title")}</h3>
           <p className="muted small matrix-sub">
-            Tests the circulated 4-tier BVR Timeline chart (in <strong>nm</strong>) against your loaded ACMI
-            recordings. Edit any range gate manually to see how survival &amp; Pk change, or click{" "}
-            <strong>Auto-Fit (Chart Prior + ACMI ML)</strong> to derive optimal numbers via logistic
-            regression with Bayesian shrinkage to the chart when sample count is small.
+            <Trans
+              i18nKey="analytics.bvr.timeline.sub"
+              components={[<strong key="0" />, <strong key="1" />]}
+            />
           </p>
         </div>
         <div className="chart-controls">
           <button
             type="button"
             className="secondary small-btn"
-            title="Copy Empirical Bayes (Chart Prior + Logistic Regression) numbers into the table"
+            title={t("analytics.bvr.timeline.autoFitTitle")}
             onClick={applyAutoPosterior}
           >
-            Auto-Fit (Chart Prior + ACMI ML)
+            {t("analytics.bvr.timeline.autoFitBtn")}
           </button>
           <button
             type="button"
             className="secondary small-btn"
-            title="Copy pure maximum-likelihood ACMI estimates (0 chart prior)"
+            title={t("analytics.bvr.timeline.pureMleTitle")}
             onClick={applyPureMle}
           >
-            Pure ACMI MLE
+            {t("analytics.bvr.timeline.pureMleBtn")}
           </button>
           <button
             type="button"
             className="secondary small-btn"
-            title="Reset all cells to the original F/A-18C BVR Timeline chart numbers"
+            title={t("analytics.bvr.timeline.resetTitle")}
             onClick={resetToChartDefault}
           >
-            Reset to Chart Baseline
+            {t("analytics.bvr.timeline.resetBtn")}
           </button>
           <button
             type="button"
             className="small-btn"
-            title="Preview the current table as a clean 768×1024 kneeboard PNG (no stats) for in-game use"
+            title={t("analytics.bvr.timeline.kneeboardTitle")}
             aria-expanded={showKneeboard}
             onClick={() => setShowKneeboard((v) => !v)}
           >
-            {showKneeboard ? "Hide Kneeboard PNG" : "Show Kneeboard PNG"}
+            {showKneeboard
+              ? t("analytics.bvr.timeline.hideKneeboard")
+              : t("analytics.bvr.timeline.showKneeboard")}
           </button>
         </div>
       </div>
 
       {showKneeboard && (
         <div className="kneeboard-preview">
-          <canvas ref={kneeboardRef} className="kneeboard-canvas" aria-label="Kneeboard PNG preview" />
+          <canvas
+            ref={kneeboardRef}
+            className="kneeboard-canvas"
+            aria-label={t("analytics.bvr.timeline.kneeboardAria")}
+          />
           <div className="kneeboard-side small muted">
             <select
               value={kneeboardPlan}
               onChange={(e) => setKneeboardPlan(e.target.value as KneeboardPlan)}
-              title="Print every gate, or only the gates one game plan flies through (Skate: out at MOR · Short Skate: out NLT MAR · Banzai: to the merge)"
-              aria-label="Kneeboard game plan"
+              title={t("analytics.bvr.timeline.planTitle")}
+              aria-label={t("analytics.bvr.timeline.planAria")}
             >
               {KNEEBOARD_PLAN_ORDER.map((p) => (
                 <option key={p} value={p}>
-                  {p === "all" ? "All gates" : `Plan ${KNEEBOARD_PLANS[p].label}`}
+                  {p === "all"
+                    ? t("analytics.bvr.timeline.allGates")
+                    : t("analytics.bvr.timeline.planPrefix", { label: KNEEBOARD_PLANS[p].label })}
                 </option>
               ))}
             </select>
             <select
               value={kneeboardTheme}
               onChange={(e) => setKneeboardTheme(e.target.value as KneeboardTheme)}
-              title="Kneeboard color scheme"
-              aria-label="Kneeboard color scheme"
+              title={t("analytics.bvr.timeline.themeAria")}
+              aria-label={t("analytics.bvr.timeline.themeAria")}
             >
-              <option value="day">Day</option>
-              <option value="night">Night</option>
+              <option value="day">{t("analytics.bvr.timeline.day")}</option>
+              <option value="night">{t("analytics.bvr.timeline.night")}</option>
             </select>
             <select
               value={gateTimes === "data" && !dataClosure ? "off" : gateTimes}
               onChange={(e) => setGateTimes(e.target.value)}
-              title="Print the seconds between consecutive gates (Commit → Tac → Meld → SR → MOR → DR → LSR → MAR) on the kneeboard, at this closure speed"
-              aria-label="Gate times on kneeboard"
+              title={t("analytics.bvr.timeline.gateTimesTitle")}
+              aria-label={t("analytics.bvr.timeline.gateTimesAria")}
             >
-              <option value="off">No gate times</option>
-              <option value="1000">Gate times @ 1000 kt</option>
+              <option value="off">{t("analytics.bvr.timeline.noGateTimes")}</option>
+              <option value="1000">{t("analytics.bvr.timeline.gateTimesAt", { kt: 1000 })}</option>
               <option value={String(DEFAULT_GATE_CLOSURE_KT)}>
-                Gate times @ {DEFAULT_GATE_CLOSURE_KT} kt
+                {t("analytics.bvr.timeline.gateTimesAt", { kt: DEFAULT_GATE_CLOSURE_KT })}
               </option>
-              <option value="1400">Gate times @ 1400 kt</option>
+              <option value="1400">{t("analytics.bvr.timeline.gateTimesAt", { kt: 1400 })}</option>
               {dataClosure && (
                 <option value="data">
-                  Gate times @ {dataClosure.kt} kt (median of {dataClosure.n} hot BVR shots loaded)
+                  {t("analytics.bvr.timeline.gateTimesData", { kt: dataClosure.kt, n: dataClosure.n })}
                 </option>
               )}
             </select>
-            <label
-              className="toggle"
-              title="Round every gate on the image up to a whole nm (decisions happen earlier, never later). Gate times use the rounded values. The table keeps its decimals."
-            >
+            <label className="toggle" title={t("analytics.bvr.timeline.roundUpTitle")}>
               <input
                 type="checkbox"
                 checked={kneeboardRoundUp}
                 onChange={(e) => setKneeboardRoundUp(e.target.checked)}
               />{" "}
-              Round up to whole nm
+              {t("analytics.bvr.timeline.roundUp")}
             </label>
-            <label
-              className="toggle"
-              title="Move the AR-1 and AR-2 columns to the left of the gate names (AR-1 | AR-2 | GATE | IR/SAR-1 | SAR-2), so the Fox-3 numbers sit right next to each gate"
-            >
+            <label className="toggle" title={t("analytics.bvr.timeline.arLeftTitle")}>
               <input
                 type="checkbox"
                 checked={kneeboardArLeft}
                 onChange={(e) => setKneeboardArLeft(e.target.checked)}
               />{" "}
-              AR-1 / AR-2 columns left of gates
+              {t("analytics.bvr.timeline.arLeft")}
             </label>
             {kneeboardPlan === "all" && (
-              <label
-                className="toggle"
-                title="Draw a lane per game plan beside the gates: solid = Skate, hatched = Short Skate, double rail = Banzai. Bars mark the gates a plan uses, dots the ones it flies through, a cross bar where it gets out."
-              >
+              <label className="toggle" title={t("analytics.bvr.timeline.showLanesTitle")}>
                 <input
                   type="checkbox"
                   checked={kneeboardLanes}
                   onChange={(e) => setKneeboardLanes(e.target.checked)}
                 />{" "}
-                Show game-plan lanes
+                {t("analytics.bvr.timeline.showLanes")}
               </label>
             )}
             <button type="button" className="small-btn" onClick={saveKneeboard}>
-              Save PNG
+              {t("analytics.bvr.timeline.savePng")}
             </button>
             <p>
-              Updates live: edit cells in the table, use Auto-Fit, or tick Strike Fighter Tactics below, then
-              save. 768×1024, saved at 2× resolution. In DCS, put it in{" "}
-              <code>Saved Games\DCS\Kneeboard\</code>.
+              <Trans i18nKey="analytics.bvr.timeline.kneeboardNote" components={[<code key="0" />]} />
             </p>
           </div>
         </div>
@@ -1250,33 +1239,27 @@ export function BvrTimelineCard({
       {/* Sub-toolbar for Strike Fighter +2nm, High-Alt filter, Prior weight, and row filter */}
       <div className="query-subbar" style={{ marginBottom: 10 }}>
         <div className="checks-inline">
-          <label
-            className="toggle"
-            title="*STRIKE FIGHTER TACTICS ADD 2NM TO SR & MOR (as noted on the F/A-18C timeline chart)"
-          >
+          <label className="toggle" title={t("analytics.bvr.timeline.strikeFighterTitle")}>
             <input
               type="checkbox"
               checked={strikeFighterAdd2Nm}
               onChange={(e) => setStrikeFighterAdd2Nm(e.target.checked)}
             />{" "}
-            *Strike Fighter Tactics (+2 nm to NLT SR &amp; MOR)
+            {t("analytics.bvr.timeline.strikeFighter")}
           </label>
-          <label
-            className="small muted"
-            title="Altitude situation. A band keeps only shots launched in it (mean shooter/target altitude) and scales the chart's kinematic gates (THREAT RANGE, NLT SR, MOR, MRAR, DR, LSR, MAR, STERN WEZ) by how far the fitted missiles reach there compared with 35,000 ft. Radar and decision gates stay. The table restarts from the scaled chart."
-          >
-            Altitude:{" "}
+          <label className="small muted" title={t("analytics.bvr.timeline.altitudeTitle")}>
+            {t("analytics.bvr.timeline.altitude")}{" "}
             <select value={altFilter} onChange={(e) => setAltFilter(e.target.value as AltitudeFilter)}>
-              <option value="all">All altitudes (chart as printed)</option>
-              <option value="hi18">Shooter or target &ge;18,000 ft (chart as printed)</option>
+              <option value="all">{t("analytics.bvr.timeline.allAltitudes")}</option>
+              <option value="hi18">{t("analytics.bvr.timeline.hi18Altitudes")}</option>
               {ALTITUDE_BAND_ORDER.map((b) => (
                 <option key={b} value={b} disabled={!hasUsableModels}>
                   {ALTITUDE_BANDS[b].label}
                   {hasUsableModels
-                    ? ", gates scaled"
+                    ? t("analytics.bvr.timeline.gatesScaled")
                     : fitted
-                      ? " (needs 25+ good radar shots)"
-                      : " (fitting…)"}
+                      ? t("analytics.bvr.timeline.needsRadarShots")
+                      : t("analytics.bvr.timeline.fitting")}
                 </option>
               ))}
             </select>
@@ -1287,21 +1270,18 @@ export function BvrTimelineCard({
               checked={showAllPlanningRows}
               onChange={(e) => setShowAllPlanningRows(e.target.checked)}
             />{" "}
-            Show all 14 kneeboard rows (include OFR/DFR/Commit/Pump/Meld)
+            {t("analytics.bvr.timeline.showAllRows")}
           </label>
         </div>
 
         <div className="threshold-group">
-          <label
-            className="small muted"
-            title="Virtual sample weight k0 given to the Mil-Sim Chart baseline when auto-fitting: posterior = (n * ACMI + k0 * Chart) / (n + k0)"
-          >
-            Chart Prior Weight (k₀):{" "}
+          <label className="small muted" title={t("analytics.bvr.timeline.priorWeightTitle")}>
+            {t("analytics.bvr.timeline.priorWeight")}{" "}
             <select value={priorWeight} onChange={(e) => setPriorWeight(Number(e.target.value))}>
-              <option value={0}>k₀ = 0 (100% ACMI Data)</option>
-              <option value={4}>k₀ = 4 (Light Prior)</option>
-              <option value={8}>k₀ = 8 (Balanced Prior — default)</option>
-              <option value={16}>k₀ = 16 (Strong Chart Prior)</option>
+              <option value={0}>{t("analytics.bvr.timeline.k0Zero")}</option>
+              <option value={4}>{t("analytics.bvr.timeline.k0Light")}</option>
+              <option value={8}>{t("analytics.bvr.timeline.k0Balanced")}</option>
+              <option value={16}>{t("analytics.bvr.timeline.k0Strong")}</option>
             </select>
           </label>
         </div>
@@ -1310,20 +1290,16 @@ export function BvrTimelineCard({
       {band && bandScales && (
         <p className="small muted" style={{ margin: "0 0 10px" }}>
           <strong>{ALTITUDE_BANDS[band].label}:</strong>{" "}
-          {hasScaledGates ? (
-            <>
-              gates scaled from the chart&apos;s 35,000 ft by fitted reach at{" "}
-              {ALTITUDE_BANDS[band].refFt.toLocaleString()} ft —{" "}
-              {THREAT_TIER_ORDER.map((tier) => {
-                const sc = bandScales[tier];
-                if (!sc) return `${tier}: no fitted missile`;
-                return `${tier}: head-on ×${sc.hot.toFixed(2)}, no-escape ×${sc.cold.toFixed(2)} (${sc.borrowed ? "borrowed from all fitted missiles" : sc.weapons.join(", ")})`;
-              }).join(" · ")}
-              . Auto-Fit then blends in the outcomes of shots launched in this band.
-            </>
-          ) : (
-            "no good fitted missile yet (needs 25+ tracked radar shots) — filtering shots only, chart baseline unchanged."
-          )}
+          {hasScaledGates
+            ? t("analytics.bvr.timeline.bandScaledInfo", {
+                refFt: ALTITUDE_BANDS[band].refFt.toLocaleString(),
+                tiers: THREAT_TIER_ORDER.map((tier) => {
+                  const sc = bandScales[tier];
+                  if (!sc) return `${tier}: no fitted missile`;
+                  return `${tier}: ×${sc.hot.toFixed(2)} / ×${sc.cold.toFixed(2)} (${sc.borrowed ? "all" : sc.weapons.join(", ")})`;
+                }).join(" · "),
+              })
+            : t("analytics.bvr.timeline.bandNoModelInfo")}
         </p>
       )}
 
@@ -1331,7 +1307,7 @@ export function BvrTimelineCard({
         <table className="records timeline-table">
           <thead>
             <tr>
-              <th>TIMELINE GATE (NM)</th>
+              <th>{t("analytics.bvr.timeline.gateCol")}</th>
               {THREAT_TIER_ORDER.map((tier) => {
                 const meta = THREAT_TIER_META[tier];
                 const ev = evaluations[tier];
@@ -1340,14 +1316,15 @@ export function BvrTimelineCard({
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <strong>{meta.title}</strong>
                       <span className="badge info" style={{ fontSize: 10 }}>
-                        {ev.shots} shots · {ev.kills} kills
+                        {t("analytics.bvr.timeline.tierShotsKills", { shots: ev.shots, kills: ev.kills })}
                       </span>
                     </div>
                     <div className="muted small" style={{ fontWeight: 400, marginTop: 2 }}>
                       {meta.chartAircraft}
                     </div>
                     <div className="muted small" style={{ fontWeight: 400, fontSize: 10 }}>
-                      {meta.typicalWeapons} · Data wt: {Math.round(ev.dataWeight * 100)}%
+                      {meta.typicalWeapons}
+                      {t("analytics.bvr.timeline.dataWeight", { pct: Math.round(ev.dataWeight * 100) })}
                     </div>
                   </th>
                 );
@@ -1378,11 +1355,11 @@ export function BvrTimelineCard({
                           color: "#60a5fa",
                         }}
                       >
-                        ACMI Tested
+                        {t("analytics.bvr.timeline.acmiTested")}
                       </span>
                     ) : (
                       <span className="muted small" style={{ fontSize: 10 }}>
-                        (Derived)
+                        {t("analytics.bvr.timeline.derived")}
                       </span>
                     )}
                   </div>
@@ -1420,14 +1397,14 @@ export function BvrTimelineCard({
                             fontSize: 13,
                             padding: "2px 6px",
                           }}
-                          aria-label={`${tier} ${row.code} in nautical miles`}
+                          aria-label={t("analytics.bvr.timeline.cellAria", { tier, code: row.code })}
                         />
                         <span className="muted small">
                           nm
                           {row.hasStrikeFighterStar && strikeBonus > 0 ? ` (${val + strikeBonus}* eff)` : ""}
                         </span>
 
-                        {badge && (
+                        {badge && cellInfo.verdict && (
                           <span
                             style={{
                               fontSize: 10,
@@ -1439,7 +1416,7 @@ export function BvrTimelineCard({
                             }}
                             title={cellInfo.note ?? undefined}
                           >
-                            {badge.label}
+                            {t(`analytics.bvr.timeline.verdict.${cellInfo.verdict}`)}
                           </span>
                         )}
                       </div>
@@ -1456,7 +1433,10 @@ export function BvrTimelineCard({
                           color: row.directlyTestable && diffFromAuto >= 1.5 ? "#eab308" : "var(--muted)",
                         }}
                       >
-                        {band ? "Scaled chart" : "Chart"}: <strong>{chartDefault}</strong> nm · Auto-Fit:{" "}
+                        {band
+                          ? t("analytics.bvr.timeline.scaledChartLabel")
+                          : t("analytics.bvr.timeline.chartLabel")}
+                        : <strong>{chartDefault}</strong> nm · {t("analytics.bvr.timeline.autoFitLabel")}:{" "}
                         <strong>{cellInfo.autoValNm.toFixed(1)}</strong> nm
                       </div>
                     </td>
@@ -1475,10 +1455,13 @@ export function BvrTimelineCard({
           if (ev.shots === 0) {
             return (
               <div key={tier} className="card kpi-card">
-                <div className="stat-label">{tier} Verdict</div>
+                <div className="stat-label">{t("analytics.bvr.timeline.verdictTitle", { tier })}</div>
                 <div className="muted small" style={{ marginTop: 4 }}>
-                  0 shots in current selection — using 100% {band ? "scaled " : ""}Mil-Sim Chart prior (MAR{" "}
-                  {priorTable[tier].marNm} nm, Threat {priorTable[tier].threatRangeNm} nm).
+                  {t("analytics.bvr.timeline.verdictEmpty", {
+                    scaled: band ? t("analytics.bvr.timeline.scaledWord") : "",
+                    mar: priorTable[tier].marNm,
+                    threat: priorTable[tier].threatRangeNm,
+                  })}
                 </div>
               </div>
             );
@@ -1486,18 +1469,18 @@ export function BvrTimelineCard({
           return (
             <div key={tier} className="card kpi-card">
               <div className="stat-label">
-                {tier} ({ev.shots} shots · {ev.kills} kills)
+                {tier} ({t("analytics.bvr.timeline.tierShotsKills", { shots: ev.shots, kills: ev.kills })})
               </div>
               <div className="small" style={{ marginTop: 4 }}>
                 <div>
-                  <strong>Max Aero:</strong> {ev.threatRangeNote}
+                  <strong>{t("analytics.bvr.timeline.maxAero")}</strong> {ev.threatRangeNote}
                 </div>
                 <div style={{ marginTop: 3 }}>
                   <strong>MAR ({table[tier].marNm} nm):</strong> {ev.marNote}
                 </div>
                 <div style={{ marginTop: 3 }} className="muted">
-                  Recommended MAR: <strong>{ev.posteriorColumn.marNm} nm</strong> · MOR:{" "}
-                  <strong>{ev.posteriorColumn.morNm} nm</strong>
+                  {t("analytics.bvr.timeline.recommendedMar")} <strong>{ev.posteriorColumn.marNm} nm</strong>{" "}
+                  · {t("analytics.bvr.timeline.morLabel")} <strong>{ev.posteriorColumn.morNm} nm</strong>
                 </div>
               </div>
             </div>
@@ -1583,6 +1566,7 @@ export function SuddenReactionCard({
   selectedPatches: string[];
   onTogglePatch?: (patch: string) => void;
 }) {
+  const { t } = useTranslation();
   const unitName = distanceUnitName(distanceUnit);
   const unitM = distanceUnitM(distanceUnit);
   const defaultBin = unitName === "nm" ? 1 : 2;
@@ -1673,10 +1657,9 @@ export function SuddenReactionCard({
     <section className="card analytics-card">
       <div className="card-head">
         <div>
-          <h3>Sudden Defensive Reaction Distribution (&ldquo;When Do Targets React?&rdquo;)</h3>
+          <h3>{t("analytics.bvr.reaction.title")}</h3>
           <span className="muted" style={{ fontSize: 11 }}>
-            Tracks targets flying steady for &ge; 4 s after launch before abruptly initiating &ge; 3.8 G /
-            &ge; 8 &deg;/s break turns or decoys — measured at missile-to-target (M&rarr;T) range
+            {t("analytics.bvr.reaction.sub")}
           </span>
         </div>
         <div className="chart-controls">
@@ -1686,17 +1669,17 @@ export function SuddenReactionCard({
               className={stackMode === "outcome" ? "on" : ""}
               onClick={() => setStackMode("outcome")}
             >
-              Outcome
+              {t("analytics.bvr.reaction.outcomeMode")}
             </button>
             <button
               type="button"
               className={stackMode === "chaff" ? "on" : ""}
               onClick={() => setStackMode("chaff")}
             >
-              Chaff
+              {t("analytics.bvr.reaction.chaffMode")}
             </button>
           </div>
-          <div className="mode-switch" title="Histogram bin width">
+          <div className="mode-switch" title={t("analytics.bvr.reaction.binWidthTitle")}>
             {binOptions.map((step) => (
               <button
                 key={step}
@@ -1723,7 +1706,7 @@ export function SuddenReactionCard({
               className={effectiveScope === "a2a-all" ? "on" : ""}
               onClick={() => setWeaponScope("a2a-all")}
             >
-              All A2A Missiles ({scopeCounts.a2aAll})
+              {t("analytics.bvr.reaction.allA2a", { count: scopeCounts.a2aAll })}
             </button>
           )}
           <button
@@ -1732,7 +1715,7 @@ export function SuddenReactionCard({
             onClick={() => setWeaponScope("A2A-ARH")}
             disabled={scopeCounts.arh === 0}
           >
-            All Fox-3 ({scopeCounts.arh})
+            {t("analytics.bvr.reaction.allFox3", { count: scopeCounts.arh })}
           </button>
           <button
             type="button"
@@ -1740,7 +1723,7 @@ export function SuddenReactionCard({
             onClick={() => setWeaponScope("A2A-IR")}
             disabled={scopeCounts.ir === 0}
           >
-            All Fox-2 ({scopeCounts.ir})
+            {t("analytics.bvr.reaction.allFox2", { count: scopeCounts.ir })}
           </button>
           <button
             type="button"
@@ -1748,7 +1731,7 @@ export function SuddenReactionCard({
             onClick={() => setWeaponScope("A2A-SARH")}
             disabled={scopeCounts.sarh === 0}
           >
-            All Fox-1 ({scopeCounts.sarh})
+            {t("analytics.bvr.reaction.allFox1", { count: scopeCounts.sarh })}
           </button>
           {(scopeCounts.hasNonA2a || scopeCounts.a2aAll === 0) && (
             <button
@@ -1756,15 +1739,15 @@ export function SuddenReactionCard({
               className={effectiveScope === "all" ? "on" : ""}
               onClick={() => setWeaponScope("all")}
             >
-              All Weapons ({scopeCounts.all})
+              {t("analytics.bvr.reaction.allWeapons", { count: scopeCounts.all })}
             </button>
           )}
         </div>
 
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-          <span className="muted">Model (by usage):</span>
+          <span className="muted">{t("analytics.bvr.reaction.modelByUsage")}</span>
           <select
-            aria-label="Specific weapon model ranked by usage"
+            aria-label={t("analytics.bvr.reaction.modelSelectAria")}
             value={selectedModelName ? `model:${selectedModelName}` : ""}
             onChange={(e) => {
               const v = e.target.value;
@@ -1779,10 +1762,16 @@ export function SuddenReactionCard({
               fontSize: 12,
             }}
           >
-            <option value="">All Models in Scope ({baseAnalysis.byWeapon.length})</option>
+            <option value="">
+              {t("analytics.bvr.reaction.allModels", { count: baseAnalysis.byWeapon.length })}
+            </option>
             {baseAnalysis.byWeapon.map((w) => (
               <option key={w.weaponName} value={`model:${w.weaponName}`}>
-                {w.weaponName} — {w.shots} shots ({w.suddenCount} sudden)
+                {t("analytics.bvr.reaction.modelOption", {
+                  name: w.weaponName,
+                  shots: w.shots,
+                  sudden: w.suddenCount,
+                })}
               </option>
             ))}
           </select>
@@ -1791,43 +1780,48 @@ export function SuddenReactionCard({
 
       <div className="notch-kpis">
         <div className="notch-kpi-box">
-          <div className="notch-kpi-label">Sudden Late Reactions</div>
+          <div className="notch-kpi-label">{t("analytics.bvr.reaction.suddenKpi")}</div>
           <div className="notch-kpi-val">
             {analysis.suddenCount}
             <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>
               {" "}
-              / {analysis.totalAnalyzed} tracked
+              {t("analytics.bvr.reaction.trackedSub", { total: analysis.totalAnalyzed })}
             </span>
           </div>
           <div className="notch-kpi-sub">
-            {analysis.earlyCount} early &middot; {analysis.noReactionCount} unaware
-            {analysis.overlapExcludedCount > 0 ? ` · ${analysis.overlapExcludedCount} salvo-deduped` : ""}
-          </div>
-        </div>
-
-        <div className="notch-kpi-box">
-          <div className="notch-kpi-label">Median M&rarr;T Onset Range</div>
-          <div className="notch-kpi-val" style={{ color: "#38bdf8" }}>
-            {analysis.medianMissileRangeM != null ? fmtDist(analysis.medianMissileRangeM, distanceUnit) : "—"}
-          </div>
-          <div className="notch-kpi-sub">
-            {analysis.p25MissileRangeM != null && analysis.p75MissileRangeM != null
-              ? `IQR ${fmtDist(analysis.p25MissileRangeM, distanceUnit)}–${fmtDist(
-                  analysis.p75MissileRangeM,
-                  distanceUnit,
-                )}`
-              : "No sudden reactions"}
-            {analysis.medianMissileRangeCi
-              ? ` · 95% CI ${fmtDist(analysis.medianMissileRangeCi.lo, distanceUnit)}–${fmtDist(
-                  analysis.medianMissileRangeCi.hi,
-                  distanceUnit,
-                )}`
+            {t("analytics.bvr.reaction.earlyUnawareSub", {
+              early: analysis.earlyCount,
+              unaware: analysis.noReactionCount,
+            })}
+            {analysis.overlapExcludedCount > 0
+              ? t("analytics.bvr.reaction.salvoDeduped", { count: analysis.overlapExcludedCount })
               : ""}
           </div>
         </div>
 
         <div className="notch-kpi-box">
-          <div className="notch-kpi-label">Time Left &amp; Peak G</div>
+          <div className="notch-kpi-label">{t("analytics.bvr.reaction.medianRangeKpi")}</div>
+          <div className="notch-kpi-val" style={{ color: "#38bdf8" }}>
+            {analysis.medianMissileRangeM != null ? fmtDist(analysis.medianMissileRangeM, distanceUnit) : "—"}
+          </div>
+          <div className="notch-kpi-sub">
+            {analysis.p25MissileRangeM != null && analysis.p75MissileRangeM != null
+              ? t("analytics.bvr.reaction.iqrLabel", {
+                  p25: fmtDist(analysis.p25MissileRangeM, distanceUnit),
+                  p75: fmtDist(analysis.p75MissileRangeM, distanceUnit),
+                })
+              : t("analytics.bvr.reaction.noSuddenReactions")}
+            {analysis.medianMissileRangeCi
+              ? t("analytics.bvr.reaction.ciLabel", {
+                  lo: fmtDist(analysis.medianMissileRangeCi.lo, distanceUnit),
+                  hi: fmtDist(analysis.medianMissileRangeCi.hi, distanceUnit),
+                })
+              : ""}
+          </div>
+        </div>
+
+        <div className="notch-kpi-box">
+          <div className="notch-kpi-label">{t("analytics.bvr.reaction.ttiPeakGKpi")}</div>
           <div className="notch-kpi-val">
             {analysis.medianTtiS != null ? `${analysis.medianTtiS.toFixed(1)}s` : "—"}
             <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>
@@ -1836,19 +1830,19 @@ export function SuddenReactionCard({
             </span>
           </div>
           <div className="notch-kpi-sub">
-            Median peak load:{" "}
+            {t("analytics.bvr.reaction.medianPeakLoad")}{" "}
             <strong>{analysis.medianPeakG != null ? `${analysis.medianPeakG.toFixed(1)} G` : "—"}</strong>
             {analysis.p10MissileRangeM != null && analysis.p90MissileRangeM != null
-              ? ` · P10–P90 ${fmtDist(analysis.p10MissileRangeM, distanceUnit)}–${fmtDist(
-                  analysis.p90MissileRangeM,
-                  distanceUnit,
-                )}`
+              ? t("analytics.bvr.reaction.p10p90", {
+                  p10: fmtDist(analysis.p10MissileRangeM, distanceUnit),
+                  p90: fmtDist(analysis.p90MissileRangeM, distanceUnit),
+                })
               : ""}
           </div>
         </div>
 
         <div className="notch-kpi-box">
-          <div className="notch-kpi-label">Sudden Defense Survival</div>
+          <div className="notch-kpi-label">{t("analytics.bvr.reaction.survivalKpi")}</div>
           <div className="notch-kpi-val" style={{ color: "#34d399" }}>
             {fmtPctRate(analysis.suddenSurvivalRate)}
             <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>
@@ -1857,18 +1851,27 @@ export function SuddenReactionCard({
             </span>
           </div>
           <div className="notch-kpi-sub">
-            Chaff {fmtPctRate(analysis.withChaffSurvivalRate)} ({analysis.withChaffSurvived}/
-            {analysis.withChaffShots}) vs No chaff {fmtPctRate(analysis.withoutChaffSurvivalRate)} (
-            {analysis.withoutChaffSurvived}/{analysis.withoutChaffShots})
-            {analysis.noReactionCount > 0 ? ` · Unaware ${fmtPctRate(noReactionSurvRate)}` : ""}
+            {t("analytics.bvr.reaction.chaffVsNoChaff", {
+              withRate: fmtPctRate(analysis.withChaffSurvivalRate),
+              withSurv: analysis.withChaffSurvived,
+              withTotal: analysis.withChaffShots,
+              noRate: fmtPctRate(analysis.withoutChaffSurvivalRate),
+              noSurv: analysis.withoutChaffSurvived,
+              noTotal: analysis.withoutChaffShots,
+            })}
+            {analysis.noReactionCount > 0
+              ? t("analytics.bvr.reaction.unawareSurv", { rate: fmtPctRate(noReactionSurvRate) })
+              : ""}
           </div>
         </div>
       </div>
 
       {analysis.suddenCount === 0 ? (
         <div className="muted" style={{ padding: "12px 0" }}>
-          No clean sudden late defensive reactions matched the current filters ({analysis.earlyCount} reacted
-          early, {analysis.noReactionCount} stayed non-maneuvering).
+          {t("analytics.bvr.reaction.noCleanMatches", {
+            early: analysis.earlyCount,
+            unaware: analysis.noReactionCount,
+          })}
         </div>
       ) : (
         <>
@@ -1876,7 +1879,7 @@ export function SuddenReactionCard({
             viewBox={`0 0 ${W} ${H}`}
             className="analytics-svg"
             role="img"
-            aria-label="Missile-to-target range distribution at sudden reaction onset"
+            aria-label={t("analytics.bvr.reaction.svgAria")}
           >
             {yTicks.map((t) => {
               const y = margin.top + plotH - (t / maxCount) * plotH;
@@ -1911,9 +1914,15 @@ export function SuddenReactionCard({
               const topY = botY - topH;
 
               const label = formatReactionBinLabel(b, unitM, unitName);
-              const tip = `${label}: ${b.count} shots (${b.survived} survived, ${b.kills} killed; ${b.withChaff} w/ chaff, ${b.withoutChaff} no chaff${
-                b.medianPeakG != null ? `; med ${b.medianPeakG.toFixed(1)}G` : ""
-              })`;
+              const tip = t("analytics.bvr.reaction.barTip", {
+                label,
+                count: b.count,
+                survived: b.survived,
+                kills: b.kills,
+                withChaff: b.withChaff,
+                withoutChaff: b.withoutChaff,
+                peakG: b.medianPeakG != null ? `; med ${b.medianPeakG.toFixed(1)}G` : "",
+              });
 
               return (
                 <g key={b.index}>
@@ -1978,7 +1987,9 @@ export function SuddenReactionCard({
                   fontSize={10}
                   textAnchor={medianX > W - 110 ? "end" : "start"}
                 >
-                  Med {fmtDist(analysis.medianMissileRangeM, distanceUnit)}
+                  {t("analytics.bvr.reaction.medPrefix", {
+                    dist: fmtDist(analysis.medianMissileRangeM, distanceUnit),
+                  })}
                 </text>
               </g>
             )}
@@ -1990,7 +2001,7 @@ export function SuddenReactionCard({
               fontSize={9.5}
               textAnchor="middle"
             >
-              Missile-to-Target Slant Range at Sudden Reaction Onset ({unitName})
+              {t("analytics.bvr.reaction.xAxis", { unit: unitName })}
             </text>
           </svg>
 
@@ -1999,28 +2010,28 @@ export function SuddenReactionCard({
               <>
                 <span className="legend-item">
                   <span className="dot" style={{ background: "#34d399" }} />
-                  Survived ({analysis.suddenSurvived})
+                  {t("analytics.bvr.reaction.legendSurvived", { count: analysis.suddenSurvived })}
                 </span>
                 <span className="legend-item">
                   <span className="dot" style={{ background: "#f87171" }} />
-                  Killed ({analysis.suddenKills})
+                  {t("analytics.bvr.reaction.legendKilled", { count: analysis.suddenKills })}
                 </span>
               </>
             ) : (
               <>
                 <span className="legend-item">
                   <span className="dot" style={{ background: "#60a5fa" }} />
-                  With chaff ({analysis.withChaffShots})
+                  {t("analytics.bvr.reaction.legendWithChaff", { count: analysis.withChaffShots })}
                 </span>
                 <span className="legend-item">
                   <span className="dot" style={{ background: "#f59e0b" }} />
-                  Maneuver / no chaff ({analysis.withoutChaffShots})
+                  {t("analytics.bvr.reaction.legendNoChaff", { count: analysis.withoutChaffShots })}
                 </span>
               </>
             )}
             <span className="legend-item">
               <span className="dot" style={{ background: "#38bdf8" }} />
-              Median M&rarr;T range
+              {t("analytics.bvr.reaction.legendMedianRange")}
             </span>
           </div>
         </>
@@ -2030,23 +2041,23 @@ export function SuddenReactionCard({
         <div className={showPatches ? "charts-two-col" : undefined} style={{ marginTop: 12 }}>
           <div className="table-wrap">
             <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-              By Weapon Ranked by Usage ({weaponRows.length} models &middot; click model to focus)
+              {t("analytics.bvr.reaction.byWeaponTitle", { count: weaponRows.length })}
             </div>
             <table className="records">
               <thead>
                 <tr>
-                  <th>Weapon</th>
-                  <th>Class</th>
-                  <th>Shots</th>
-                  <th>Sudden</th>
-                  <th>Early</th>
-                  <th>None</th>
-                  <th>Med M&rarr;T</th>
-                  <th>IQR</th>
-                  <th>Med TTI</th>
-                  <th>Med G</th>
-                  <th>Sudden Surv</th>
-                  <th>Unaware Surv</th>
+                  <th>{t("analytics.bvr.reaction.weaponCol")}</th>
+                  <th>{t("analytics.bvr.reaction.classCol")}</th>
+                  <th>{t("analytics.bvr.reaction.shotsCol")}</th>
+                  <th>{t("analytics.bvr.reaction.suddenCol")}</th>
+                  <th>{t("analytics.bvr.reaction.earlyCol")}</th>
+                  <th>{t("analytics.bvr.reaction.noneCol")}</th>
+                  <th>{t("analytics.bvr.reaction.medMtCol")}</th>
+                  <th>{t("analytics.bvr.reaction.iqrCol")}</th>
+                  <th>{t("analytics.bvr.reaction.medTtiCol")}</th>
+                  <th>{t("analytics.bvr.reaction.medGCol")}</th>
+                  <th>{t("analytics.bvr.reaction.suddenSurvCol")}</th>
+                  <th>{t("analytics.bvr.reaction.unawareSurvCol")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2072,12 +2083,16 @@ export function SuddenReactionCard({
                               selected ? resetScope : (`model:${w.weaponName}` as ReactionWeaponScope),
                             )
                           }
-                          title={selected ? "Return to family scope" : "Focus this weapon model"}
+                          title={
+                            selected
+                              ? t("analytics.bvr.reaction.returnToFamily")
+                              : t("analytics.bvr.reaction.focusModel")
+                          }
                         >
                           {w.weaponName}
                         </button>
                       </td>
-                      <td className="muted">{WEAPON_CLASS_LABELS[w.weaponClass]}</td>
+                      <td className="muted">{t(`analytics.models.weaponClass.${w.weaponClass}`)}</td>
                       <td>{w.shots}</td>
                       <td>
                         <strong>{w.suddenCount}</strong>
@@ -2109,17 +2124,17 @@ export function SuddenReactionCard({
           {showPatches && (
             <div className="table-wrap">
               <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-                By DCS Version (pitbull / seeker reaction range drift)
+                {t("analytics.bvr.reaction.byPatchTitle")}
               </div>
               <table className="records">
                 <thead>
                   <tr>
-                    <th>DCS Patch</th>
-                    <th>Sudden n</th>
-                    <th>Med M&rarr;T</th>
-                    <th>IQR</th>
-                    <th>Med TTI</th>
-                    <th>Survival</th>
+                    <th>{t("analytics.bvr.reaction.dcsPatchCol")}</th>
+                    <th>{t("analytics.bvr.reaction.suddenNCol")}</th>
+                    <th>{t("analytics.bvr.reaction.medMtCol")}</th>
+                    <th>{t("analytics.bvr.reaction.iqrCol")}</th>
+                    <th>{t("analytics.bvr.reaction.medTtiCol")}</th>
+                    <th>{t("analytics.bvr.reaction.survivalCol")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2143,7 +2158,7 @@ export function SuddenReactionCard({
                                   : { fontWeight: 600 }
                               }
                               onClick={() => onTogglePatch(p.dcsPatch)}
-                              title="Toggle DCS patch filter"
+                              title={t("analytics.bvr.reaction.togglePatchTitle")}
                             >
                               {p.dcsPatch}
                             </button>

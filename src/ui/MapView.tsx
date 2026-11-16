@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { firstActivity, type MapData } from "../map/mapData.ts";
 import { settingsStore, useSettings } from "../settings/react.ts";
 import { type MapMode, TRAIL_CHOICES } from "../settings/schema.ts";
@@ -13,13 +14,6 @@ export type { MapFocus } from "./viewTypes.ts";
 // three.js is only downloaded when the 3D view is first opened.
 const Scene3D = lazy(() => import("./Scene3D.tsx"));
 
-const TRAIL_LABEL: Record<number, string> = {
-  0: "No trails",
-  15: "15 s trails",
-  60: "1 min trails",
-  300: "5 min trails",
-};
-
 /** The map panel: shared time, playback, selection and options, with a 2D or 3D view inside. */
 export function MapView({
   data,
@@ -30,6 +24,7 @@ export function MapView({
   fmt: (t: number) => string;
   focus: MapFocus | null;
 }) {
+  const { t: tr } = useTranslation();
   const webgl = useMemo(hasWebGL2, []);
   const { settings } = useSettings();
   const update = settingsStore.update;
@@ -182,7 +177,7 @@ export function MapView({
         tabIndex={-1}
         key={`${k.victimUid}:${k.time}`}
         className="tick"
-        title={`Kill at ${fmt(k.time)}`}
+        title={tr("map.killAt", { time: fmt(k.time) })}
         style={{ left: `${((k.time - data.timeStart) / span) * 100}%` }}
         onClick={() => {
           setPlaying(false);
@@ -195,7 +190,7 @@ export function MapView({
         }}
       />
     ));
-  }, [data, fmt]);
+  }, [data, fmt, tr]);
 
   const primaryTrack = primary !== null ? trackByUid.get(primary) : undefined;
   const secondaryTrack = secondary !== null ? trackByUid.get(secondary) : undefined;
@@ -218,7 +213,7 @@ export function MapView({
     <section className="card map-card" ref={panelRef}>
       <div className="card-head">
         <fieldset className="mode-switch">
-          <legend className="sr-only">Map view</legend>
+          <legend className="sr-only">{tr("map.mapViewLegend")}</legend>
           <button
             type="button"
             className={mode === "2d" ? "on" : ""}
@@ -232,7 +227,7 @@ export function MapView({
             className={mode === "3d" ? "on" : ""}
             aria-pressed={mode === "3d"}
             disabled={!webgl}
-            title={webgl ? "3D view (GPU)" : "3D needs WebGL 2, which this browser or device doesn't provide"}
+            title={webgl ? tr("map.view3dTitle") : tr("map.view3dDisabledTitle")}
             onClick={() => update({ map: { mode: "3d" } })}
           >
             3D
@@ -242,11 +237,11 @@ export function MapView({
           <select
             value={trailS}
             onChange={(e) => update({ map: { trailS: Number(e.target.value) } })}
-            aria-label="Trail length"
+            aria-label={tr("map.trailLengthAria")}
           >
             {TRAIL_CHOICES.map((s) => (
               <option key={s} value={s}>
-                {TRAIL_LABEL[s]}
+                {tr(`map.trails.${s}`)}
               </option>
             ))}
           </select>
@@ -256,7 +251,7 @@ export function MapView({
               checked={labels}
               onChange={(e) => update({ labels: { show: e.target.checked } })}
             />{" "}
-            Labels
+            {tr("map.labels")}
           </label>
           <label className="toggle">
             <input
@@ -264,14 +259,14 @@ export function MapView({
               checked={ground}
               onChange={(e) => update({ map: { groundUnits: e.target.checked } })}
             />{" "}
-            Ground and sea units
+            {tr("map.groundAndSea")}
           </label>
         </div>
       </div>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard shortcuts for the map; all actions also have buttons */}
       <div className="map-wrap" onKeyDown={onKeyDown}>
         {mode === "3d" ? (
-          <Suspense fallback={<p className="map-loading muted">Loading 3D view…</p>}>
+          <Suspense fallback={<p className="map-loading muted">{tr("map.loading3d")}</p>}>
             <Scene3D {...viewProps} />
           </Suspense>
         ) : (
@@ -298,17 +293,18 @@ export function MapView({
           />
         )}
       </div>
-      <p className="muted small map-hint">
-        Click or Ctrl+click: primary (the camera follows it) · Ctrl+right-click: secondary · click a selected
-        object again to clear it
-      </p>
+      <p className="muted small map-hint">{tr("map.hint")}</p>
       <div className="timeline">
         <button
           type="button"
           onClick={togglePlay}
-          aria-label={playing ? "Pause" : "Play"}
+          aria-label={playing ? tr("map.pause") : tr("map.play")}
           title={
-            playing ? "Pause" : `Play at ${playRateOf(speed) < 0 ? "◀ " : ""}${fmtRate(playRateOf(speed))}`
+            playing
+              ? tr("map.pause")
+              : tr("map.playAt", {
+                  rate: `${playRateOf(speed) < 0 ? "◀ " : ""}${fmtRate(playRateOf(speed))}`,
+                })
           }
         >
           {playing ? "❚❚" : playRateOf(speed) < 0 ? "◀" : "▶"}
@@ -316,7 +312,7 @@ export function MapView({
         <button
           type="button"
           className="secondary"
-          aria-label="Back 10 seconds"
+          aria-label={tr("map.back10s")}
           onClick={() => setT((x) => Math.max(data.timeStart, x - 10))}
         >
           −10s
@@ -324,7 +320,7 @@ export function MapView({
         <button
           type="button"
           className="secondary"
-          aria-label="Forward 10 seconds"
+          aria-label={tr("map.forward10s")}
           onClick={() => setT((x) => Math.min(data.timeEnd, x + 10))}
         >
           +10s
@@ -345,7 +341,7 @@ export function MapView({
             max={data.timeEnd}
             step={0.1}
             value={t}
-            aria-label="Time"
+            aria-label={tr("map.timeAria")}
             onChange={(e) => setT(Number(e.target.value))}
           />
           <div className="ticks" aria-hidden="true">
@@ -355,7 +351,7 @@ export function MapView({
         <select
           value={playRateOf(speed)}
           onChange={(e) => setSpeed(Number(e.target.value))}
-          aria-label="Playback speed"
+          aria-label={tr("map.playbackSpeedAria")}
         >
           {speedChoices(speed).map((o) => (
             <option key={o.value} value={o.value}>

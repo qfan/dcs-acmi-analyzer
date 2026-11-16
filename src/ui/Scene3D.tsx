@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   BoxGeometry,
   type BufferAttribute,
@@ -94,6 +95,7 @@ interface Gl {
 }
 
 export default function Scene3D(props: ViewProps) {
+  const { t: tr } = useTranslation();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -296,28 +298,28 @@ export default function Scene3D(props: ViewProps) {
     renderRef.current();
   };
 
-  if (error)
-    return (
-      <p className="map-loading notice">
-        The 3D view could not start ({error}). Switch to 2D to see the map.
-      </p>
-    );
+  if (error) return <p className="map-loading notice">{tr("map.error3d", { error })}</p>;
   return (
     <div className="map-view" ref={wrapRef}>
       <canvas
         ref={canvasRef}
         className="map-canvas scene3d"
         tabIndex={0}
-        aria-label="3D view. Drag to orbit, right-drag to pan, scroll to zoom. Click or Ctrl+click an aircraft for the primary selection, Ctrl+right-click for the secondary. Space plays or pauses."
+        aria-label={tr("map.aria3d")}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
       />
       <canvas ref={overlayRef} className="scene-overlay" />
       <div className="map-zoom">
-        <button type="button" className="secondary" aria-label="Zoom in" onClick={() => dolly(1 / 1.6)}>
+        <button
+          type="button"
+          className="secondary"
+          aria-label={tr("map.zoomIn")}
+          onClick={() => dolly(1 / 1.6)}
+        >
           +
         </button>
-        <button type="button" className="secondary" aria-label="Zoom out" onClick={() => dolly(1.6)}>
+        <button type="button" className="secondary" aria-label={tr("map.zoomOut")} onClick={() => dolly(1.6)}>
           −
         </button>
         <button
@@ -325,22 +327,22 @@ export default function Scene3D(props: ViewProps) {
           className="secondary"
           title={
             props.primary !== null && props.secondary !== null
-              ? "Fit the selected pair"
+              ? tr("map.fitPair")
               : props.primary !== null || props.secondary !== null
-                ? "Centre on the selected object"
-                : "Fit everything in the air now"
+                ? tr("map.fitObject")
+                : tr("map.fitAll")
           }
           onClick={() => frameView(false)}
         >
-          Fit
+          {tr("map.fit")}
         </button>
         <button
           type="button"
           className="secondary"
-          title="Look straight down"
+          title={tr("map.topTitle")}
           onClick={() => frameView(true)}
         >
-          Top
+          {tr("map.top")}
         </button>
       </div>
     </div>

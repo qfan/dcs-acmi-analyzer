@@ -21,6 +21,14 @@ export interface Party {
   uid: number;
 }
 
+export type KillNoteItem =
+  | { kind: "friendlyFire" }
+  | { kind: "pilotEjected" }
+  | { kind: "shooterAlreadyDown" }
+  | { kind: "wentDownAfterHit"; seconds: number }
+  | { kind: "alsoHitBy"; assists: string }
+  | { kind: "confidence"; level: "medium" | "low" };
+
 export interface KillRecord {
   kill: Kill;
   victim: Party;
@@ -29,6 +37,7 @@ export interface KillRecord {
   weapon: string;
   cause: string;
   notes: string[];
+  noteItems: KillNoteItem[];
   assists: Party[];
   searchText: string;
 }
@@ -95,20 +104,38 @@ export function killRecords(summary: RecordingSummary, analysis: Analysis): Kill
     const other = k.otherUid !== null ? party(objs[k.otherUid], "") : null;
     const assists = k.assists.map((u) => party(objs[u], "")).filter((p): p is Party => p !== null);
     const notes: string[] = [];
-    if (k.friendly) notes.push("friendly fire");
-    if (k.ejected) notes.push("pilot ejected");
-    if (killerObj && killerObj.removedAt !== null && killerObj.removedAt < k.time - 0.05)
+    const noteItems: KillNoteItem[] = [];
+    if (k.friendly) {
+      notes.push("friendly fire");
+      noteItems.push({ kind: "friendlyFire" });
+    }
+    if (k.ejected) {
+      notes.push("pilot ejected");
+      noteItems.push({ kind: "pilotEjected" });
+    }
+    if (killerObj && killerObj.removedAt !== null && killerObj.removedAt < k.time - 0.05) {
       notes.push("shooter already down");
-    if (k.secondsAfterHit !== null && k.secondsAfterHit > 2)
+      noteItems.push({ kind: "shooterAlreadyDown" });
+    }
+    if (k.secondsAfterHit !== null && k.secondsAfterHit > 2) {
       notes.push(`went down ${k.secondsAfterHit.toFixed(0)} s after the hit`);
-    if (assists.length) notes.push(`also hit by ${assists.map(partyLabel).join(", ")}`);
-    if (k.confidence !== "high") notes.push(`${k.confidence} confidence`);
+      noteItems.push({ kind: "wentDownAfterHit", seconds: Math.round(k.secondsAfterHit) });
+    }
+    if (assists.length) {
+      const list = assists.map(partyLabel).join(", ");
+      notes.push(`also hit by ${list}`);
+      noteItems.push({ kind: "alsoHitBy", assists: list });
+    }
+    if (k.confidence !== "high") {
+      notes.push(`${k.confidence} confidence`);
+      noteItems.push({ kind: "confidence", level: k.confidence });
+    }
     const weapon = k.cause === "weapon" ? weaponLabel(k.weaponName, k.isGun) : "";
     const cause = CAUSE_TEXT[k.cause];
     const searchText = [partyLabel(victim), partyLabel(killer), partyLabel(other), weapon, cause, ...notes]
       .join(" ")
       .toLowerCase();
-    return { kill: k, victim, killer, other, weapon, cause, notes, assists, searchText };
+    return { kill: k, victim, killer, other, weapon, cause, notes, noteItems, assists, searchText };
   });
 }
 

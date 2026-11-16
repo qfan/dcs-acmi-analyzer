@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { LanguageSelector } from "../i18n/LanguageSelector.tsx";
 import { fetchSample, SAMPLES, sampleFromUrl } from "../samples.ts";
 import { type ParseOutcome, parseInWorker } from "../worker/client.ts";
 import { type CachedFile, forgetLastFile, loadLastFile, saveLastFile } from "./lastFile.ts";
@@ -13,7 +15,12 @@ type State =
   | { phase: "error"; name: string; message: string };
 
 export function App() {
+  const { t } = useTranslation();
   const [state, setState] = useState<State>({ phase: "idle" });
+
+  useEffect(() => {
+    document.title = t("viewer.pageTitle");
+  }, [t]);
   const [dragging, setDragging] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -121,13 +128,13 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <h1>ACMI Viewer</h1>
+        <h1>{t("viewer.appTitle")}</h1>
         <div className="actions">
           <button type="button" onClick={() => fileInput.current?.click()}>
-            Open file…
+            {t("viewer.openFile")}
           </button>
           <button type="button" className="secondary" onClick={() => void openSample("default")}>
-            Load sample
+            {t("viewer.loadSample")}
           </button>
           <button
             type="button"
@@ -135,24 +142,25 @@ export function App() {
             aria-haspopup="dialog"
             onClick={() => settingsDialog.current?.showModal()}
           >
-            Settings
+            {t("viewer.settings")}
           </button>
           {state.phase === "done" && (
             <button
               type="button"
               className="secondary"
               onClick={closeFile}
-              title="Close this file and forget it, so a refresh does not reopen it"
+              title={t("viewer.closeAndForgetTitle")}
             >
-              Close &amp; forget
+              {t("viewer.closeAndForget")}
             </button>
           )}
-          <a href="./game.html" className="nav-link-btn" title="Open the BVR trainer game">
-            BVR Trainer
+          <a href="./game.html" className="nav-link-btn" title={t("viewer.bvrTrainerTitle")}>
+            {t("viewer.bvrTrainer")}
           </a>
-          <a href="./analytics.html" className="nav-link-btn" title="Open the multi-recording Analytics page">
-            Multi-File Analytics →
+          <a href="./analytics.html" className="nav-link-btn" title={t("viewer.multiFileAnalyticsTitle")}>
+            {t("viewer.multiFileAnalytics")}
           </a>
+          <LanguageSelector className="secondary" />
           <input
             ref={fileInput}
             type="file"
@@ -170,20 +178,15 @@ export function App() {
       <main>
         {state.phase === "idle" && (
           <div className="empty">
-            <p className="big">Drop a Tacview .acmi file anywhere on this page</p>
-            <p className="muted">
-              Zipped and plain-text recordings are both supported. The file is read in your browser and never
-              uploaded.
-            </p>
-            <p className="muted">
-              The last file you open is kept in this browser, so refreshing the page reopens it.
-            </p>
+            <p className="big">{t("viewer.dropTitle")}</p>
+            <p className="muted">{t("viewer.dropDesc1")}</p>
+            <p className="muted">{t("viewer.dropDesc2")}</p>
           </div>
         )}
         {state.phase === "loading" && (
           <div className="loading">
             <p>
-              Reading <strong>{state.name}</strong>
+              {t("viewer.reading")} <strong>{state.name}</strong>
             </p>
             <progress max={1} value={state.progress} />
           </div>
@@ -191,18 +194,16 @@ export function App() {
         {state.phase === "error" && (
           <div className="error">
             <p>
-              Could not read <strong>{state.name}</strong>
+              {t("viewer.couldNotRead")} <strong>{state.name}</strong>
             </p>
             <p>{state.message}</p>
           </div>
         )}
         {state.phase === "done" && state.restored && (
           <p className="restored-note muted">
-            {state.restored === "game"
-              ? "Fight sent from the BVR Trainer, kept in this browser."
-              : "Reopened the last file you viewed (kept in this browser)."}{" "}
+            {state.restored === "game" ? t("viewer.restoredFromGame") : t("viewer.restoredFromViewer")}{" "}
             <button type="button" className="link-button" onClick={closeFile}>
-              Forget it
+              {t("viewer.forgetIt")}
             </button>
           </p>
         )}
@@ -211,13 +212,13 @@ export function App() {
 
       <SiteFooter />
 
-      <dialog ref={settingsDialog} className="settings-dialog" aria-label="View settings">
+      <dialog ref={settingsDialog} className="settings-dialog" aria-label={t("viewer.settingsAria")}>
         <SettingsPanel onClose={() => settingsDialog.current?.close()} />
       </dialog>
 
       {dragging && (
         <div className="drop-overlay">
-          <p>Drop to open</p>
+          <p>{t("viewer.dropToOpen")}</p>
         </div>
       )}
     </div>

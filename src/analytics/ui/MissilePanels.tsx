@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { FIT_RULES, fitMissileModels, MACH_BANDS } from "../missileFit.ts";
 import { buildFittedMissiles, type FittedMissile, LADDER_ALTS_FT } from "../missileReach.ts";
 import type { MissileEngagement } from "../model.ts";
@@ -37,6 +38,7 @@ const REACH = "rgba(93, 202, 165, 0.45)";
 const LOFT = "#1d9e75";
 
 function ReachLadder({ f }: { f: FittedMissile }) {
+  const { t } = useTranslation();
   const W = 640;
   const X0 = 70;
   const X1 = W - 14;
@@ -55,7 +57,7 @@ function ReachLadder({ f }: { f: FittedMissile }) {
       viewBox={`0 0 ${W} ${H}`}
       width="100%"
       role="img"
-      aria-label={`${f.model.weapon} reach by altitude`}
+      aria-label={t("analytics.missileModels.reachAria", { weapon: f.model.weapon })}
       style={{ maxWidth: W }}
     >
       {ticks.map((n) => (
@@ -115,21 +117,20 @@ function ReachLadder({ f }: { f: FittedMissile }) {
 const fmtCd = (c: number) => (c * 1e5).toFixed(1);
 
 export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | null; busy: boolean }) {
+  const { t } = useTranslation();
   const [selected, setSelected] = useState<string | null>(null);
   const list = fitted ?? [];
   const cur =
     list.find((f) => f.model.weapon === selected) ?? list.find((f) => f.model.quality === "good") ?? list[0];
 
   return (
-    <section className="card analytics-card" aria-label="Missile flyout models">
+    <section className="card analytics-card" aria-label={t("analytics.missileModels.aria")}>
       <div className="card-head">
         <div>
-          <h3>Missile flyout models (fitted from these recordings)</h3>
+          <h3>{t("analytics.missileModels.title")}</h3>
           <p className="muted small matrix-sub">
-            Drag, motor and loft habit measured from every tracked radar-missile flyout in the current
-            selection, then flown in a simple side-view sim (both jets M0.9, same altitude) to find how far
-            each missile reaches at each altitude. Kinematics only: no radar, notch or chaff.
-            {busy && " Fitting…"}
+            {t("analytics.missileModels.sub")}
+            {busy && t("analytics.missileModels.fittingInline")}
           </p>
         </div>
       </div>
@@ -137,8 +138,8 @@ export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | 
       {list.length === 0 ? (
         <p className="muted small">
           {busy
-            ? "Fitting missile models…"
-            : `No missile has ${FIT_RULES.minShots}+ tracked radar-missile shots in this selection yet.`}
+            ? t("analytics.missileModels.fittingMsg")
+            : t("analytics.missileModels.noModels", { min: FIT_RULES.minShots })}
         </p>
       ) : (
         <>
@@ -146,28 +147,30 @@ export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | 
             <table className="records">
               <thead>
                 <tr>
-                  <th>Missile</th>
-                  <th title="Tracked shots used for the fit, and kills among them">Shots · kills</th>
-                  <th title="Boost until peak speed; a sustain motor keeps pushing until 'motor off'">
-                    Motor
+                  <th>{t("analytics.missileModels.missileCol")}</th>
+                  <th title={t("analytics.missileModels.shotsKillsTitle")}>
+                    {t("analytics.missileModels.shotsKillsCol")}
                   </th>
-                  <th>Peak</th>
+                  <th title={t("analytics.missileModels.motorTitle")}>
+                    {t("analytics.missileModels.motorCol")}
+                  </th>
+                  <th>{t("analytics.missileModels.peakCol")}</th>
                   <th
-                    title={`Drag per Mach band (×1e-5 per m): ${MACH_BANDS.slice(0, -1)
-                      .map((m, i) => `M${m}–${MACH_BANDS[i + 1]}`)
-                      .join(", ")}`}
+                    title={t("analytics.missileModels.dragTitle", {
+                      bands: MACH_BANDS.slice(0, -1)
+                        .map((m, i) => `M${m}–${MACH_BANDS[i + 1]}`)
+                        .join(", "),
+                    })}
                   >
-                    Drag M1.2–1.6
+                    {t("analytics.missileModels.dragCol")}
                   </th>
-                  <th title="Climb above launch altitude (median) by launch range">Loft</th>
-                  <th title="Replays each coast along its real path with the fitted model; median error of the end speed">
-                    Fit error
+                  <th title={t("analytics.missileModels.loftTitle")}>
+                    {t("analytics.missileModels.loftCol")}
                   </th>
-                  <th>
-                    No-escape at
-                    <br />
-                    35k / 15k / 5k ft
+                  <th title={t("analytics.missileModels.fitErrorTitle")}>
+                    {t("analytics.missileModels.fitErrorCol")}
                   </th>
+                  <th style={{ whiteSpace: "pre-line" }}>{t("analytics.missileModels.noEscapeCol")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -191,7 +194,7 @@ export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | 
                             title={m.qualityNote ?? undefined}
                             style={{ marginLeft: 6 }}
                           >
-                            suspect
+                            {t("analytics.missileModels.suspect")}
                           </span>
                         )}
                       </td>
@@ -201,7 +204,9 @@ export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | 
                       <td>
                         {m.boostS.toFixed(1)} s
                         {m.motorEndS > m.boostS + 1 && (
-                          <span className="muted small"> + sustain to {m.motorEndS} s</span>
+                          <span className="muted small">
+                            {t("analytics.missileModels.sustainTo", { s: m.motorEndS })}
+                          </span>
                         )}
                       </td>
                       <td>M{m.peakMach.toFixed(1)}</td>
@@ -212,10 +217,13 @@ export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | 
                               .filter((b) => b.shots >= FIT_RULES.minLoftBinShots)
                               .map((b) => `${b.label} nm: +${Math.round(b.medianGainFt / 1000)}k`)
                               .join(" · ")
-                          : "No"}
+                          : t("analytics.missileModels.noLoft")}
                       </td>
                       <td
-                        title={`90% within M${m.replay.p90Mach.toFixed(2)}; single-drag model: M${m.replay.flatDragMedianMach.toFixed(2)}`}
+                        title={t("analytics.missileModels.fitErrorTitleVal", {
+                          p90: m.replay.p90Mach.toFixed(2),
+                          flat: m.replay.flatDragMedianMach.toFixed(2),
+                        })}
                       >
                         M{m.replay.medianMach.toFixed(2)}
                       </td>
@@ -230,30 +238,33 @@ export function MissileModelsCard({ fitted, busy }: { fitted: FittedMissile[] | 
           {cur && (
             <div style={{ marginTop: 12 }}>
               <div className="small" style={{ marginBottom: 4 }}>
-                <strong>{cur.model.weapon}</strong> reach by altitude ({LADDER_ALTS_FT.length} altitudes;
-                click a row above to switch)
+                <Trans
+                  i18nKey="analytics.missileModels.reachByAlt"
+                  values={{ weapon: cur.model.weapon, count: LADDER_ALTS_FT.length }}
+                  components={[<strong key="0" />]}
+                />
               </div>
               <div
                 className="small muted"
                 style={{ display: "flex", flexWrap: "wrap", gap: 14, marginBottom: 4 }}
               >
                 <span>
-                  <span style={{ display: "inline-block", width: 12, height: 10, background: COLD }} /> No
-                  escape: target turns cold at launch
+                  <span style={{ display: "inline-block", width: 12, height: 10, background: COLD }} />{" "}
+                  {t("analytics.missileModels.legendNoEscape")}
                 </span>
                 <span>
                   <span style={{ display: "inline-block", width: 12, height: 10, background: DANGER }} />{" "}
-                  Dangerous head-on (arrives M{FIT_RULES.dangerousMach}+)
+                  {t("analytics.missileModels.legendDangerous", { mach: FIT_RULES.dangerousMach })}
                 </span>
                 <span>
                   <span style={{ display: "inline-block", width: 12, height: 10, background: REACH }} />{" "}
-                  Reaches you head-on (M{cur.model.reachMach.toFixed(1)}+, slowest 10% of kills)
+                  {t("analytics.missileModels.legendReaches", { mach: cur.model.reachMach.toFixed(1) })}
                 </span>
                 <span>
                   <span
                     style={{ display: "inline-block", width: 12, height: 10, border: `1.5px dashed ${LOFT}` }}
                   />{" "}
-                  Extra from loft
+                  {t("analytics.missileModels.legendLoft")}
                 </span>
               </div>
               <ReachLadder f={cur} />

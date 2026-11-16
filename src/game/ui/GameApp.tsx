@@ -1,4 +1,7 @@
+import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import { LanguageSelector } from "../../i18n/LanguageSelector.tsx";
 import { toWorld, type View } from "../../map/render.ts";
 import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
@@ -69,26 +72,35 @@ const RELAYS = knownRelays();
 const INVITE = parseInvite(location.hash, RELAYS);
 
 /** Altitude readout subline: climbing/diving rate and where to, or level. */
-function altSub(j: Jet): string {
+function altSub(j: Jet, t: TFunction): string {
   const fpm = (verticalSpeed(j) / FT) * 60;
   const to = `→ ${(Math.round(j.altCmd / FT / 100) * 100).toLocaleString()}`;
-  if (Math.abs(fpm) < LEVEL_FPM) return Math.abs(j.altCmd - j.pos.z) < 100 * FT ? "level" : to;
+  if (Math.abs(fpm) < LEVEL_FPM) {
+    return Math.abs(j.altCmd - j.pos.z) < 100 * FT ? t("game.app.stats.altLevel") : to;
+  }
   return `${fpm > 0 ? "↑" : "↓"}${(Math.abs(fpm) / 1000).toFixed(1)}k fpm ${to}`;
 }
 
 /** Result title and text from this viewer's side (the sim words its outcomes for blue). */
-function result(o: Outcome, side: Side, mp: boolean): { title: string; text: string } {
-  if (o.winner === null) return { title: OUTCOME_TITLE[o.kind], text: o.reason };
+function result(o: Outcome, side: Side, mp: boolean, t: TFunction): { title: string; text: string } {
+  if (o.winner === null) return { title: t(`game.app.outcomes.${o.kind}`), text: o.reason };
   const won = o.winner === side;
-  if (!mp && side === "blue") return { title: won ? "Victory" : "Defeat", text: o.reason };
+  if (!mp && side === "blue") {
+    return { title: won ? t("game.app.outcomes.win") : t("game.app.outcomes.loss"), text: o.reason };
+  }
   return {
-    title: won ? "Victory" : "Defeat",
-    text: won ? "Every jet on the other side was destroyed." : "Your side was shot down.",
+    title: won ? t("game.app.outcomes.win") : t("game.app.outcomes.loss"),
+    text: won ? t("game.app.mpWinText") : t("game.app.mpLossText"),
   };
 }
 
 export function GameApp() {
+  const { t } = useTranslation();
   const [params, setParams] = useState<GameParams>(loadParams);
+
+  useEffect(() => {
+    document.title = t("game.pageTitle");
+  }, [t]);
   const last = loadLast();
   const [scenarioId, setScenarioId] = useState(
     last?.scenarioId && !scenarioById(last.scenarioId).mpOnly
@@ -675,19 +687,20 @@ export function GameApp() {
     lobby && activeRelay
       ? inviteLink(`${location.origin}${location.pathname}`, lobby.room, activeRelay, RELAYS)
       : "";
-  const res = w?.outcome && session ? result(w.outcome, session.side, mp) : null;
+  const res = w?.outcome && session ? result(w.outcome, session.side, mp, t) : null;
 
   return (
     <div className="g-app">
       <header className="g-top">
-        <strong className="g-title">BVR Trainer</strong>
+        <strong className="g-title">{t("game.title")}</strong>
         <span className="g-muted g-hide-narrow">
-          {scenario.title} · {(session?.altFt ?? altFt).toLocaleString()} ft
+          {t(`game.scenarios.${scenario.id}.title`, { defaultValue: scenario.title })} ·{" "}
+          {(session?.altFt ?? altFt).toLocaleString()} ft
         </span>
-        {session?.watch && <span className="g-watch-badge">NPC vs NPC · Watch</span>}
+        {session?.watch && <span className="g-watch-badge">{t("game.app.watchBadge")}</span>}
         {mp && lobby && (
-          <span className={`g-net g-net-${net}`} title={`Relay: ${net}`}>
-            ● Room {lobby.room}
+          <span className={`g-net g-net-${net}`} title={t("game.lobby.relayTitle", { status: net })}>
+            {t("game.app.roomLabel", { room: lobby.room })}
           </span>
         )}
         <span className="g-grow" />
@@ -702,16 +715,16 @@ export function GameApp() {
               title={
                 mp
                   ? session.paused
-                    ? "Space: resume (in turn mode, says you are ready)"
-                    : `Space: pause (${session.meta.pausesLeft ?? 0} left)`
+                    ? t("game.app.resumeTitle")
+                    : t("game.app.pauseTitle", { left: session.meta.pausesLeft ?? 0 })
                   : "Space"
               }
             >
-              {session.paused ? "▶ Play" : "❚❚ Pause"}
+              {session.paused ? t("game.app.playBtn") : t("game.app.pauseBtn")}
               {mp && !session.paused ? ` (${session.meta.pausesLeft ?? 0})` : ""}
             </button>
             {session.meta.canScale && (
-              <div className="g-seg" title="Time compression">
+              <div className="g-seg" title={t("game.app.timeCompTitle")}>
                 {TIME_SCALES.map((k, i) => (
                   <button
                     type="button"
@@ -721,7 +734,7 @@ export function GameApp() {
                       setScale(k);
                       e.currentTarget.blur();
                     }}
-                    title={`Key ${i + 1}`}
+                    title={t("game.app.keyTitle", { n: i + 1 })}
                   >
                     {k}×
                   </button>
@@ -734,7 +747,7 @@ export function GameApp() {
           type="button"
           className={`g-bgm ${bgmOn ? "on" : ""}`}
           aria-pressed={bgmOn}
-          aria-label={bgmOn ? "Disable background music" : "Enable background music"}
+          aria-label={bgmOn ? t("game.app.bgmDisableAria") : t("game.app.bgmEnableAria")}
           disabled={!BGM_TRACKS.length}
           onClick={(e) => {
             const next = !bgmOn;
@@ -745,9 +758,9 @@ export function GameApp() {
           title={
             BGM_TRACKS.length
               ? bgmOn
-                ? "Background music: ON (click to disable)"
-                : "Background music: OFF (click to enable)"
-              : "No background music tracks available"
+                ? t("game.app.bgmOnTitle")
+                : t("game.app.bgmOffTitle")
+              : t("game.app.bgmNoneTitle")
           }
         >
           ♫
@@ -761,17 +774,13 @@ export function GameApp() {
             toggleFog(!fogOn);
             e.currentTarget.blur(); // keep Space and the game keys working
           }}
-          title={
-            roomFog
-              ? "The room has fog of war on for everyone"
-              : "Fog of war: show only what your radar and RWR tell you"
-          }
+          title={roomFog ? t("game.app.fogRoomTitle") : t("game.app.fogTitle")}
         >
-          {fogOn ? "◐ Fog of war: ON" : "○ Fog of war: OFF"}
+          {fogOn ? t("game.app.fogOn") : t("game.app.fogOff")}
           {roomFog ? " 🔒" : ""}
         </button>
         <button type="button" onClick={() => setShowStart(true)}>
-          New game
+          {t("game.app.newGameBtn")}
         </button>
         {!mp && (
           <button
@@ -779,20 +788,20 @@ export function GameApp() {
             onClick={() => session && start(session.scenarioId, session.altFt)}
             disabled={!session}
           >
-            Restart
+            {t("game.app.restartBtn")}
           </button>
         )}
         {mp && isHost && lobby?.phase === "playing" && (
           <button
             type="button"
             onClick={() => lobbyAction({ a: "to-lobby" })}
-            title="End the match for everyone"
+            title={t("game.app.endMatchTitle")}
           >
-            End match
+            {t("game.app.endMatchBtn")}
           </button>
         )}
         <button type="button" onClick={() => setShowParams(true)} disabled={mp}>
-          Parameters
+          {t("game.app.parametersBtn")}
         </button>
         <div className="g-menu" ref={exportMenuRef}>
           <button
@@ -802,12 +811,10 @@ export function GameApp() {
             aria-expanded={showExport}
             onClick={() => setShowExport((v) => !v)}
             title={
-              session && !session.recorder
-                ? "ACMI recording is disabled in infinite demo mode"
-                : "Save this fight as a Tacview .acmi recording (works mid-fight too)"
+              session && !session.recorder ? t("game.app.exportDisabledTitle") : t("game.app.exportTitle")
             }
           >
-            Export .acmi ▾
+            {t("game.app.exportAcmiBtn")}
           </button>
           {showExport && session?.recorder && (
             <div className="g-menu-list" role="menu">
@@ -815,8 +822,9 @@ export function GameApp() {
             </div>
           )}
         </div>
+        <LanguageSelector />
         <a className="g-link g-hide-narrow" href="./index.html">
-          ACMI viewer
+          {t("game.app.acmiViewerLink")}
         </a>
       </header>
 
@@ -840,12 +848,12 @@ export function GameApp() {
           )}
           {w && session && awaitingCall(w) && !session.paused && (
             <div className="g-banner g-banner-wait">
-              <span>{waitBanner(w, session.fog, session.side)}</span>
+              <span>{waitBanner(w, session.fog, session.side, t)}</span>
             </div>
           )}
           {mp && net === "reconnecting" && (
             <div className="g-banner g-banner-wait">
-              <span>Connection to the relay lost: reconnecting…</span>
+              <span>{t("game.app.reconnectingBanner")}</span>
             </div>
           )}
           {flash && <div className="g-flash">{flash}</div>}
@@ -859,7 +867,7 @@ export function GameApp() {
                   e.target.blur();
                 }}
               />{" "}
-              Follow fight
+              {t("game.app.followFight")}
             </label>
             <label>
               <input
@@ -870,7 +878,7 @@ export function GameApp() {
                   e.target.blur();
                 }}
               />{" "}
-              Labels
+              {t("game.app.labels")}
             </label>
             <label>
               <input
@@ -881,7 +889,7 @@ export function GameApp() {
                   e.target.blur();
                 }}
               />{" "}
-              Radar sectors
+              {t("game.app.radarSectors")}
             </label>
             <label>
               <input
@@ -892,7 +900,7 @@ export function GameApp() {
                   e.target.blur();
                 }}
               />{" "}
-              Side view
+              {t("game.app.sideView")}
             </label>
           </div>
         </div>
@@ -900,10 +908,10 @@ export function GameApp() {
         <aside className="g-side">
           {mp && lobby && <PlayersCard lobby={lobby} you={you} />}
           {session?.watch && watchJets.length > 0 && (
-            <section className="g-card g-watch-bar" aria-label="Inspect AI jet">
+            <section className="g-card g-watch-bar" aria-label={t("game.app.inspectAiAria")}>
               <div className="g-watch-head">
-                <span className="g-muted">Inspect AI</span>
-                <span className="g-watch-mode">No player control</span>
+                <span className="g-muted">{t("game.app.inspectAi")}</span>
+                <span className="g-watch-mode">{t("game.app.noPlayerControl")}</span>
               </div>
               <div className="g-watch-jets">
                 {watchJets.map((j) => {
@@ -917,7 +925,7 @@ export function GameApp() {
                       onClick={() => {
                         session.selected.clear();
                         session.selected.add(j.id);
-                        setTick((t) => t + 1);
+                        setTick((tick) => tick + 1);
                       }}
                     >
                       <span className="g-watch-dot" style={{ background: sideCol(j.side) }} />
@@ -934,31 +942,55 @@ export function GameApp() {
               <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
               <div className="g-stats">
                 <Stat
-                  k="Speed"
+                  k={t("game.app.stats.speed")}
                   v={`M${mach(p).toFixed(2)}`}
-                  sub={`${Math.round(casFromTas(p.speed, p.pos.z) / KT)} KCAS · ${Math.round(p.speed / KT)} TAS`}
+                  sub={t("game.app.stats.speedSub", {
+                    kcas: Math.round(casFromTas(p.speed, p.pos.z) / KT),
+                    tas: Math.round(p.speed / KT),
+                  })}
                 />
-                <Stat k="Altitude" v={`${Math.round(p.pos.z / FT).toLocaleString()} ft`} sub={altSub(p)} />
                 <Stat
-                  k="Energy"
+                  k={t("game.app.stats.altitude")}
+                  v={`${Math.round(p.pos.z / FT).toLocaleString()} ft`}
+                  sub={altSub(p, t)}
+                />
+                <Stat
+                  k={t("game.app.stats.energy")}
                   v={`${(Math.round(energyHeightM(p) / FT / 100) * 100).toLocaleString()} ft`}
-                  sub={`Ps ${fmtSigned(specificExcessPower(w.params.aircraft, p, p.g) / FT)} ft/s`}
+                  sub={t("game.app.stats.energySub", {
+                    ps: fmtSigned(specificExcessPower(w.params.aircraft, p, p.g) / FT),
+                  })}
                 />
                 <Stat
-                  k="Load"
+                  k={t("game.app.stats.load")}
                   v={`${p.g.toFixed(1)} g`}
-                  sub={`max ${availableG(w.params.aircraft, p, p.effort).toFixed(1)}`}
+                  sub={t("game.app.stats.loadSub", {
+                    max: availableG(w.params.aircraft, p, p.effort).toFixed(1),
+                  })}
                 />
                 <Stat
-                  k="Heading"
+                  k={t("game.app.stats.heading")}
                   v={`${String(deg(p.hdg)).padStart(3, "0")}°`}
-                  sub={session.npc[p.id]?.line ?? (p.steer.mode === "relative" ? p.steer.label : "heading")}
+                  sub={
+                    session.npc[p.id]?.line ??
+                    (p.steer.mode === "relative" ? p.steer.label : t("game.app.stats.headingDefault"))
+                  }
                 />
-                <Stat k="Missiles" v={`${p.missiles}`} sub={`chaff ${p.chaff} · flare ${p.flares}`} />
                 <Stat
-                  k="Radar"
-                  v={tgt?.alive ? (w.radarTrack.get(p.id) ? "TRACK" : "no track") : "—"}
-                  sub={tgt?.alive ? tgt.callsign : "no target"}
+                  k={t("game.app.stats.missiles")}
+                  v={`${p.missiles}`}
+                  sub={t("game.app.stats.missilesSub", { chaff: p.chaff, flares: p.flares })}
+                />
+                <Stat
+                  k={t("game.app.stats.radar")}
+                  v={
+                    tgt?.alive
+                      ? w.radarTrack.get(p.id)
+                        ? t("game.app.stats.radarTrack")
+                        : t("game.app.stats.radarNoTrack")
+                      : "—"
+                  }
+                  sub={tgt?.alive ? tgt.callsign : t("game.app.stats.radarNoTarget")}
                 />
               </div>
               <RwrLine world={w} jet={p} />
@@ -967,56 +999,52 @@ export function GameApp() {
               ) : (
                 <>
                   <div className="g-row g-ctl">
-                    <span className="g-label">Throttle</span>
+                    <span className="g-label">{t("game.app.throttle")}</span>
                     <div className="g-seg">
-                      {(["idle", "mil", "ab"] as Throttle[]).map((t) => (
+                      {(["idle", "mil", "ab"] as Throttle[]).map((th) => (
                         <button
                           type="button"
-                          key={t}
-                          className={p.throttle === t ? "on" : ""}
+                          key={th}
+                          className={p.throttle === th ? "on" : ""}
                           onClick={(e) => {
-                            issue((j) => ({ type: "throttle", jetId: j.id, throttle: t }));
+                            issue((j) => ({ type: "throttle", jetId: j.id, throttle: th }));
                             e.currentTarget.blur();
                           }}
                         >
-                          {t.toUpperCase()}
+                          {th.toUpperCase()}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="g-row g-ctl">
-                    <span className="g-label">Turns</span>
+                    <span className="g-label">{t("game.app.turns")}</span>
                     <div className="g-seg">
-                      {(["sustain", "normal", "max"] as const).map((t) => (
+                      {(["sustain", "normal", "max"] as const).map((ef) => (
                         <button
                           type="button"
-                          key={t}
-                          className={p.effort === t ? "on" : ""}
-                          title={
-                            t === "sustain"
-                              ? "Hold Mach (zero energy bleed when thrust allows); climbs on spare power only"
-                              : undefined
-                          }
+                          key={ef}
+                          className={p.effort === ef ? "on" : ""}
+                          title={ef === "sustain" ? t("game.app.sustainTitle") : undefined}
                           onClick={(e) => {
-                            issue((j) => ({ type: "effort", jetId: j.id, effort: t }));
+                            issue((j) => ({ type: "effort", jetId: j.id, effort: ef }));
                             e.currentTarget.blur();
                           }}
                         >
-                          {t === "sustain"
-                            ? "Hold Spd"
-                            : t === "normal"
-                              ? `Normal ${w.params.aircraft.normalG} g`
-                              : `Max ${w.params.aircraft.gLimit} g`}
+                          {ef === "sustain"
+                            ? t("game.app.holdSpd")
+                            : ef === "normal"
+                              ? t("game.app.normalG", { g: w.params.aircraft.normalG })
+                              : t("game.app.maxG", { g: w.params.aircraft.gLimit })}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="g-row g-ctl">
-                    <span className="g-label">Altitude</span>
+                    <span className="g-label">{t("game.app.altitudeLabel")}</span>
                     <div className="g-seg g-alt">
                       <button
                         type="button"
-                        title="Page Down (Shift+↓)"
+                        title={t("game.app.pageDownTitle")}
                         disabled={p.altCmd <= altLimitsM(w.params.aircraft).min + 1}
                         onClick={(e) => {
                           stepAlt(-ALT_BIG_STEP_FT);
@@ -1039,7 +1067,7 @@ export function GameApp() {
                       <button
                         type="button"
                         className="g-alt-cmd"
-                        title="Ordered altitude. Click (or L) to level off where you are."
+                        title={t("game.app.altCmdTitle")}
                         onClick={(e) => {
                           levelOff();
                           e.currentTarget.blur();
@@ -1060,7 +1088,7 @@ export function GameApp() {
                       </button>
                       <button
                         type="button"
-                        title="Page Up (Shift+↑)"
+                        title={t("game.app.pageUpTitle")}
                         disabled={p.altCmd >= altLimitsM(w.params.aircraft).max - 1}
                         onClick={(e) => {
                           stepAlt(ALT_BIG_STEP_FT);
@@ -1073,37 +1101,37 @@ export function GameApp() {
                   </div>
                   <div className="g-maneuvers">
                     <button type="button" onClick={() => steerRel(CRANK_DEG, -1, "crank left")} title="Q">
-                      ↖ Crank L
+                      {t("game.app.crankL")}
                     </button>
                     <button type="button" onClick={() => steerRel(0, 1, "hot")} title="H">
-                      ↑ Hot
+                      {t("game.app.hot")}
                     </button>
                     <button type="button" onClick={() => steerRel(CRANK_DEG, 1, "crank right")} title="E">
-                      Crank R ↗
+                      {t("game.app.crankR")}
                     </button>
                     <button type="button" onClick={() => steerRel(90, -1, "notch left", true)} title="A">
-                      ← Notch L
+                      {t("game.app.notchL")}
                     </button>
                     <button type="button" onClick={() => steerRel(180, 1, "cold", true)} title="C">
-                      ↓ Cold
+                      {t("game.app.cold")}
                     </button>
                     <button type="button" onClick={() => steerRel(90, 1, "notch right", true)} title="D">
-                      Notch R →
+                      {t("game.app.notchR")}
                     </button>
                     <button
                       type="button"
                       onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
-                      title="Insert (visual only for now)"
+                      title={t("game.app.chaffTitle")}
                     >
-                      Chaff ({p.chaff})
+                      {t("game.app.chaffBtn", { count: p.chaff })}
                     </button>
                     <span />
                     <button
                       type="button"
                       onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
-                      title="Delete (visual only for now)"
+                      title={t("game.app.flareTitle")}
                     >
-                      Flare ({p.flares})
+                      {t("game.app.flareBtn", { count: p.flares })}
                     </button>
                   </div>
                   <ZoneBox session={session} />
@@ -1114,7 +1142,7 @@ export function GameApp() {
                     onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
                     title="F"
                   >
-                    FOX 3 {tgt?.alive ? `→ ${tgt.callsign}` : ""}
+                    {t("game.app.fox3Btn", { target: tgt?.alive ? ` → ${tgt.callsign}` : "" })}
                   </button>
                 </>
               )}
@@ -1123,27 +1151,30 @@ export function GameApp() {
 
           {w && (
             <section className="g-card">
-              <h3>Missiles</h3>
+              <h3>{t("game.app.missilesTitle")}</h3>
               {session && (!session.watch || session.fog) && <OwnMissileTimers session={session} />}
               {!session?.fog && w.missiles.some((m) => !m.end) && (
-                <p className="g-muted g-truth">Truth (hidden with fog of war on):</p>
+                <p className="g-muted g-truth">{t("game.app.truthHiddenNote")}</p>
               )}
-              {session?.fog && <p className="g-muted">Hostile missiles show only on your RWR once active.</p>}
+              {session?.fog && <p className="g-muted">{t("game.app.fogMissilesNote")}</p>}
               <table className="g-table">
                 <tbody>
                   {w.missiles
                     .filter((m) => !m.end && !session?.fog)
                     .map((m) => {
-                      const t = jetById(w, m.targetId);
-                      const r = t
-                        ? Math.hypot(t.pos.x - m.pos.x, t.pos.y - m.pos.y, t.pos.z - m.pos.z) / NM
+                      const tgtJet = jetById(w, m.targetId);
+                      const r = tgtJet
+                        ? Math.hypot(tgtJet.pos.x - m.pos.x, tgtJet.pos.y - m.pos.y, tgtJet.pos.z - m.pos.z) /
+                          NM
                         : 0;
                       return (
                         <tr key={m.id}>
                           <td style={{ color: sideCol(m.side) }}>{m.id}</td>
-                          <td>→ {t?.callsign}</td>
+                          <td>→ {tgtJet?.callsign}</td>
                           <td>
-                            <span className={`g-phase g-phase-${m.phase}`}>{PHASE_LABEL[m.phase]}</span>
+                            <span className={`g-phase g-phase-${m.phase}`}>
+                              {t(`game.app.phases.${m.phase}`)}
+                            </span>
                           </td>
                           <td>M{missileMach(m).toFixed(1)}</td>
                           <td>{r.toFixed(1)} nm</td>
@@ -1157,7 +1188,7 @@ export function GameApp() {
 
           {w && (
             <section className="g-card">
-              <h3>Events</h3>
+              <h3>{t("game.app.eventsTitle")}</h3>
               <ol className="g-log">
                 {w.events
                   .map((e, i) => ({ e, seq: w.eventOffset + i }))
@@ -1182,56 +1213,83 @@ export function GameApp() {
           )}
 
           <section className="g-card g-help">
-            <h3>{session?.watch ? "Watch Controls" : "Controls"}</h3>
+            <h3>{session?.watch ? t("game.app.watchControlsTitle") : t("game.app.controlsTitle")}</h3>
             {session?.watch ? (
               <>
                 <p>
-                  <b>Click</b> any visible jet to inspect its AI · <b>drag</b> to pan · <b>wheel</b> to zoom
+                  <Trans
+                    i18nKey="game.app.watchControlsP1"
+                    components={[<b key="0" />, <b key="1" />, <b key="2" />]}
+                  />
                 </p>
                 <p>
-                  <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>V</kbd> follow
+                  <Trans
+                    i18nKey="game.app.watchControlsP2"
+                    components={[<kbd key="0" />, <kbd key="1" />, <kbd key="2" />, <kbd key="3" />]}
+                  />
                 </p>
               </>
             ) : (
               <>
                 <p>
-                  <b>Click</b> your jet to select (Shift adds) · <b>click</b> a bandit to target it ·{" "}
-                  <b>right-click</b> map to set heading · <b>drag</b> to pan · <b>wheel</b> to zoom
+                  <Trans
+                    i18nKey="game.app.playerControlsP1"
+                    components={[<b key="0" />, <b key="1" />, <b key="2" />, <b key="3" />, <b key="4" />]}
+                  />
                 </p>
                 <p>
-                  <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>5</kbd> 1×–16× · <kbd>F</kbd> fire · <kbd>H</kbd>{" "}
-                  hot · <kbd>Q</kbd>/<kbd>E</kbd> crank · <kbd>A</kbd>/<kbd>D</kbd> notch · <kbd>C</kbd> cold
-                  · <kbd>←</kbd>/<kbd>→</kbd> heading ±10° · <kbd>↑</kbd>/<kbd>↓</kbd> altitude ±1,000 ft (
-                  <kbd>Shift</kbd> or <kbd>PgUp</kbd>/<kbd>PgDn</kbd> ±5,000) · <kbd>L</kbd> level off ·{" "}
-                  <kbd>T</kbd> throttle · <kbd>G</kbd> turn mode · <kbd>Insert</kbd> chaff · <kbd>Delete</kbd>{" "}
-                  flare · <kbd>V</kbd> follow
+                  <Trans
+                    i18nKey="game.app.playerControlsP2"
+                    components={[
+                      <kbd key="0" />,
+                      <kbd key="1" />,
+                      <kbd key="2" />,
+                      <kbd key="3" />,
+                      <kbd key="4" />,
+                      <kbd key="5" />,
+                      <kbd key="6" />,
+                      <kbd key="7" />,
+                      <kbd key="8" />,
+                      <kbd key="9" />,
+                      <kbd key="10" />,
+                      <kbd key="11" />,
+                      <kbd key="12" />,
+                      <kbd key="13" />,
+                      <kbd key="14" />,
+                      <kbd key="15" />,
+                      <kbd key="16" />,
+                      <kbd key="17" />,
+                      <kbd key="18" />,
+                      <kbd key="19" />,
+                      <kbd key="20" />,
+                      <kbd key="21" />,
+                      <kbd key="22" />,
+                    ]}
+                  />
                 </p>
               </>
             )}
             <p className="g-muted">
-              Energy: a climb trades speed for height and a dive buys it back (Energy shows height plus speed
-              as feet; Ps is how fast it grows). The turn mode also sets how steeply you climb: Hold Spd holds
-              Mach and climbs only as fast as thrust allows, Normal up to{" "}
-              {w?.params.aircraft.normalClimbDeg ?? 20}°, Max up to {w?.params.aircraft.maxClimbDeg ?? 45}°.
-              Missiles fly much further from high and fast, and die quickly chasing you down into thick air.
-              Hard deck {(w?.params.aircraft.minAltFt ?? 1000).toLocaleString()} ft.
+              {t("game.app.helpEnergy", {
+                normalDeg: w?.params.aircraft.normalClimbDeg ?? 20,
+                maxDeg: w?.params.aircraft.maxClimbDeg ?? 45,
+                minAlt: (w?.params.aircraft.minAltFt ?? 1000).toLocaleString(),
+              })}
             </p>
             <p className="g-muted">
-              Map: radar wedges are ±{w?.params.radar.gimbalDeg ?? 60}°. Shaded out to{" "}
-              {w?.params.radar.rangeNm ?? 70} nm is TWS lock range (fire and datalink); the dashed band out to{" "}
-              {w?.params.radar.detectRangeNm ?? 80} nm only detects. A dotted line from a missile means
-              datalink; dashed with × is where a missile <i>thinks</i> the target is.
+              <Trans
+                i18nKey="game.app.helpMap"
+                values={{
+                  gimbal: w?.params.radar.gimbalDeg ?? 60,
+                  tws: w?.params.radar.rangeNm ?? 70,
+                  detect: w?.params.radar.detectRangeNm ?? 80,
+                }}
+                components={[<i key="0" />]}
+              />
             </p>
+            <p className="g-muted">{t("game.app.helpFog")}</p>
             <p className="g-muted">
-              Fog of war hides enemy jets your radars do not detect (a dashed outline marks where they were
-              last seen), and always hides enemy missiles and launches: missiles do not show on radar, only on
-              your RWR once their seekers go active.
-            </p>
-            <p className="g-muted">
-              RWR ring around your jets: amber tick = an enemy radar is scanning you (datalink support looks
-              the same, so there is no launch warning); red <b>M</b> = an active missile seeker sees you,
-              blinking when it is locked on. Notch and Cold fly against that missile. Chaff and flares are
-              visual only for now.
+              <Trans i18nKey="game.app.helpRwr" components={[<b key="0" />]} />
             </p>
           </section>
 
@@ -1280,7 +1338,7 @@ export function GameApp() {
                 onAction={lobbyAction}
                 onLeave={leaveRoom}
                 inviteUrl={inviteUrl}
-                serverName={activeRelay ? relayLabel(activeRelay, RELAYS) : "the relay"}
+                serverName={activeRelay ? relayLabel(activeRelay, RELAYS) : t("game.app.theRelay")}
               />
             ) : (
               <MultiplayerTab
@@ -1318,48 +1376,48 @@ export function GameApp() {
             setParams(np);
             saveParams(np);
             setShowParams(false);
-            setFlash("Parameters saved. They apply from the next start or restart.");
+            setFlash(t("game.app.paramsSavedFlash"));
           }}
         />
       )}
       {ended && !endSeen && res && !showStart && (
         <div className="g-modal-back">
-          <div className="g-modal g-end-dialog" role="dialog" aria-label="Result">
+          <div className="g-modal g-end-dialog" role="dialog" aria-label={t("game.app.resultAria")}>
             <h2>{res.title}</h2>
             <p>{res.text}</p>
-            <p className="g-muted">Fight time {fmtTime(w?.t ?? 0)}.</p>
+            <p className="g-muted">{t("game.app.fightTime", { time: fmtTime(w?.t ?? 0) })}</p>
             <div className="g-row">
-              <span className="g-label">Recording</span>
+              <span className="g-label">{t("game.app.recordingLabel")}</span>
               <ExportButtons onExport={exportFight} />
             </div>
             <div className="g-row g-end">
               <button type="button" onClick={() => setEndSeen(true)}>
-                Look at the map
+                {t("game.app.lookAtMapBtn")}
               </button>
               {mp ? (
                 isHost ? (
                   <button type="button" className="g-primary" onClick={() => lobbyAction({ a: "to-lobby" })}>
-                    Back to lobby
+                    {t("game.app.backToLobbyBtn")}
                   </button>
                 ) : (
                   <>
                     <button type="button" onClick={leaveRoom}>
-                      Leave room
+                      {t("game.app.leaveRoomBtn")}
                     </button>
-                    <span className="g-muted">The host takes everyone back to the lobby.</span>
+                    <span className="g-muted">{t("game.app.guestLobbyNote")}</span>
                   </>
                 )
               ) : (
                 <>
                   <button type="button" onClick={() => setShowStart(true)}>
-                    New game
+                    {t("game.app.newGameBtn")}
                   </button>
                   <button
                     type="button"
                     className="g-primary"
                     onClick={() => session && start(session.scenarioId, session.altFt)}
                   >
-                    Restart
+                    {t("game.app.restartBtn")}
                   </button>
                 </>
               )}
@@ -1373,9 +1431,10 @@ export function GameApp() {
 
 /** Multiplayer side-panel card: who is in the room, on which side, and how their connection is. */
 function PlayersCard({ lobby, you }: { lobby: LobbyState; you: number }) {
+  const { t } = useTranslation();
   return (
     <section className="g-card g-players">
-      <h3>Players · room {lobby.room}</h3>
+      <h3>{t("game.app.playersTitle", { room: lobby.room })}</h3>
       <ul>
         {lobby.players.map((pl) => {
           const slots = lobby.slots.filter((s) => s.peer === pl.id);
@@ -1385,13 +1444,17 @@ function PlayersCard({ lobby, you }: { lobby: LobbyState; you: number }) {
               <span className="g-watch-dot" style={{ background: side ? sideCol(side) : "var(--g-muted)" }} />
               <span>
                 {pl.name}
-                {pl.id === you ? " (you)" : ""}
-                {pl.host ? " · host" : ""}
+                {pl.id === you ? t("game.lobby.youTag") : ""}
+                {pl.host ? t("game.lobby.hostTag") : ""}
               </span>
               <span className="g-grow" />
               <span className="g-muted">
-                {slots.map((s) => s.callsign).join(", ") || "watching"}
-                {pl.away ? " · reconnecting" : pl.rttMs !== null && !pl.host ? ` · ${pl.rttMs} ms` : ""}
+                {slots.map((s) => s.callsign).join(", ") || t("game.app.watchingSlot")}
+                {pl.away
+                  ? t("game.lobby.reconnectingTag")
+                  : pl.rttMs !== null && !pl.host
+                    ? ` · ${pl.rttMs} ms`
+                    : ""}
               </span>
             </li>
           );
@@ -1406,36 +1469,29 @@ function PlayersCard({ lobby, you }: { lobby: LobbyState; you: number }) {
  * not a missile is still coming, and the call itself comes after a random 5–10 s, so neither the
  * text nor the timing tells you what your RWR cannot.
  */
-function waitBanner(w: World, fog: boolean, side: Side): string {
+function waitBanner(w: World, fog: boolean, side: Side, t: TFunction): string {
   const meAlive = w.jets.some((j) => j.side === side && j.alive);
-  if (fog)
-    return meAlive
-      ? "All known hostiles down. Stay defensive until the fight is called."
-      : "You are down. Waiting for the fight to be called.";
-  if (waitingOnMissiles(w))
-    return meAlive
-      ? "All hostiles down, but missiles are still in the air: keep defending."
-      : "You are down. Your missiles in the air can still score a trade.";
-  return "No missile can still kill anyone. Calling the fight…";
+  if (fog) return meAlive ? t("game.app.waitFogAlive") : t("game.app.waitFogDead");
+  if (waitingOnMissiles(w)) {
+    return meAlive ? t("game.app.waitMissilesAlive") : t("game.app.waitMissilesDead");
+  }
+  return t("game.app.waitCalling");
 }
 
 type ExportMode = "download" | "viewer" | "both";
 
 function ExportButtons({ onExport }: { onExport: (mode: ExportMode) => void }) {
+  const { t } = useTranslation();
   return (
     <div className="g-seg">
-      <button type="button" onClick={() => onExport("download")} title="Save the .acmi file to your computer">
-        Download
+      <button type="button" onClick={() => onExport("download")} title={t("game.app.downloadTitle")}>
+        {t("game.app.downloadBtn")}
       </button>
-      <button
-        type="button"
-        onClick={() => onExport("viewer")}
-        title="Open it in this site's ACMI viewer (new tab)"
-      >
-        Open in viewer
+      <button type="button" onClick={() => onExport("viewer")} title={t("game.app.openInViewerTitle")}>
+        {t("game.app.openInViewerBtn")}
       </button>
       <button type="button" onClick={() => onExport("both")}>
-        Both
+        {t("game.app.bothBtn")}
       </button>
     </div>
   );
@@ -1452,16 +1508,6 @@ function downloadBlob(blob: Blob, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-const OUTCOME_TITLE = { win: "Victory", loss: "Defeat", trade: "Trade", draw: "Draw" } as const;
-
-const PHASE_LABEL = {
-  datalink: "datalink",
-  inertial: "no datalink",
-  search: "active, searching",
-  tracking: "tracking",
-  lost: "lost",
-};
-
 function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
   return (
     <div className="g-stat">
@@ -1473,23 +1519,35 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
 }
 
 function ZoneBox({ session }: { session: SessionView }) {
+  const { t } = useTranslation();
   const z = session.zone?.zone;
-  if (!z) return <div className="g-zone g-muted">Target a bandit to see the launch zone.</div>;
+  if (!z) return <div className="g-zone g-muted">{t("game.app.zoneNeedTarget")}</div>;
   const inMax = z.rangeNm <= z.rmaxNm;
   const inNe = z.rangeNm <= z.rneNm;
   return (
     <div className="g-zone">
       <div>
-        Range <b>{z.rangeNm.toFixed(1)}</b> nm · <span className="g-rmax">Rmax {z.rmaxNm.toFixed(1)}</span> ·{" "}
-        <span className="g-rne">Rne {z.rneNm.toFixed(1)}</span>
+        <Trans
+          i18nKey="game.app.zoneLine"
+          values={{
+            range: z.rangeNm.toFixed(1),
+            rmax: z.rmaxNm.toFixed(1),
+            rne: z.rneNm.toFixed(1),
+          }}
+          components={[
+            <b key="0" />,
+            <span key="1" className="g-rmax" />,
+            <span key="2" className="g-rne" />,
+          ]}
+        />
       </div>
       <div className={inNe ? "g-rne" : inMax ? "g-rmax" : "g-muted"}>
-        {inNe
-          ? "Inside no-escape range: it cannot outrun a shot now."
-          : inMax
-            ? "In range if it holds course; it can still turn cold and escape."
-            : "Out of range."}
-        {z.now.hit && ` Shot now: ~${Math.round(z.now.tofS)} s, arriving M${z.now.arrivalMach.toFixed(1)}.`}
+        {inNe ? t("game.app.zoneInNe") : inMax ? t("game.app.zoneInMax") : t("game.app.zoneOutOfRange")}
+        {z.now.hit &&
+          t("game.app.zoneShotNow", {
+            tof: Math.round(z.now.tofS),
+            mach: z.now.arrivalMach.toFixed(1),
+          })}
       </div>
     </div>
   );
@@ -1518,9 +1576,10 @@ function nearestRwrMissile(w: World, j: Jet): string | null {
  * time to impact (TTI). Nothing here reads the real missile.
  */
 function OwnMissileTimers({ session }: { session: SessionView }) {
+  const { t: tr } = useTranslation();
   const t = session.world.t;
   const timers = session.activeTimers();
-  if (timers.length === 0) return <p className="g-muted">None of yours in flight.</p>;
+  if (timers.length === 0) return <p className="g-muted">{tr("game.app.ownTimersNone")}</p>;
   return (
     <div className="g-timers">
       {timers.map((tm) => {
@@ -1532,11 +1591,11 @@ function OwnMissileTimers({ session }: { session: SessionView }) {
         const target = jetById(session.world, tm.targetId);
         const status =
           tti !== null && tti <= 0
-            ? "TIME OUT"
+            ? tr("game.app.timerTimeout")
             : ttp !== null && ttp > 0
               ? `TTP ${Math.ceil(ttp)} s`
               : tm.pitbull
-                ? "ACTIVE"
+                ? tr("game.app.timerActive")
                 : "TTP —";
         return (
           <div key={tm.missileId} className="g-timer">
@@ -1559,19 +1618,22 @@ function OwnMissileTimers({ session }: { session: SessionView }) {
 
 /** One-line RWR readout for the selected jet: who is painting it, bearings relative to the nose. */
 function RwrLine({ world, jet }: { world: World; jet: Jet }) {
+  const { t } = useTranslation();
   const contacts = rwrContacts(world, jet);
-  if (contacts.length === 0) return <div className="g-rwr g-muted">RWR: clean</div>;
+  if (contacts.length === 0) return <div className="g-rwr g-muted">{t("game.app.rwrClean")}</div>;
   const rel = (b: number) => {
     const d = Math.round(((((b - jet.hdg) * 180) / Math.PI + 540) % 360) - 180);
-    return d === 0 ? "nose" : `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
+    return d === 0 ? t("game.app.rwrNose") : `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
   };
   return (
     <div className="g-rwr">
-      RWR:{" "}
+      {t("game.app.rwrPrefix")}{" "}
       {contacts.map((c, i) => (
         <span key={c.sourceId} className={c.kind === "missile" ? "g-rwr-missile" : "g-rwr-radar"}>
           {i > 0 ? " · " : ""}
-          {c.kind === "missile" ? `MISSILE ${c.lock ? "LOCK " : ""}` : "radar "}
+          {c.kind === "missile"
+            ? `${t("game.app.rwrMissile")}${c.lock ? t("game.app.rwrLock") : ""}`
+            : t("game.app.rwrRadar")}
           {rel(c.bearing)}
         </span>
       ))}
@@ -1592,31 +1654,32 @@ function NpcBehaviorPanel({
   tgt: Jet | undefined;
   params: GameParams;
 }) {
+  const { t } = useTranslation();
   const turnLabel =
     jet.effort === "sustain"
-      ? "Hold Spd"
+      ? t("game.app.holdSpd")
       : jet.effort === "normal"
-        ? `Normal ${params.aircraft.normalG} g`
-        : `Max ${params.aircraft.gLimit} g`;
+        ? t("game.app.normalG", { g: params.aircraft.normalG })
+        : t("game.app.maxG", { g: params.aircraft.gLimit });
   return (
     <div className="g-npc-panel">
       <div className="g-npc-head">
         <span className="g-muted">{ai ? `NPC (${ai.skill})` : "NPC"}</span>
         {ai && <span className={`g-ai-pill g-ai-pill-${ai.state}`}>{ai.state.toUpperCase()}</span>}
       </div>
-      <div className="g-npc-detail">{ai ? ai.detail : "Flown automatically by AI."}</div>
+      <div className="g-npc-detail">{ai ? ai.detail : t("game.app.npcDefaultDetail")}</div>
       <div className="g-npc-meta">
         <span>
-          Throttle <b>{jet.throttle.toUpperCase()}</b>
+          {t("game.app.npcThrottle")} <b>{jet.throttle.toUpperCase()}</b>
         </span>
         <span>
-          Turns <b>{turnLabel}</b>
+          {t("game.app.npcTurns")} <b>{turnLabel}</b>
         </span>
         <span>
-          Alt order <b>{(Math.round(jet.altCmd / FT / 100) * 100).toLocaleString()} ft</b>
+          {t("game.app.npcAltOrder")} <b>{(Math.round(jet.altCmd / FT / 100) * 100).toLocaleString()} ft</b>
         </span>
         <span>
-          Target <b>{tgt?.alive ? tgt.callsign : "—"}</b>
+          {t("game.app.npcTarget")} <b>{tgt?.alive ? tgt.callsign : "—"}</b>
         </span>
       </div>
       {session.zone?.zone && <ZoneBox session={session} />}

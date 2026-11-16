@@ -1,6 +1,8 @@
 /** Multiplayer: host or join a room, then the lobby (settings, seats, ready, start). */
+import type { TFunction } from "i18next";
 import { useState } from "react";
-import { AI_SKILL_CHOICES, skillChoiceLabel } from "../ai/doctrine.ts";
+import { useTranslation } from "react-i18next";
+import { AI_SKILL_CHOICES } from "../ai/doctrine.ts";
 import type {
   LobbyAction,
   LobbyPlayer,
@@ -23,12 +25,12 @@ export const TURN_CHOICES = [0, 10, 20, 30] as const;
 
 const CUSTOM = "__custom__";
 
-function probeText(p: ProbeResult | undefined): string {
-  if (!p || p.state === "checking") return "checking…";
-  if (p.state === "ok") return `✓ ${p.ms} ms`;
-  if (p.state === "busy") return "full";
-  if (p.state === "disabled") return "closed";
-  return "unreachable";
+function probeText(p: ProbeResult | undefined, t: TFunction): string {
+  if (!p || p.state === "checking") return t("game.lobby.probeChecking");
+  if (p.state === "ok") return t("game.lobby.probeOk", { ms: p.ms ?? "" });
+  if (p.state === "busy") return t("game.lobby.probeBusy");
+  if (p.state === "disabled") return t("game.lobby.probeDisabled");
+  return t("game.lobby.probeUnreachable");
 }
 
 export interface ServerPickerProps {
@@ -56,6 +58,7 @@ function ServerPicker({
   onRefresh,
   invite,
 }: ServerPickerProps) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const isBuiltin = relays.some((r) => r.url === selection);
@@ -64,10 +67,10 @@ function ServerPicker({
     .filter((r) => probes.get(r.url)?.state === "ok")
     .sort((a, b) => (probes.get(a.url)?.ms ?? 1e9) - (probes.get(b.url)?.ms ?? 1e9))[0];
   const autoText = best
-    ? `Automatic: ${best.label} · ${probes.get(best.url)?.ms} ms`
+    ? t("game.lobby.autoBest", { label: best.label, ms: probes.get(best.url)?.ms ?? "" })
     : [...probes.values()].some((p) => p.state === "checking")
-      ? "Automatic (checking servers…)"
-      : "Automatic (no server answered)";
+      ? t("game.lobby.autoChecking")
+      : t("game.lobby.autoNone");
   const draftOk = isRelayUrl(draft);
   const warnMixed =
     (!!selection && blockedAsMixedContent(selection)) || (draftOk && blockedAsMixedContent(draft));
@@ -75,9 +78,9 @@ function ServerPicker({
   return (
     <div className="g-server">
       <div className="g-row">
-        <span className="g-label">Server</span>
+        <span className="g-label">{t("game.lobby.server")}</span>
         <select
-          aria-label="Relay server"
+          aria-label={t("game.lobby.relayServerAria")}
           value={editing ? CUSTOM : selection}
           onChange={(e) => {
             if (e.target.value === CUSTOM) {
@@ -92,26 +95,30 @@ function ServerPicker({
           <option value="">{autoText}</option>
           {relays.map((r) => (
             <option key={r.url} value={r.url}>
-              {r.label} ({probeText(probes.get(r.url))})
+              {r.label} ({probeText(probes.get(r.url), t)})
             </option>
           ))}
           {customs.length > 0 && (
-            <optgroup label="Recent">
+            <optgroup label={t("game.lobby.recentGroup")}>
               {customs.map((u) => (
                 <option key={u} value={u}>
-                  {u} ({probeText(probes.get(u))})
+                  {u} ({probeText(probes.get(u), t)})
                 </option>
               ))}
             </optgroup>
           )}
-          <option value={CUSTOM}>Custom address…</option>
+          <option value={CUSTOM}>{t("game.lobby.customAddress")}</option>
         </select>
-        <button type="button" onClick={onRefresh} title="Check the servers again">
+        <button type="button" onClick={onRefresh} title={t("game.lobby.refreshServersTitle")}>
           ↻
         </button>
         {selection && !isBuiltin && !editing && (
-          <button type="button" onClick={() => onForget(selection)} title="Forget this address">
-            Forget
+          <button
+            type="button"
+            onClick={() => onForget(selection)}
+            title={t("game.lobby.forgetAddressTitle")}
+          >
+            {t("game.lobby.forgetBtn")}
           </button>
         )}
       </div>
@@ -122,7 +129,7 @@ function ServerPicker({
             type="text"
             className="g-relay-url"
             placeholder="wss://my-relay.example/ws"
-            aria-label="Custom relay address"
+            aria-label={t("game.lobby.customRelayAria")}
             value={draft}
             spellCheck={false}
             onChange={(e) => setDraft(e.target.value.trim())}
@@ -141,27 +148,21 @@ function ServerPicker({
               onUseCustom(draft);
             }}
           >
-            Use
+            {t("game.lobby.useBtn")}
           </button>
         </div>
       )}
-      {editing && draft && !draftOk && <p className="g-error">Enter a ws:// or wss:// address.</p>}
-      {warnMixed && (
-        <p className="g-error">
-          This page is served over https, so browsers block plain ws:// addresses here. Use wss://.
-        </p>
-      )}
+      {editing && draft && !draftOk && <p className="g-error">{t("game.lobby.invalidWsUrl")}</p>}
+      {warnMixed && <p className="g-error">{t("game.lobby.mixedContentError")}</p>}
       {invite?.relayUrl && (
         <p className="g-muted">
-          The invite for room {invite.room} is on {relayLabel(invite.relayUrl, relays)}; joining it uses that
-          server.
+          {t("game.lobby.inviteRelayNote", {
+            room: invite.room,
+            relay: relayLabel(invite.relayUrl, relays),
+          })}
         </p>
       )}
-      <p className="g-muted g-small">
-        The relay passes messages between players, so players never see each other's addresses. Servers are
-        checked only while this tab is open. To use your own relay (LAN, Tailscale or a VM; see game/server in
-        the source), pick Custom address.
-      </p>
+      <p className="g-muted g-small">{t("game.lobby.relayNote")}</p>
     </div>
   );
 }
@@ -187,43 +188,41 @@ export function MultiplayerTab({
   onJoin: () => void;
   server: ServerPickerProps;
 }) {
+  const { t } = useTranslation();
   const busy = status === "connecting";
   const codeOk = /^[A-Z2-9]{6}$/.test(code);
   return (
     <div className="g-mp">
       <div className="g-row">
-        <span className="g-label">Your name</span>
+        <span className="g-label">{t("game.lobby.yourName")}</span>
         <input
           type="text"
           className="g-name"
           maxLength={24}
           value={name}
-          placeholder="Callsign"
+          placeholder={t("game.lobby.callsignPlaceholder")}
           onChange={(e) => onName(e.target.value)}
         />
       </div>
       <div className="g-mp-choices">
         <section className="g-mp-choice">
-          <h3>Host a game</h3>
-          <p className="g-muted">
-            Open a room, share its code, pick the scenario and who flies each jet. Your browser runs the
-            fight.
-          </p>
+          <h3>{t("game.lobby.hostTitle")}</h3>
+          <p className="g-muted">{t("game.lobby.hostDesc")}</p>
           <button type="button" className="g-primary" disabled={busy || !name.trim()} onClick={onHost}>
-            Host a game
+            {t("game.lobby.hostBtn")}
           </button>
         </section>
         <section className="g-mp-choice">
-          <h3>Join a game</h3>
-          <p className="g-muted">Enter the code the host gave you, or open their invite link.</p>
+          <h3>{t("game.lobby.joinTitle")}</h3>
+          <p className="g-muted">{t("game.lobby.joinDesc")}</p>
           <div className="g-join">
             <input
               type="text"
               className="g-code-input"
               maxLength={6}
               value={code}
-              placeholder="ROOM CODE"
-              aria-label="Room code"
+              placeholder={t("game.lobby.roomCodePlaceholder")}
+              aria-label={t("game.lobby.roomCodeAria")}
               onChange={(e) => onCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && codeOk && name.trim()) onJoin();
@@ -235,26 +234,24 @@ export function MultiplayerTab({
               disabled={busy || !codeOk || !name.trim()}
               onClick={onJoin}
             >
-              Join
+              {t("game.lobby.joinBtn")}
             </button>
           </div>
         </section>
       </div>
-      {busy && <p className="g-muted">Connecting…</p>}
+      {busy && <p className="g-muted">{t("game.lobby.connecting")}</p>}
       {statusMessage && status !== "connecting" && <p className="g-error">{statusMessage}</p>}
       <ServerPicker {...server} />
     </div>
   );
 }
 
-const crewLabel = (c: SlotState): string =>
-  c === "open"
-    ? "Open (NPC if empty)"
-    : c === "closed"
-      ? "Closed"
-      : c === "human"
-        ? "Player"
-        : `NPC ${skillChoiceLabel(c)}`;
+function crewLabel(c: SlotState, t: TFunction): string {
+  if (c === "open") return t("game.lobby.crewOpen");
+  if (c === "closed") return t("game.lobby.crewClosed");
+  if (c === "human") return t("game.lobby.crewHuman");
+  return t("game.lobby.crewNpc", { skill: t(`game.skill.${c}`) });
+}
 
 export function LobbyPanel({
   lobby,
@@ -274,6 +271,7 @@ export function LobbyPanel({
   /** The relay this room lives on (codes only work there). */
   serverName: string;
 }) {
+  const { t } = useTranslation();
   const me = lobby.players.find((p) => p.id === you);
   const isHost = !!me?.host;
   const st = lobby.settings;
@@ -307,31 +305,31 @@ export function LobbyPanel({
           {sl.crew === "human" ? (
             <>
               {playerName(sl.peer)}
-              {mine && " (you)"}
-              {player?.host ? " · host" : player?.ready ? " ✓" : " · not ready"}
-              {player?.away && " · reconnecting"}
+              {mine && t("game.lobby.youTag")}
+              {player?.host ? t("game.lobby.hostTag") : player?.ready ? " ✓" : t("game.lobby.notReadyTag")}
+              {player?.away && t("game.lobby.reconnectingTag")}
             </>
           ) : isHost ? (
             <select
               value={sl.crew}
-              aria-label={`Who flies ${sl.callsign}`}
+              aria-label={t("game.lobby.whoFliesAria", { callsign: sl.callsign })}
               onChange={(e) =>
                 onAction({ a: "slot-crew", jetId: sl.jetId, crew: e.target.value as SlotState })
               }
             >
               {(["open", ...AI_SKILL_CHOICES, "closed"] as SlotState[]).map((c) => (
                 <option key={c} value={c}>
-                  {crewLabel(c)}
+                  {crewLabel(c, t)}
                 </option>
               ))}
             </select>
           ) : (
-            <span className="g-muted">{crewLabel(sl.crew)}</span>
+            <span className="g-muted">{crewLabel(sl.crew, t)}</span>
           )}
         </span>
         {sl.crew === "open" && !mine && (
           <button type="button" onClick={() => onAction({ a: "take", jetId: sl.jetId })}>
-            Take
+            {t("game.lobby.takeBtn")}
           </button>
         )}
       </li>
@@ -342,32 +340,34 @@ export function LobbyPanel({
     <div className="g-lobby">
       <div className="g-room">
         <div>
-          <span className="g-label">Room code</span>
+          <span className="g-label">{t("game.lobby.roomCodeLabel")}</span>
           <b className="g-code">{lobby.room}</b>
         </div>
         <button type="button" onClick={copy} title={inviteUrl}>
-          {copied ? "Copied" : "Copy invite link"}
+          {copied ? t("game.lobby.copiedBtn") : t("game.lobby.copyInviteBtn")}
         </button>
-        <span className={`g-net g-net-${status}`} title={`Relay: ${status}`}>
-          ● {status === "connected" ? `on ${serverName}` : status}
+        <span className={`g-net g-net-${status}`} title={t("game.lobby.relayTitle", { status })}>
+          ● {status === "connected" ? t("game.lobby.connectedOn", { server: serverName }) : status}
         </span>
       </div>
 
       <div className="g-row">
-        <span className="g-label">Scenario</span>
+        <span className="g-label">{t("game.lobby.scenarioLabel")}</span>
         {isHost ? (
           <select value={st.scenarioId} onChange={(e) => set({ scenarioId: e.target.value })}>
             {SCENARIOS.filter((s) => s.mp).map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title}
+                {t(`game.scenarios.${s.id}.title`, { defaultValue: s.title })}
               </option>
             ))}
           </select>
         ) : (
-          <b>{scenario.title}</b>
+          <b>{t(`game.scenarios.${scenario.id}.title`, { defaultValue: scenario.title })}</b>
         )}
       </div>
-      <p className="g-muted g-scn-summary">{scenario.summary}</p>
+      <p className="g-muted g-scn-summary">
+        {t(`game.scenarios.${scenario.id}.summary`, { defaultValue: scenario.summary })}
+      </p>
 
       <FightSettings
         altFt={st.altFt}
@@ -376,11 +376,11 @@ export function LobbyPanel({
         onMissiles={(n) => set({ missiles: n })}
         fog={st.fog}
         onFog={(on) => set({ fog: on })}
-        fogLabels={["Off: each player chooses", "On for everyone"]}
+        fogLabels={[t("game.lobby.fogOffMp"), t("game.lobby.fogOnMp")]}
         disabled={!isHost}
       />
       <div className="g-row">
-        <span className="g-label">Time</span>
+        <span className="g-label">{t("game.lobby.timeLabel")}</span>
         <div className="g-seg">
           {TURN_CHOICES.map((n) => (
             <button
@@ -389,19 +389,15 @@ export function LobbyPanel({
               disabled={!isHost}
               className={st.turnEveryS === n ? "on" : ""}
               onClick={() => set({ turnEveryS: n })}
-              title={
-                n
-                  ? "The fight pauses every N seconds until everyone presses Play"
-                  : "Real time; each player has 5 pauses"
-              }
+              title={n ? t("game.lobby.turnModeTitle") : t("game.lobby.realTimeTitle")}
             >
-              {n === 0 ? "Real time" : `Turns of ${n} s`}
+              {n === 0 ? t("game.lobby.realTime") : t("game.lobby.turnsOf", { s: n })}
             </button>
           ))}
         </div>
       </div>
       <div className="g-row">
-        <span className="g-label">Compression</span>
+        <span className="g-label">{t("game.lobby.compressionLabel")}</span>
         <label className="g-check">
           <input
             type="checkbox"
@@ -409,49 +405,57 @@ export function LobbyPanel({
             checked={st.timeCompression}
             onChange={(e) => set({ timeCompression: e.target.checked })}
           />{" "}
-          Host may speed up time for everyone
+          {t("game.lobby.compressionCheck")}
         </label>
       </div>
 
       <div className="g-slots">
         {(["blue", "red"] as const).map((side) => (
           <section key={side} className={`g-slot-side g-slot-${side}`}>
-            <h3>{side === "blue" ? "Blue" : "Red"}</h3>
+            <h3>{side === "blue" ? t("game.lobby.blueSide") : t("game.lobby.redSide")}</h3>
             <ul>{lobby.slots.filter((s) => s.side === side).map(slotRow)}</ul>
           </section>
         ))}
       </div>
       {spectators.length > 0 && (
         <p className="g-muted">
-          Watching (no jet):{" "}
-          {spectators.map((p: LobbyPlayer) => p.name + (p.id === you ? " (you)" : "")).join(", ")}
+          {t("game.lobby.watchingLabel")}{" "}
+          {spectators
+            .map((p: LobbyPlayer) => p.name + (p.id === you ? t("game.lobby.youTag") : ""))
+            .join(", ")}
         </p>
       )}
 
       <div className="g-row g-end">
         <button type="button" onClick={onLeave}>
-          {isHost ? "Close room" : "Leave"}
+          {isHost ? t("game.lobby.closeRoomBtn") : t("game.lobby.leaveBtn")}
         </button>
         {mySlot && !isHost && (
           <button type="button" onClick={() => onAction({ a: "release" })}>
-            Give up seat
+            {t("game.lobby.giveUpSeatBtn")}
           </button>
         )}
         {isHost ? (
           <>
-            <button type="button" onClick={() => onAction({ a: "swap" })} title="Swap blue and red seats">
-              Swap sides
+            <button
+              type="button"
+              onClick={() => onAction({ a: "swap" })}
+              title={t("game.lobby.swapSidesTitle")}
+            >
+              {t("game.lobby.swapSidesBtn")}
             </button>
             <button
               type="button"
               className="g-primary"
               disabled={waiting.length > 0}
               title={
-                waiting.length ? `Waiting for ${waiting.map((p) => p.name).join(", ")}` : "Start the fight"
+                waiting.length
+                  ? t("game.lobby.waitingFor", { names: waiting.map((p) => p.name).join(", ") })
+                  : t("game.lobby.startFightTitle")
               }
               onClick={() => onAction({ a: "start" })}
             >
-              Start
+              {t("game.startDialog.startBtn")}
             </button>
           </>
         ) : (
@@ -461,12 +465,12 @@ export function LobbyPanel({
               className={me?.ready ? "" : "g-primary"}
               onClick={() => onAction({ a: "ready", ready: !me?.ready })}
             >
-              {me?.ready ? "Not ready" : "Ready"}
+              {me?.ready ? t("game.lobby.notReadyBtn") : t("game.lobby.readyBtn")}
             </button>
           )
         )}
       </div>
-      {!isHost && <p className="g-muted">The host picks the scenario and starts the fight.</p>}
+      {!isHost && <p className="g-muted">{t("game.lobby.guestHint")}</p>}
     </div>
   );
 }
