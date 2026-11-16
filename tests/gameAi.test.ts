@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
+import { applySnapshot, buildSnapshot, makeMirror, SnapshotCursor, worldShape } from "../src/game/engine/snapshot.ts";
 import { makeJet } from "../src/game/sim/aircraft.ts";
 import { NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
@@ -516,6 +517,32 @@ describe("game: 6v6 infinite demo mode", () => {
     const labels2 = w2.jets.map((j) => npcOf(w2, j.id).skill.label);
     expect(labels2.every((l) => l === "Easy" || l === "Normal" || l === "Hard")).toBe(true);
     expect(new Set(labels2).size).toBeGreaterThan(1);
+  });
+
+  it("drops ended missiles from the UI mirror world in infinite mode", () => {
+    const p = P();
+    const session = new GameSession("infinite", 25000, p, DEFAULT_AUTOPAUSE, 7, DEFAULT_OPTIONS);
+    const w = session.world;
+    w.controllers.clear();
+    must(jetById(w, "R1")).pos.y = 40 * NM;
+    command(w, { type: "target", jetId: "B1", targetId: "R1" });
+    command(w, { type: "fire", jetId: "B1", targetId: "R1" });
+    step(w);
+    expect(w.missiles).toHaveLength(1);
+    const missile = must(w.missiles[0]);
+
+    const mirror = makeMirror(worldShape(w));
+    const cur = new SnapshotCursor();
+    applySnapshot(mirror, buildSnapshot(session, ["blue"], cur));
+    expect(mirror.missiles.map((m) => m.id)).toEqual([missile.id]);
+
+    // End the missile and step so maintainInfiniteWorld prunes it from the sim world.
+    missile.end = "spent";
+    step(w);
+    expect(w.missiles).toHaveLength(0);
+
+    applySnapshot(mirror, buildSnapshot(session, ["blue"], cur));
+    expect(mirror.missiles).toHaveLength(0);
   });
 });
 
