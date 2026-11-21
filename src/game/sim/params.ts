@@ -63,10 +63,10 @@ export interface MissileParams {
   /** Lift limit: L ≤ liftK · ρ · v², and never above maxG. */
   liftK: number;
   maxG: number;
-  /** Proportional navigation constant in the terminal phase. */
+  /** Proportional navigation constant (used at full strength in terminal; midcourse ramps up to it). */
   navConstant: number;
-  /** Midcourse steering: straight at the target estimate, or at a predicted intercept point. */
-  midcourse: "pursuit" | "lead";
+  /** Midcourse steering: unified biased PN ("pn"), predicted intercept point ("lead"), or pure pursuit ("pursuit"). */
+  midcourse: "pn" | "lead" | "pursuit";
   /** Missile goes active when its own estimate of range to target is this close (nm). */
   pitbullRangeNm: number;
   /** Seeker: detection range (nm), search cone half-angle around the expected target (deg), gimbal limit (deg). */
@@ -172,7 +172,7 @@ export const DEFAULT_MISSILE: MissileParams = {
   liftK: 9.5e-4,
   maxG: 40,
   navConstant: 4,
-  midcourse: "pursuit",
+  midcourse: "pn",
   pitbullRangeNm: 10,
   seekerRangeNm: 10,
   seekerSearchDeg: 10,
@@ -183,8 +183,8 @@ export const DEFAULT_MISSILE: MissileParams = {
   minSpeedKt: 200,
   lethalMach: 0.9,
   loft: true,
-  loftRangeNm: [10, 15, 25, 35, 50],
-  loftGainFt: [0, 2800, 9600, 15400, 20000],
+  loftRangeNm: [15, 22, 32, 42, 55],
+  loftGainFt: [0, 3500, 9500, 15000, 20000],
   loftClimbDeg: 25,
   loftDiveDeg: 40,
 };
@@ -240,8 +240,12 @@ export function mergeParams(saved: unknown): GameParams {
         dst[k] = [...v];
     }
   }
-  if (out.missile.midcourse !== "pursuit" && out.missile.midcourse !== "lead")
-    out.missile.midcourse = "pursuit";
+  if (
+    out.missile.midcourse !== "pn" &&
+    out.missile.midcourse !== "lead" &&
+    out.missile.midcourse !== "pursuit"
+  )
+    out.missile.midcourse = "pn";
   return out;
 }
 
@@ -300,12 +304,12 @@ export const PARAM_FIELDS: ParamField[] = [
     key: "midcourse",
     label: "Midcourse steering",
     kind: "select",
-    options: ["pursuit", "lead"],
+    options: ["pn", "lead", "pursuit"],
   },
   {
     group: "missile",
     key: "navConstant",
-    label: "Terminal PN constant",
+    label: "PN constant",
     kind: "number",
     step: 0.5,
     min: 0.1,
@@ -365,7 +369,7 @@ export const PARAM_FIELDS: ParamField[] = [
   {
     group: "missile",
     key: "loftClimbDeg",
-    label: "Loft climb angle",
+    label: "Max loft climb angle",
     unit: "°",
     kind: "number",
     min: 1,

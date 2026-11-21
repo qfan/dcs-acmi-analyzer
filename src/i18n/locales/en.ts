@@ -1078,26 +1078,26 @@ export const en = {
     scenarios: {
       duel: {
         title: "Head-on duel",
-        summary: "1v1 from 60 nm against the NPC. Pick its skill, or let the NPC fly your jet too and watch.",
+        summary: "1v1 from 70 nm against the NPC. Pick its skill, or let the NPC fly your jet too and watch.",
         lesson:
           "The NPC flies BVR doctrine from its own radar and RWR only: it commits, shoots inside a fraction of its Rmax, cranks to support its missile, pumps after pitbull (Normal and Hard), and turns cold when an active missile shows on its RWR. It has the same picture you would have with fog of war on.",
       },
       "2v1": {
         title: "Two-ship vs one",
-        summary: "2v1 from 60 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
+        summary: "2v1 from 70 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
         lesson:
           "Two ships against one let you bracket the bandit: split your wingmen to force it to defend one side while the other presses in. Click a jet to select it, Shift+click to add the other, and give orders to both at once.",
       },
       "2v2": {
         title: "Two-ship vs two-ship",
-        summary: "2v2 from 60 nm. You fly both blue jets (select one or both), or watch NPC vs NPC.",
+        summary: "2v2 from 70 nm. You fly both blue jets (select one or both), or watch NPC vs NPC.",
         lesson:
           "Each side shares its radar picture. The NPCs sort targets (each wingman takes a different bandit when it can) and crank to opposite sides. Click a jet to select it, Shift+click to add the other, and give orders to both at once.",
       },
       "4v2": {
         title: "Four-ship (2x2) vs two-ship",
         summary:
-          "4v2 from 60 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
+          "4v2 from 70 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
         lesson:
           "Lead with the front two-ship to engage and force the bandits defensive while the trailing two-ship 20 nm behind presses the advantage or covers their pump. Click or Shift+click jets to task elements separately.",
       },
@@ -1122,7 +1122,7 @@ export const en = {
       },
       support: {
         title: "Support your shot",
-        summary: "A target drone flies at you and turns 30° ten seconds after you shoot. Best at 35,000 ft.",
+        summary: "A target drone flies at you and turns 40° ten seconds after you shoot. Best at 35,000 ft.",
         lesson:
           "Until pitbull your missile only knows where the target is while your radar still tracks it. At 35,000 ft, shoot from about 30 nm. Keep the drone inside your radar gimbal (crank, don't turn cold) and the missile follows its turn. Turn cold right after the shot and the missile flies to where the drone would have been, and its seeker finds empty sky. From 20 nm it hardly matters: pitbull comes before the error grows.",
       },

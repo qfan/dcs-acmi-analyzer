@@ -141,7 +141,7 @@ export function makeWorld(params: GameParams, seed = 1): World {
     eventOffset: 0,
     infinite: false,
     egressSafeSince: new Map(),
-    timeLimitS: 900,
+    timeLimitS: 1200,
     objective: "kill",
     callAt: null,
   };

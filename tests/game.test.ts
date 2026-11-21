@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
-import { mach, makeJet, minSpeedMs, specificExcessPower, stepJet } from "../src/game/sim/aircraft.ts";
-import { DEG, FT, KT, NM } from "../src/game/sim/atmosphere.ts";
-import { launchMissile, stepMissile } from "../src/game/sim/missile.ts";
+import {
+  mach,
+  makeJet,
+  minSpeedMs,
+  specificExcessPower,
+  stepJet,
+  velocity,
+} from "../src/game/sim/aircraft.ts";
+import { DEG, FT, G, KT, NM } from "../src/game/sim/atmosphere.ts";
+import { launchMissile, missileMach, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
+import { add, scale } from "../src/game/sim/vec.ts";
 import { launchZone } from "../src/game/sim/wez.ts";
 import {
   command,
@@ -246,6 +254,77 @@ describe("game: missile and launch zone", () => {
     p.missile.dragScale = 1.5;
     expect(launchZone(p.missile, shooter, target).rmaxNm).toBeLessThan(base * 0.9);
   });
+
+  const flyGuidanceShot = (
+    p: GameParams,
+    shooter: ReturnType<typeof jetAt>,
+    target: ReturnType<typeof jetAt>,
+  ) => {
+    let tPos = { ...target.pos };
+    const tVel = velocity(target);
+    const m = launchMissile(p.missile, {
+      id: "m",
+      side: shooter.side,
+      shooterId: shooter.id,
+      targetId: target.id,
+      pos: { ...shooter.pos },
+      vel: velocity(shooter),
+      target: { pos: tPos, vel: tVel, alive: true },
+    });
+    let maxAltFt = m.pos.z / FT;
+    let maxCoastG = 0;
+    let maxPitbullG = 0;
+    let pitTof: number | null = null;
+    const dt = 0.02;
+    while (!m.end && m.tof < p.missile.maxTofS + 1) {
+      tPos = add(tPos, scale(tVel, dt));
+      const wasPitbull = m.pitbull;
+      stepMissile(p.missile, m, { pos: tPos, vel: tVel, alive: true }, true, dt);
+      maxAltFt = Math.max(maxAltFt, m.pos.z / FT);
+      const g = m.latAccel / G;
+      if (m.tof > p.missile.boostTimeS && !m.pitbull) maxCoastG = Math.max(maxCoastG, g);
+      if (!wasPitbull && m.pitbull) pitTof = m.tof;
+      if (pitTof !== null && m.tof - pitTof <= 2) maxPitbullG = Math.max(maxPitbullG, g);
+    }
+    return { m, maxAltFt, maxCoastG, maxPitbullG, arrivalMach: missileMach(m) };
+  };
+
+  it("lofts smoothly on a 50 nm shot without a high-G apex snap", () => {
+    const p = P();
+    const res = flyGuidanceShot(p, jetAt(p, 35000, 0.9), jetAt(p, 35000, 0.9, "red", 50 * NM, 180));
+    expect(res.maxAltFt).toBeGreaterThan(45000);
+    expect(res.m.end).toBe("hit");
+    expect(res.maxCoastG).toBeLessThan(3);
+  });
+
+  it("does not loft on close-range shots inside 15 nm", () => {
+    const p = P();
+    const shooter = jetAt(p, 35000, 0.9);
+    const target = jetAt(p, 35000, 0.9, "red", 13.8 * NM, 180);
+    const m = launchMissile(p.missile, {
+      id: "m",
+      side: "blue",
+      shooterId: shooter.id,
+      targetId: target.id,
+      pos: { ...shooter.pos },
+      vel: velocity(shooter),
+      target: { pos: { ...target.pos }, vel: velocity(target), alive: true },
+    });
+    expect(m.loftGainM).toBe(0);
+    expect(m.lofting).toBe(false);
+  });
+
+  it("guides a slow off-boresight crossing shot smoothly through pitbull to a supersonic hit", () => {
+    const p = P();
+    const res = flyGuidanceShot(
+      p,
+      jetAt(p, 35000, 0.55, "blue", 0, 60),
+      jetAt(p, 35000, 1.08, "red", 30 * NM, 150),
+    );
+    expect(res.m.end).toBe("hit");
+    expect(res.arrivalMach).toBeGreaterThan(1.0);
+    expect(res.maxPitbullG).toBeLessThan(2);
+  });
 });
 
 describe("game: Phase 1 drills", () => {
@@ -288,7 +367,13 @@ describe("game: rules", () => {
     expect(m.missile.boostTimeS).toBe(9);
     expect(m.missile.dragCd).toEqual(DEFAULT_PARAMS.missile.dragCd);
     expect(m.missile.pk).toBe(DEFAULT_PARAMS.missile.pk);
+    expect(m.missile.midcourse).toBe("pn");
     expect(m.radar).toEqual(DEFAULT_PARAMS.radar);
+
+    for (const mode of ["pn", "lead", "pursuit"] as const) {
+      expect(mergeParams({ missile: { midcourse: mode } }).missile.midcourse).toBe(mode);
+    }
+    expect(mergeParams({ missile: { midcourse: "bogus" } }).missile.midcourse).toBe("pn");
   });
 });
 

@@ -8,9 +8,11 @@
  *  tracking   the seeker has the target: terminal proportional navigation, the shooter is no longer needed
  *  lost       the seeker never found the target, or lost it: the missile flies on, unguided
  *
- * Midcourse steers straight at the target estimate (pure pursuit) or at a predicted intercept point,
- * with a loft for long shots. Energy: motor thrust, drag cd(M)·ρ·v², and induced drag that grows with
- * the square of the lateral acceleration, so hard manoeuvring costs speed.
+ * Midcourse steers with unified biased proportional navigation ("pn", ramping up to full gain and
+ * G limit near pitbull), or optionally predicted-intercept ("lead") or pure pursuit ("pursuit"),
+ * with a range-scaled, gravity-assisted loft for long shots. Energy: motor thrust, drag
+ * cd(M)·ρ·v², and induced drag that grows with the square of the lateral acceleration, so hard
+ * manoeuvring costs speed.
  */
 
 import type { Side } from "./aircraft.ts";
@@ -141,8 +143,27 @@ const PASSED_M = 2000;
 /** Look angles (rad) over which terminal guidance blends from pure PN to added direct steering. */
 const BLEND_FROM = 15 * DEG;
 const BLEND_SPAN = 25 * DEG;
+/** Midcourse PN scale factor, ramping smoothly to 1× navConstant approaching pitbull. */
+const MIDCOURSE_PN_SCALE = 0.75;
+/** Range multiplier (of pitbullRangeNm) where guidance begins blending smoothly to terminal gain/G. */
+const TERM_BLEND_MULT = 1.4;
+/** Net downward acceleration (g) assumed for predicting coast apex and rounding out the loft. */
+const LOFT_PUSHOVER_NET_G = 1.5;
+/** Gentle downward aerodynamic lift cap (g) during midcourse/post-loft pushover. */
+const LOFT_PUSHOVER_AERO_G = 0.5;
+/** Gentle upward aerodynamic lift cap (g) during loft climb. */
+const LOFT_CLIMB_MAX_G = 4;
+/** Gentle vertical pitch-tracking gain (1/s) during loft climb. */
+const LOFT_PITCH_GAIN = 1.2;
+/** Soft aerodynamic lift caps (g) during boost and midcourse coast before ramping to maxG near pitbull. */
+const MIDCOURSE_BOOST_G = 8;
+const MIDCOURSE_COAST_G = 5;
+/** Gentle midcourse off-boresight alignment toward predicted intercept when launched far off-axis. */
+const ALIGN_FROM = 15 * DEG;
+const ALIGN_SPAN = 25 * DEG;
+const ALIGN_GAIN = 1.0;
 
-function steerToward(dir: V3, vel: V3): V3 {
+function steerToward(dir: V3, vel: V3, gain = PURSUIT_GAIN): V3 {
   const v = len(vel);
   const u = norm(vel);
   const ang = angleBetween(dir, u);
@@ -151,7 +172,30 @@ function steerToward(dir: V3, vel: V3): V3 {
     if (ang < 0.1) return v3();
     side = perp(v3(0, 0, 1), u);
   }
-  return scale(norm(side), PURSUIT_GAIN * v * ang);
+  return scale(norm(side), gain * v * ang);
+}
+
+/** Proportional navigation command toward (aimPos, aimVel), with off-boresight low-closing safeguard. */
+function pnCommand(pos: V3, vel: V3, aimPos: V3, aimVel: V3, navN: number): V3 {
+  const v = len(vel);
+  const u = norm(vel);
+  const r = sub(aimPos, pos);
+  const vr = sub(aimVel, vel);
+  const rLen = Math.max(len(r), 1);
+  const rHat = scale(r, 1 / rLen);
+  const rawClosing = -dot(r, vr) / rLen;
+  const closing = Math.max(rawClosing, 100);
+  // N · Vc · (LOS rate × LOS unit) = N · Vc · (vr ⊥ r) / |r|
+  const vrPerp = perp(vr, rHat);
+  let aCmd = perp(scale(vrPerp, (navN * closing) / rLen), u);
+  // Far off boresight (e.g. right after an off-axis launch, closing still small) PN alone turns
+  // too gently and the target slides out of the gimbal: blend in direct steering at the target.
+  // Only while barely closing: late in a crossing intercept a big lead angle is correct PN.
+  const look = angleBetween(r, u);
+  const slow = Math.max(0, Math.min(1, (0.5 * v - rawClosing) / (0.3 * v)));
+  const blend = slow * Math.max(0, Math.min(1, (look - BLEND_FROM) / BLEND_SPAN));
+  if (blend > 0) aCmd = add(aCmd, scale(steerToward(r, vel), blend));
+  return aCmd;
 }
 
 /** Predicted intercept point for a missile at `pos` flying `speed` against a target at p/v. */
@@ -260,60 +304,95 @@ export function stepMissile(
     }
   }
 
-  // 3. Guidance: lateral acceleration command.
+  // 3. Guidance: aerodynamic lateral acceleration command (including gravity compensation).
   const v = len(m.vel);
   const u = norm(m.vel);
-  let aCmd: V3;
-  if (m.phase === "tracking") {
-    const r = toTrue;
-    const vr = sub(target.vel, m.vel);
-    const rr = Math.max(dot(r, r), 1);
-    const rawClosing = -dot(r, vr) / Math.sqrt(rr);
-    const closing = Math.max(rawClosing, 100);
-    // N · Vc · (LOS rate × LOS unit) = N · Vc · (vr ⊥ r) / |r|
-    const vrPerp = perp(vr, norm(r));
-    aCmd = perp(scale(vrPerp, (p.navConstant * closing) / Math.sqrt(rr)), u);
-    // Far off boresight (e.g. right after an off-axis launch, closing still small) PN alone turns
-    // too gently and the target slides out of the gimbal: blend in direct steering at the target.
-    // Only while barely closing: late in a crossing intercept a big lead angle is correct PN.
-    const look = angleBetween(r, u);
-    const slow = Math.max(0, Math.min(1, (0.5 * v - rawClosing) / (0.3 * v)));
-    const blend = slow * Math.max(0, Math.min(1, (look - BLEND_FROM) / BLEND_SPAN));
-    if (blend > 0) aCmd = add(aCmd, scale(steerToward(r, m.vel), blend));
-  } else if (m.phase === "lost") {
-    aCmd = v3();
+  const gravComp = perp(v3(0, 0, G), u);
+  let aAero: V3;
+  if (m.phase === "lost") {
+    aAero = gravComp;
+  } else if (m.phase === "tracking") {
+    aAero = add(pnCommand(m.pos, m.vel, target.pos, target.vel, p.navConstant), gravComp);
   } else {
     const est = m.estPos;
-    const horiz = { x: est.x - m.pos.x, y: est.y - m.pos.y, z: 0 };
-    const lookDownDeg = (Math.atan2(m.pos.z - est.z, Math.max(1, len(horiz))) * 180) / Math.PI;
-    if (m.lofting && (m.pos.z >= m.launchAlt + m.loftGainM || lookDownDeg >= p.loftDiveDeg))
+    const horizDist = Math.max(1, Math.hypot(est.x - m.pos.x, est.y - m.pos.y));
+    const rangeToEst = len(toEst);
+    const lookDownDeg = (Math.atan2(m.pos.z - est.z, horizDist) * 180) / Math.PI;
+    const losPitch = Math.atan2(est.z - m.pos.z, horizDist);
+
+    const pitM = p.pitbullRangeNm * NM;
+    const termBlend =
+      pitM > 0
+        ? Math.max(0, Math.min(1, (pitM * TERM_BLEND_MULT - rangeToEst) / (pitM * (TERM_BLEND_MULT - 1))))
+        : 1;
+
+    // End active climb once coasting at ~1.5 G net downward curvature reaches target loft apex.
+    const vz = m.vel.z;
+    const apexZ = m.launchAlt + m.loftGainM;
+    const predApexZ = m.pos.z + (vz > 0 ? (vz * vz) / (2 * LOFT_PUSHOVER_NET_G * G) : 0);
+    if (m.lofting && (predApexZ >= apexZ || m.pos.z >= apexZ || lookDownDeg >= p.loftDiveDeg))
       m.lofting = false;
-    let dir: V3;
-    if (m.lofting) {
-      const c = p.loftClimbDeg * DEG;
-      const h = norm(horiz);
-      dir = { x: h.x * Math.cos(c), y: h.y * Math.cos(c), z: Math.sin(c) };
-    } else if (p.midcourse === "lead" && m.phase !== "search") {
-      dir = sub(interceptPoint(m.pos, Math.max(v, 500), est, m.estVel), m.pos);
+
+    let aBase: V3;
+    if (p.midcourse === "pn") {
+      const navN = p.navConstant * (MIDCOURSE_PN_SCALE + (1 - MIDCOURSE_PN_SCALE) * termBlend);
+      aBase = pnCommand(m.pos, m.vel, est, m.estVel, navN);
+      const ip = interceptPoint(m.pos, Math.max(v, 500), est, m.estVel);
+      const ipDir = sub(ip, m.pos);
+      const ipErr = angleBetween(ipDir, u);
+      const alignBlend = (1 - termBlend) * Math.max(0, Math.min(1, (ipErr - ALIGN_FROM) / ALIGN_SPAN));
+      if (alignBlend > 0) aBase = add(aBase, scale(steerToward(ipDir, m.vel, ALIGN_GAIN), alignBlend));
+    } else if (p.midcourse === "lead") {
+      aBase = steerToward(sub(interceptPoint(m.pos, Math.max(v, 500), est, m.estVel), m.pos), m.vel);
     } else {
-      dir = sub(est, m.pos);
+      aBase = steerToward(toEst, m.vel);
     }
-    aCmd = steerToward(dir, m.vel);
+
+    const upRaw = perp(v3(0, 0, 1), u);
+    const upHat = len(upRaw) > 1e-6 ? norm(upRaw) : v3(0, 0, 1);
+    const aVertCmd = dot(aBase, upHat);
+    const aHorizVec = sub(aBase, scale(upHat, aVertCmd));
+    const gravPerpMag = dot(gravComp, upHat);
+
+    let aAeroVert: number;
+    if (m.lofting && m.loftGainM > 100) {
+      const maxTableGain = Math.max(1, ...p.loftGainFt.map((ft) => ft * FT));
+      const loftScale = Math.max(0, Math.min(1, m.loftGainM / maxTableGain));
+      const climbRad = p.loftClimbDeg * DEG * (0.35 + 0.65 * Math.sqrt(loftScale));
+      const desiredPitch = Math.max(losPitch, climbRad);
+      const pitch = Math.asin(Math.max(-1, Math.min(1, u.z)));
+      const aVertNet = LOFT_PITCH_GAIN * v * (desiredPitch - pitch);
+      aAeroVert = Math.max(-LOFT_PUSHOVER_AERO_G * G, Math.min(LOFT_CLIMB_MAX_G * G, aVertNet + gravPerpMag));
+    } else {
+      aAeroVert = aVertCmd + gravPerpMag;
+      const minDownAero =
+        -(LOFT_PUSHOVER_AERO_G + Math.max(0, p.maxG - LOFT_PUSHOVER_AERO_G) * termBlend) * G;
+      if (aAeroVert < minDownAero) aAeroVert = minDownAero;
+    }
+
+    aAero = add(aHorizVec, scale(upHat, aAeroVert));
+
+    const midCapG =
+      motorAccel(p, m.tof) > 0
+        ? MIDCOURSE_BOOST_G
+        : MIDCOURSE_COAST_G + Math.max(0, p.maxG - MIDCOURSE_COAST_G) * termBlend;
+    const midCap = Math.min(p.maxG, midCapG) * G;
+    const aAeroMag = len(aAero);
+    if (aAeroMag > midCap) aAero = scale(aAero, midCap / aAeroMag);
   }
-  // Gravity compensation: hold the flight path when nothing is commanded.
-  aCmd = add(aCmd, perp(v3(0, 0, G), u));
+
   const rho = airDensity(m.pos.z);
   const q = rho * v * v;
   const aMax = Math.min(p.maxG * G, p.liftK * q);
-  const aMag = len(aCmd);
-  if (aMag > aMax) aCmd = scale(aCmd, aMax / aMag);
+  const aMag = len(aAero);
+  if (aMag > aMax) aAero = scale(aAero, aMax / aMag);
   m.latAccel = Math.min(aMag, aMax);
 
   // 4. Energy: thrust − drag along the path, lateral acceleration across it, gravity down.
   const machNo = v / speedOfSoundMs(m.pos.z);
   const drag = dragCoef(p, machNo) * q + (p.inducedCi * m.latAccel * m.latAccel) / Math.max(q, 1);
   const along = motorAccel(p, m.tof) - drag;
-  const acc = add(add(scale(u, along), aCmd), v3(0, 0, -G));
+  const acc = add(add(scale(u, along), aAero), v3(0, 0, -G));
   m.vel = add(m.vel, scale(acc, dt));
   m.pos = add(m.pos, scale(m.vel, dt));
   m.tof += dt;

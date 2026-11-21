@@ -1078,26 +1078,26 @@ export const fr = {
     scenarios: {
       duel: {
         title: "Duel face à face",
-        summary: "1v1 à 60 nm contre l'IA. Choisissez son niveau, ou laissez l'IA piloter aussi votre avion.",
+        summary: "1v1 à 70 nm contre l'IA. Choisissez son niveau, ou laissez l'IA piloter aussi votre avion.",
         lesson:
           "L'IA applique la doctrine BVR uniquement avec son propre radar et RWR : elle engage, tire sous une fraction du Rmax, crank pour soutenir son missile, pompe après pitbull (Normal et Difficile), et vire froid dès qu'un missile actif apparaît sur son RWR.",
       },
       "2v1": {
         title: "Patrouille (2) contre 1",
-        summary: "2v1 à 60 nm. Vous pilotez les deux appareils bleus contre un ennemi, ou observez IA vs IA.",
+        summary: "2v1 à 70 nm. Vous pilotez les deux appareils bleus contre un ennemi, ou observez IA vs IA.",
         lesson:
           "Deux contre un permet d'encercler l'ennemi (bracket) : séparez vos ailiers pour le forcer à défendre d'un côté pendant que l'autre pousse. Clic pour sélectionner, Maj+clic pour ajouter l'autre avion.",
       },
       "2v2": {
         title: "Patrouille (2) contre 2",
-        summary: "2v2 à 60 nm. Vous pilotez les deux bleus (un ou deux sélectionnés), ou observez IA vs IA.",
+        summary: "2v2 à 70 nm. Vous pilotez les deux bleus (un ou deux sélectionnés), ou observez IA vs IA.",
         lesson:
           "Chaque camp partage sa situation radar. Les IA répartissent les cibles et crank de part et d'autre. Clic pour sélectionner un avion, Maj+clic pour ajouter l'autre et donner des ordres aux deux.",
       },
       "4v2": {
         title: "Dispositif 4 (2×2) contre 2",
         summary:
-          "4v2 à 60 nm. Les bleus ont deux patrouilles de 2 (5 nm en ligne, 2e groupe 20 nm derrière) contre 2 ennemis.",
+          "4v2 à 70 nm. Les bleus ont deux patrouilles de 2 (5 nm en ligne, 2e groupe 20 nm derrière) contre 2 ennemis.",
         lesson:
           "Engagez avec la patrouille de tête pour forcer l'ennemi en défense pendant que la seconde patrouille 20 nm derrière exploite l'avantage ou couvre son repli.",
       },
@@ -1123,7 +1123,7 @@ export const fr = {
       support: {
         title: "Soutenir son tir",
         summary:
-          "Un drone cible vole vers vous et vire de 30° dix secondes après votre tir. Idéal à 35 000 ft.",
+          "Un drone cible vole vers vous et vire de 40° dix secondes après votre tir. Idéal à 35 000 ft.",
         lesson:
           "Avant le pitbull, votre missile ne connaît la position cible que tant que votre radar la suit. À 35 000 ft, tirez vers 30 nm et gardez le drone dans le cône radar (crank, ne virez pas froid) pour que le missile suive son virage.",
       },
