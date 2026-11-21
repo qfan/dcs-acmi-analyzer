@@ -1333,6 +1333,15 @@ export const fr = {
       eventsTitle: "Événements",
       watchControlsTitle: "Contrôles spectateur",
       controlsTitle: "Contrôles",
+      controlsDockAria: "Position des commandes",
+      controlsDragHint: "Glisser pour déplacer",
+      controlsDock: {
+        right: "Panneau droit",
+        bottom: "Barre inférieure",
+        topLeft: "Haut gauche",
+        bottomLeft: "Bas gauche",
+        float: "Flottant",
+      },
       watchControlsP1:
         "<0>Clic</0> sur un avion pour inspecter son IA · <1>glisser</1> pour déplacer · <2>molette</2> pour zoomer",
       watchControlsP2: "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> suivre",

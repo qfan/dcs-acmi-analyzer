@@ -1298,6 +1298,15 @@ export const zhCN = {
       eventsTitle: "战斗事件",
       watchControlsTitle: "观战操作",
       controlsTitle: "操作说明",
+      controlsDockAria: "控制栏位置",
+      controlsDragHint: "拖动移动",
+      controlsDock: {
+        right: "右侧面板",
+        bottom: "底部横栏",
+        topLeft: "左上角",
+        bottomLeft: "左下角",
+        float: "自由悬浮",
+      },
       watchControlsP1: "<0>点击</0>任意可见战机查看其 AI · <1>拖动</1>平移 · <2>滚轮</2>缩放",
       watchControlsP2: "<0>空格</0> 暂停 · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> 视角跟随",
       playerControlsP1:

@@ -49,12 +49,26 @@ import { createEngineClient, type EngineClient } from "./engineClient.ts";
 import { LobbyPanel, MultiplayerTab } from "./Lobby.tsx";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { SinglePlayerTab, StartDialog, type StartTab } from "./StartDialog.tsx";
-import { loadLast, loadMp, loadParams, saveLast, saveMp, saveParams, withRecent } from "./storage.ts";
+import {
+  type ControlsDock,
+  type ControlsDockPrefs,
+  loadControlsDock,
+  loadLast,
+  loadMp,
+  loadParams,
+  saveControlsDock,
+  saveLast,
+  saveMp,
+  saveParams,
+  withRecent,
+} from "./storage.ts";
 import { SessionView } from "./view.ts";
 
 /** Crank keeps the threat just inside the 60° radar gimbal. */
 const CRANK_DEG = 50;
 const HUD_MS = 100;
+/** Brief lockout after target change or new lock-on so TWS target shifts don't fire on the wrong jet. */
+const FOX_LOCK_MS = 180;
 /** Altitude order steps (ft): arrow keys / small buttons, Page keys / big buttons. */
 const ALT_STEP_FT = 1000;
 const ALT_BIG_STEP_FT = 5000;
@@ -127,6 +141,14 @@ export function GameApp() {
   const [showExport, setShowExport] = useState(false);
   const [bgmOn, setBgmOn] = useState(false);
   const bgmRef = useRef<BgmPlayer | null>(null);
+  const [dockPrefs, setDockPrefs] = useState<ControlsDockPrefs>(loadControlsDock);
+  const updateDockPrefs = useCallback((patch: Partial<ControlsDockPrefs>) => {
+    setDockPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      saveControlsDock(next);
+      return next;
+    });
+  }, []);
   const [, setTick] = useState(0);
 
   // Multiplayer
@@ -150,6 +172,7 @@ export function GameApp() {
   const [netMsg, setNetMsg] = useState<string | null>(null);
 
   const engineRef = useRef<EngineClient | null>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View>({ cx: 0, cy: 0, scale: 0.01, w: 800, h: 600 });
@@ -162,6 +185,7 @@ export function GameApp() {
   radarSectorsRef.current = radarSectors;
   const sideViewRef = useRef(sideView);
   sideViewRef.current = sideView;
+  const foxLockedRef = useRef(false);
 
   const send = useCallback((m: Parameters<EngineClient["send"]>[0]) => engineRef.current?.send(m), []);
 
@@ -521,8 +545,9 @@ export function GameApp() {
       }
       if (k === " ") togglePause();
       else if (k >= "1" && k <= "5") setScale(TIME_SCALES[Number(k) - 1] ?? 1);
-      else if (k === "f") issue((j) => ({ type: "fire", jetId: j.id }));
-      else if (k === "h") steerRel(0, 1, "hot");
+      else if (k === "f") {
+        if (!foxLockedRef.current) issue((j) => ({ type: "fire", jetId: j.id }));
+      } else if (k === "h") steerRel(0, 1, "hot");
       else if (k === "q") steerRel(CRANK_DEG, -1, "crank left");
       else if (k === "e") steerRel(CRANK_DEG, 1, "crank right");
       else if (k === "a") steerRel(90, -1, "notch left", true);
@@ -676,6 +701,21 @@ export function GameApp() {
   const w = session?.world;
   const p = session?.primary();
   const tgt = p ? jetById(w ?? null, p.targetId) : undefined;
+  const activeTargetId = tgt?.alive ? tgt.id : null;
+  const targetKey = p ? `${p.id}:${activeTargetId ?? ""}` : "";
+  const [prevTargetKey, setPrevTargetKey] = useState(targetKey);
+  const [foxLockSeq, setFoxLockSeq] = useState(0);
+  if (targetKey !== prevTargetKey) {
+    setPrevTargetKey(targetKey);
+    setFoxLockSeq((n) => (activeTargetId !== null ? n + 1 : 0));
+  }
+  const foxLocked = foxLockSeq > 0;
+  foxLockedRef.current = foxLocked;
+  useEffect(() => {
+    if (foxLockSeq === 0) return;
+    const id = window.setTimeout(() => setFoxLockSeq(0), FOX_LOCK_MS);
+    return () => window.clearTimeout(id);
+  }, [foxLockSeq]);
   const pAi = session && p ? (session.npc[p.id]?.status ?? null) : null;
   const npcControlled = !!session?.watch || pAi !== null || (!!p && !!session && !session.ownsJet(p.id));
   const watchJets = session?.watch && w ? w.jets.filter((j) => j.alive && session.sees(j.id)) : [];
@@ -688,6 +728,7 @@ export function GameApp() {
       ? inviteLink(`${location.origin}${location.pathname}`, lobby.room, activeRelay, RELAYS)
       : "";
   const res = w?.outcome && session ? result(w.outcome, session.side, mp, t) : null;
+  const fox3Label = t("game.app.fox3Btn", { target: tgt?.alive ? ` → ${tgt.callsign}` : "" });
 
   return (
     <div className="g-app">
@@ -829,7 +870,7 @@ export function GameApp() {
       </header>
 
       <div className="g-body">
-        <div className="g-stage">
+        <div className="g-stage" ref={stageRef}>
           <canvas
             ref={canvasRef}
             className="g-canvas"
@@ -857,6 +898,24 @@ export function GameApp() {
             </div>
           )}
           {flash && <div className="g-flash">{flash}</div>}
+          {session && p && w && !npcControlled && dockPrefs.dock !== "right" && (
+            <MapControlsOverlay
+              stageRef={stageRef}
+              dockPrefs={dockPrefs}
+              sideView={sideView}
+              onChangeDock={(dock) => updateDockPrefs({ dock })}
+              onFinishDrag={updateDockPrefs}
+              jet={p}
+              world={w}
+              target={tgt}
+              foxLocked={foxLocked}
+              fox3Label={fox3Label}
+              issue={issue}
+              steerRel={steerRel}
+              stepAlt={stepAlt}
+              levelOff={levelOff}
+            />
+          )}
           <div className="g-stage-tools">
             <label>
               <input
@@ -906,7 +965,6 @@ export function GameApp() {
         </div>
 
         <aside className="g-side">
-          {mp && lobby && <PlayersCard lobby={lobby} you={you} />}
           {session?.watch && watchJets.length > 0 && (
             <section className="g-card g-watch-bar" aria-label={t("game.app.inspectAiAria")}>
               <div className="g-watch-head">
@@ -939,7 +997,27 @@ export function GameApp() {
           )}
           {session && p && w && (
             <section className="g-card">
-              <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
+              <div className="g-card-head">
+                <h3 style={{ color: sideCol(p.side) }}>{p.callsign}</h3>
+                {!npcControlled && dockPrefs.dock === "right" && (
+                  <ControlsDockSelect dock={dockPrefs.dock} onChange={(dock) => updateDockPrefs({ dock })} />
+                )}
+              </div>
+              {!npcControlled && dockPrefs.dock === "right" && (
+                <FlightControls
+                  jet={p}
+                  world={w}
+                  target={tgt}
+                  foxLocked={foxLocked}
+                  fox3Label={fox3Label}
+                  issue={issue}
+                  steerRel={steerRel}
+                  stepAlt={stepAlt}
+                  levelOff={levelOff}
+                />
+              )}
+              {!npcControlled && <ZoneBox session={session} />}
+              <RwrLine world={w} jet={p} />
               <div className="g-stats">
                 <Stat
                   k={t("game.app.stats.speed")}
@@ -976,11 +1054,7 @@ export function GameApp() {
                     (p.steer.mode === "relative" ? p.steer.label : t("game.app.stats.headingDefault"))
                   }
                 />
-                <Stat
-                  k={t("game.app.stats.missiles")}
-                  v={`${p.missiles}`}
-                  sub={t("game.app.stats.missilesSub", { chaff: p.chaff, flares: p.flares })}
-                />
+                <OrdnanceStat jet={p} />
                 <Stat
                   k={t("game.app.stats.radar")}
                   v={
@@ -993,161 +1067,12 @@ export function GameApp() {
                   sub={tgt?.alive ? tgt.callsign : t("game.app.stats.radarNoTarget")}
                 />
               </div>
-              <RwrLine world={w} jet={p} />
-              {npcControlled ? (
+              {npcControlled && (
                 <NpcBehaviorPanel session={session} jet={p} ai={pAi} tgt={tgt} params={w.params} />
-              ) : (
-                <>
-                  <div className="g-row g-ctl">
-                    <span className="g-label">{t("game.app.throttle")}</span>
-                    <div className="g-seg">
-                      {(["idle", "mil", "ab"] as Throttle[]).map((th) => (
-                        <button
-                          type="button"
-                          key={th}
-                          className={p.throttle === th ? "on" : ""}
-                          onClick={(e) => {
-                            issue((j) => ({ type: "throttle", jetId: j.id, throttle: th }));
-                            e.currentTarget.blur();
-                          }}
-                        >
-                          {th.toUpperCase()}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="g-row g-ctl">
-                    <span className="g-label">{t("game.app.turns")}</span>
-                    <div className="g-seg">
-                      {(["sustain", "normal", "max"] as const).map((ef) => (
-                        <button
-                          type="button"
-                          key={ef}
-                          className={p.effort === ef ? "on" : ""}
-                          title={ef === "sustain" ? t("game.app.sustainTitle") : undefined}
-                          onClick={(e) => {
-                            issue((j) => ({ type: "effort", jetId: j.id, effort: ef }));
-                            e.currentTarget.blur();
-                          }}
-                        >
-                          {ef === "sustain"
-                            ? t("game.app.holdSpd")
-                            : ef === "normal"
-                              ? t("game.app.normalG", { g: w.params.aircraft.normalG })
-                              : t("game.app.maxG", { g: w.params.aircraft.gLimit })}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="g-row g-ctl">
-                    <span className="g-label">{t("game.app.altitudeLabel")}</span>
-                    <div className="g-seg g-alt">
-                      <button
-                        type="button"
-                        title={t("game.app.pageDownTitle")}
-                        disabled={p.altCmd <= altLimitsM(w.params.aircraft).min + 1}
-                        onClick={(e) => {
-                          stepAlt(-ALT_BIG_STEP_FT);
-                          e.currentTarget.blur();
-                        }}
-                      >
-                        ⏬
-                      </button>
-                      <button
-                        type="button"
-                        title="↓"
-                        disabled={p.altCmd <= altLimitsM(w.params.aircraft).min + 1}
-                        onClick={(e) => {
-                          stepAlt(-ALT_STEP_FT);
-                          e.currentTarget.blur();
-                        }}
-                      >
-                        ▼
-                      </button>
-                      <button
-                        type="button"
-                        className="g-alt-cmd"
-                        title={t("game.app.altCmdTitle")}
-                        onClick={(e) => {
-                          levelOff();
-                          e.currentTarget.blur();
-                        }}
-                      >
-                        {Math.round(p.altCmd / FT).toLocaleString()} ft
-                      </button>
-                      <button
-                        type="button"
-                        title="↑"
-                        disabled={p.altCmd >= altLimitsM(w.params.aircraft).max - 1}
-                        onClick={(e) => {
-                          stepAlt(ALT_STEP_FT);
-                          e.currentTarget.blur();
-                        }}
-                      >
-                        ▲
-                      </button>
-                      <button
-                        type="button"
-                        title={t("game.app.pageUpTitle")}
-                        disabled={p.altCmd >= altLimitsM(w.params.aircraft).max - 1}
-                        onClick={(e) => {
-                          stepAlt(ALT_BIG_STEP_FT);
-                          e.currentTarget.blur();
-                        }}
-                      >
-                        ⏫
-                      </button>
-                    </div>
-                  </div>
-                  <div className="g-maneuvers">
-                    <button type="button" onClick={() => steerRel(CRANK_DEG, -1, "crank left")} title="Q">
-                      {t("game.app.crankL")}
-                    </button>
-                    <button type="button" onClick={() => steerRel(0, 1, "hot")} title="H">
-                      {t("game.app.hot")}
-                    </button>
-                    <button type="button" onClick={() => steerRel(CRANK_DEG, 1, "crank right")} title="E">
-                      {t("game.app.crankR")}
-                    </button>
-                    <button type="button" onClick={() => steerRel(90, -1, "notch left", true)} title="A">
-                      {t("game.app.notchL")}
-                    </button>
-                    <button type="button" onClick={() => steerRel(180, 1, "cold", true)} title="C">
-                      {t("game.app.cold")}
-                    </button>
-                    <button type="button" onClick={() => steerRel(90, 1, "notch right", true)} title="D">
-                      {t("game.app.notchR")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
-                      title={t("game.app.chaffTitle")}
-                    >
-                      {t("game.app.chaffBtn", { count: p.chaff })}
-                    </button>
-                    <span />
-                    <button
-                      type="button"
-                      onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
-                      title={t("game.app.flareTitle")}
-                    >
-                      {t("game.app.flareBtn", { count: p.flares })}
-                    </button>
-                  </div>
-                  <ZoneBox session={session} />
-                  <button
-                    type="button"
-                    className="g-fire"
-                    disabled={!tgt?.alive || p.missiles <= 0}
-                    onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
-                    title="F"
-                  >
-                    {t("game.app.fox3Btn", { target: tgt?.alive ? ` → ${tgt.callsign}` : "" })}
-                  </button>
-                </>
               )}
             </section>
           )}
+          {mp && lobby && <PlayersCard lobby={lobby} you={you} />}
 
           {w && (
             <section className="g-card">
@@ -1381,50 +1306,100 @@ export function GameApp() {
         />
       )}
       {ended && !endSeen && res && !showStart && (
-        <div className="g-modal-back">
-          <div className="g-modal g-end-dialog" role="dialog" aria-label={t("game.app.resultAria")}>
-            <h2>{res.title}</h2>
-            <p>{res.text}</p>
-            <p className="g-muted">{t("game.app.fightTime", { time: fmtTime(w?.t ?? 0) })}</p>
-            <div className="g-row">
-              <span className="g-label">{t("game.app.recordingLabel")}</span>
-              <ExportButtons onExport={exportFight} />
-            </div>
-            <div className="g-row g-end">
-              <button type="button" onClick={() => setEndSeen(true)}>
-                {t("game.app.lookAtMapBtn")}
-              </button>
-              {mp ? (
-                isHost ? (
-                  <button type="button" className="g-primary" onClick={() => lobbyAction({ a: "to-lobby" })}>
-                    {t("game.app.backToLobbyBtn")}
-                  </button>
-                ) : (
-                  <>
-                    <button type="button" onClick={leaveRoom}>
-                      {t("game.app.leaveRoomBtn")}
-                    </button>
-                    <span className="g-muted">{t("game.app.guestLobbyNote")}</span>
-                  </>
-                )
-              ) : (
-                <>
-                  <button type="button" onClick={() => setShowStart(true)}>
-                    {t("game.app.newGameBtn")}
-                  </button>
-                  <button
-                    type="button"
-                    className="g-primary"
-                    onClick={() => session && start(session.scenarioId, session.altFt)}
-                  >
-                    {t("game.app.restartBtn")}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+        <EndDialog
+          res={res}
+          fightTimeSec={w?.t ?? 0}
+          mp={mp}
+          isHost={isHost}
+          onExport={exportFight}
+          onLookAtMap={() => setEndSeen(true)}
+          onBackToLobby={() => lobbyAction({ a: "to-lobby" })}
+          onLeaveRoom={leaveRoom}
+          onNewGame={() => setShowStart(true)}
+          onRestart={() => session && start(session.scenarioId, session.altFt)}
+        />
       )}
+    </div>
+  );
+}
+
+const END_DIALOG_BUTTON_DELAY_MS = 600;
+
+/** Match-complete modal; action buttons stay hidden and non-clickable briefly so sudden popups aren't misclicked. */
+function EndDialog({
+  res,
+  fightTimeSec,
+  mp,
+  isHost,
+  onExport,
+  onLookAtMap,
+  onBackToLobby,
+  onLeaveRoom,
+  onNewGame,
+  onRestart,
+}: {
+  res: { title: string; text: string };
+  fightTimeSec: number;
+  mp: boolean;
+  isHost: boolean;
+  onExport: (mode: ExportMode) => void;
+  onLookAtMap: () => void;
+  onBackToLobby: () => void;
+  onLeaveRoom: () => void;
+  onNewGame: () => void;
+  onRestart: () => void;
+}) {
+  const { t } = useTranslation();
+  const [buttonsReady, setButtonsReady] = useState(false);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setButtonsReady(true), END_DIALOG_BUTTON_DELAY_MS);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  return (
+    <div className="g-modal-back">
+      <div
+        className={buttonsReady ? "g-modal g-end-dialog" : "g-modal g-end-dialog g-end-locked"}
+        role="dialog"
+        aria-label={t("game.app.resultAria")}
+      >
+        <h2>{res.title}</h2>
+        <p>{res.text}</p>
+        <p className="g-muted">{t("game.app.fightTime", { time: fmtTime(fightTimeSec) })}</p>
+        <div className="g-row">
+          <span className="g-label">{t("game.app.recordingLabel")}</span>
+          <ExportButtons onExport={onExport} />
+        </div>
+        <div className="g-row g-end">
+          <button type="button" disabled={!buttonsReady} onClick={onLookAtMap}>
+            {t("game.app.lookAtMapBtn")}
+          </button>
+          {mp ? (
+            isHost ? (
+              <button type="button" className="g-primary" disabled={!buttonsReady} onClick={onBackToLobby}>
+                {t("game.app.backToLobbyBtn")}
+              </button>
+            ) : (
+              <>
+                <button type="button" disabled={!buttonsReady} onClick={onLeaveRoom}>
+                  {t("game.app.leaveRoomBtn")}
+                </button>
+                <span className="g-muted">{t("game.app.guestLobbyNote")}</span>
+              </>
+            )
+          ) : (
+            <>
+              <button type="button" disabled={!buttonsReady} onClick={onNewGame}>
+                {t("game.app.newGameBtn")}
+              </button>
+              <button type="button" className="g-primary" disabled={!buttonsReady} onClick={onRestart}>
+                {t("game.app.restartBtn")}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1508,12 +1483,417 @@ function downloadBlob(blob: Blob, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+interface FlightControlsProps {
+  jet: Jet;
+  world: World;
+  target: Jet | undefined;
+  foxLocked: boolean;
+  fox3Label: string;
+  issue: (make: (j: Jet) => Command | null) => void;
+  steerRel: (offsetDeg: number, dir: 1 | -1, label: string, vsMissile?: boolean) => void;
+  stepAlt: (deltaFt: number) => void;
+  levelOff: () => void;
+}
+
+function ControlsDockSelect({
+  dock,
+  onChange,
+}: {
+  dock: ControlsDock;
+  onChange: (dock: ControlsDock) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <select
+      className="g-dock-sel"
+      aria-label={t("game.app.controlsDockAria")}
+      value={dock}
+      onMouseDown={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        onChange(e.target.value as ControlsDock);
+        e.currentTarget.blur();
+      }}
+    >
+      <option value="right">{t("game.app.controlsDock.right")}</option>
+      <option value="bottom">{t("game.app.controlsDock.bottom")}</option>
+      <option value="top-left">{t("game.app.controlsDock.topLeft")}</option>
+      <option value="bottom-left">{t("game.app.controlsDock.bottomLeft")}</option>
+      <option value="float">{t("game.app.controlsDock.float")}</option>
+    </select>
+  );
+}
+
+function FlightControls({
+  jet,
+  world,
+  target,
+  foxLocked,
+  fox3Label,
+  issue,
+  steerRel,
+  stepAlt,
+  levelOff,
+}: FlightControlsProps) {
+  const { t } = useTranslation();
+  const limits = altLimitsM(world.params.aircraft);
+  return (
+    <div className="g-ctl-body">
+      <div className="g-ctl-sliders">
+        <div className="g-row g-ctl">
+          <span className="g-label">{t("game.app.throttle")}</span>
+          <div className="g-seg">
+            {(["idle", "mil", "ab"] as Throttle[]).map((th) => (
+              <button
+                type="button"
+                key={th}
+                className={jet.throttle === th ? "on" : ""}
+                onClick={(e) => {
+                  issue((j) => ({ type: "throttle", jetId: j.id, throttle: th }));
+                  e.currentTarget.blur();
+                }}
+              >
+                {th.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="g-row g-ctl">
+          <span className="g-label">{t("game.app.turns")}</span>
+          <div className="g-seg">
+            {(["sustain", "normal", "max"] as const).map((ef) => (
+              <button
+                type="button"
+                key={ef}
+                className={jet.effort === ef ? "on" : ""}
+                title={ef === "sustain" ? t("game.app.sustainTitle") : undefined}
+                onClick={(e) => {
+                  issue((j) => ({ type: "effort", jetId: j.id, effort: ef }));
+                  e.currentTarget.blur();
+                }}
+              >
+                {ef === "sustain"
+                  ? t("game.app.holdSpd")
+                  : ef === "normal"
+                    ? t("game.app.normalG", { g: world.params.aircraft.normalG })
+                    : t("game.app.maxG", { g: world.params.aircraft.gLimit })}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="g-row g-ctl">
+          <span className="g-label">{t("game.app.altitudeLabel")}</span>
+          <div className="g-seg g-alt">
+            <button
+              type="button"
+              title={t("game.app.pageDownTitle")}
+              disabled={jet.altCmd <= limits.min + 1}
+              onClick={(e) => {
+                stepAlt(-ALT_BIG_STEP_FT);
+                e.currentTarget.blur();
+              }}
+            >
+              ⏬
+            </button>
+            <button
+              type="button"
+              title="↓"
+              disabled={jet.altCmd <= limits.min + 1}
+              onClick={(e) => {
+                stepAlt(-ALT_STEP_FT);
+                e.currentTarget.blur();
+              }}
+            >
+              ▼
+            </button>
+            <button
+              type="button"
+              className="g-alt-cmd"
+              title={t("game.app.altCmdTitle")}
+              onClick={(e) => {
+                levelOff();
+                e.currentTarget.blur();
+              }}
+            >
+              {Math.round(jet.altCmd / FT).toLocaleString()} ft
+            </button>
+            <button
+              type="button"
+              title="↑"
+              disabled={jet.altCmd >= limits.max - 1}
+              onClick={(e) => {
+                stepAlt(ALT_STEP_FT);
+                e.currentTarget.blur();
+              }}
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              title={t("game.app.pageUpTitle")}
+              disabled={jet.altCmd >= limits.max - 1}
+              onClick={(e) => {
+                stepAlt(ALT_BIG_STEP_FT);
+                e.currentTarget.blur();
+              }}
+            >
+              ⏫
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="g-maneuvers">
+        <button
+          type="button"
+          onClick={() => steerRel(CRANK_DEG, -1, "crank left")}
+          title={`${t("game.app.crankL")} (Q)`}
+        >
+          {t("game.app.crankL")}
+        </button>
+        <button type="button" onClick={() => steerRel(0, 1, "hot")} title={`${t("game.app.hot")} (H)`}>
+          {t("game.app.hot")}
+        </button>
+        <button
+          type="button"
+          onClick={() => steerRel(CRANK_DEG, 1, "crank right")}
+          title={`${t("game.app.crankR")} (E)`}
+        >
+          {t("game.app.crankR")}
+        </button>
+        <button
+          type="button"
+          onClick={() => steerRel(90, -1, "notch left", true)}
+          title={`${t("game.app.notchL")} (A)`}
+        >
+          {t("game.app.notchL")}
+        </button>
+        <button
+          type="button"
+          onClick={() => steerRel(180, 1, "cold", true)}
+          title={`${t("game.app.cold")} (C)`}
+        >
+          {t("game.app.cold")}
+        </button>
+        <button
+          type="button"
+          onClick={() => steerRel(90, 1, "notch right", true)}
+          title={`${t("game.app.notchR")} (D)`}
+        >
+          {t("game.app.notchR")}
+        </button>
+        <button
+          type="button"
+          onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
+          title={`${t("game.app.chaffBtn", { count: jet.chaff })} — ${t("game.app.chaffTitle")}`}
+        >
+          {t("game.app.chaffBtn", { count: jet.chaff })}
+        </button>
+        <span />
+        <button
+          type="button"
+          onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
+          title={`${t("game.app.flareBtn", { count: jet.flares })} — ${t("game.app.flareTitle")}`}
+        >
+          {t("game.app.flareBtn", { count: jet.flares })}
+        </button>
+      </div>
+      <button
+        type="button"
+        className="g-fire"
+        disabled={!target?.alive || jet.missiles <= 0 || foxLocked}
+        onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
+        title={`${fox3Label} (F)`}
+      >
+        {fox3Label}
+      </button>
+    </div>
+  );
+}
+
+/** Map-docked or floating overlay keeping all flight controls together closer to the tactical view. */
+function MapControlsOverlay({
+  stageRef,
+  dockPrefs,
+  sideView,
+  onChangeDock,
+  onFinishDrag,
+  ...ctlProps
+}: FlightControlsProps & {
+  stageRef: React.RefObject<HTMLDivElement | null>;
+  dockPrefs: ControlsDockPrefs;
+  sideView: boolean;
+  onChangeDock: (dock: ControlsDock) => void;
+  onFinishDrag: (patch: Partial<ControlsDockPrefs>) => void;
+}) {
+  const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  const [floatPos, setFloatPos] = useState({ x: dockPrefs.x, y: dockPrefs.y });
+  const [dragging, setDragging] = useState(false);
+
+  const clampPos = useCallback(
+    (x: number, y: number) => {
+      const stage = stageRef.current;
+      const el = overlayRef.current;
+      if (!stage || !el) return { x, y };
+      const maxX = Math.max(8, stage.clientWidth - el.offsetWidth - 8);
+      const maxY = Math.max(8, stage.clientHeight - el.offsetHeight - 8);
+      return {
+        x: Math.min(maxX, Math.max(8, Math.round(x))),
+        y: Math.min(maxY, Math.max(8, Math.round(y))),
+      };
+    },
+    [stageRef],
+  );
+
+  useEffect(() => {
+    if (dockPrefs.dock !== "float") return;
+    const sync = () => setFloatPos(clampPos(dockPrefs.x, dockPrefs.y));
+    sync();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, [dockPrefs.dock, dockPrefs.x, dockPrefs.y, clampPos]);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  const isFloat = dockPrefs.dock === "float";
+  const isHorizontal = dockPrefs.dock === "bottom" || (isFloat && dockPrefs.floatLayout === "horizontal");
+
+  const onHeadMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if (e.target instanceof Element && e.target.closest("select, option, button")) return;
+    const stage = stageRef.current;
+    const el = overlayRef.current;
+    if (!stage || !el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const sr = stage.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    const origin = clampPos(er.left - sr.left, er.top - sr.top);
+    let latest = origin;
+    let moved = false;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) < 3) return;
+      if (!moved) {
+        moved = true;
+        setDragging(true);
+      }
+      latest = clampPos(origin.x + dx, origin.y + dy);
+      setFloatPos(latest);
+    };
+    const cleanup = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      dragCleanupRef.current = null;
+    };
+    const onUp = () => {
+      cleanup();
+      if (!moved) return;
+      setDragging(false);
+      onFinishDrag({
+        dock: "float",
+        x: latest.x,
+        y: latest.y,
+        floatLayout: isHorizontal ? "horizontal" : "vertical",
+      });
+    };
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = cleanup;
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const clearSide = sideView && dockPrefs.dock === "bottom-left";
+  const cls = [
+    "g-ctl-overlay",
+    `g-ctl-dock-${dockPrefs.dock}`,
+    isHorizontal ? "g-ctl-horizontal" : "",
+    clearSide ? "g-ctl-clear-side" : "",
+    dragging ? "g-ctl-dragging" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: stop pointer/wheel events from reaching the map canvas underneath
+    <div
+      ref={overlayRef}
+      className={cls}
+      style={isFloat || dragging ? { left: floatPos.x, top: floatPos.y } : undefined}
+      onMouseDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onWheel={(e) => e.stopPropagation()}
+    >
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: mouse drag handle for map-docked overlay; preset positions work via select */}
+      <div className="g-ctl-head" onMouseDown={onHeadMouseDown} title={t("game.app.controlsDragHint")}>
+        <span style={{ color: sideCol(ctlProps.jet.side), fontWeight: 700 }}>
+          <span className="g-ctl-grip" aria-hidden="true">
+            ⠿
+          </span>
+          {ctlProps.jet.callsign}
+        </span>
+        <ControlsDockSelect dock={dockPrefs.dock} onChange={onChangeDock} />
+      </div>
+      <FlightControls {...ctlProps} />
+    </div>
+  );
+}
+
 function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
   return (
     <div className="g-stat">
-      <span className="g-muted">{k}</span>
-      <b>{v}</b>
-      {sub && <span className="g-muted">{sub}</span>}
+      <span className="g-muted" title={k}>
+        {k}
+      </span>
+      <b title={v}>{v}</b>
+      {sub && (
+        <span className="g-muted" title={sub}>
+          {sub}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Missile/chaff/flare readout that briefly highlights whichever count changed so launches are obvious in fog of war. */
+function OrdnanceStat({ jet }: { jet: Jet }) {
+  const { t } = useTranslation();
+  const prevRef = useRef({ id: jet.id, missiles: jet.missiles, chaff: jet.chaff, flares: jet.flares });
+  const [missileFlash, setMissileFlash] = useState(0);
+  const [cmFlash, setCmFlash] = useState(0);
+
+  useEffect(() => {
+    const prev = prevRef.current;
+    if (prev.id === jet.id) {
+      if (jet.missiles !== prev.missiles) setMissileFlash((n) => n + 1);
+      if (jet.chaff !== prev.chaff || jet.flares !== prev.flares) setCmFlash((n) => n + 1);
+    }
+    prevRef.current = { id: jet.id, missiles: jet.missiles, chaff: jet.chaff, flares: jet.flares };
+  }, [jet.id, jet.missiles, jet.chaff, jet.flares]);
+
+  const label = t("game.app.stats.missiles");
+  const sub = t("game.app.stats.missilesSub", { chaff: jet.chaff, flares: jet.flares });
+  return (
+    <div className="g-stat">
+      <span className="g-muted" title={label}>
+        {label}
+      </span>
+      <b
+        key={`m-${missileFlash}`}
+        className={missileFlash > 0 ? "g-stat-flash" : undefined}
+        title={String(jet.missiles)}
+      >
+        {jet.missiles}
+      </b>
+      <span key={`c-${cmFlash}`} className={cmFlash > 0 ? "g-muted g-stat-flash" : "g-muted"} title={sub}>
+        {sub}
+      </span>
     </div>
   );
 }
@@ -1521,19 +1901,41 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
 function ZoneBox({ session }: { session: SessionView }) {
   const { t } = useTranslation();
   const z = session.zone?.zone;
-  if (!z) return <div className="g-zone g-muted">{t("game.app.zoneNeedTarget")}</div>;
+  if (!z) {
+    const needTarget = t("game.app.zoneNeedTarget");
+    return (
+      <div className="g-zone g-muted">
+        <div className="g-zone-line" title={needTarget}>
+          {needTarget}
+        </div>
+        <div className="g-zone-line" aria-hidden="true">
+          &nbsp;
+        </div>
+      </div>
+    );
+  }
   const inMax = z.rangeNm <= z.rmaxNm;
   const inNe = z.rangeNm <= z.rneNm;
+  const zoneValues = {
+    range: z.rangeNm.toFixed(1),
+    rmax: z.rmaxNm.toFixed(1),
+    rne: z.rneNm.toFixed(1),
+  };
+  const zoneLineText = t("game.app.zoneLine", zoneValues).replace(/<\/?\d+>/g, "");
+  const statusText = `${inNe ? t("game.app.zoneInNe") : inMax ? t("game.app.zoneInMax") : t("game.app.zoneOutOfRange")}${
+    z.now.hit
+      ? t("game.app.zoneShotNow", {
+          tof: Math.round(z.now.tofS),
+          mach: z.now.arrivalMach.toFixed(1),
+        })
+      : ""
+  }`;
   return (
     <div className="g-zone">
-      <div>
+      <div className="g-zone-line" title={zoneLineText}>
         <Trans
           i18nKey="game.app.zoneLine"
-          values={{
-            range: z.rangeNm.toFixed(1),
-            rmax: z.rmaxNm.toFixed(1),
-            rne: z.rneNm.toFixed(1),
-          }}
+          values={zoneValues}
           components={[
             <b key="0" />,
             <span key="1" className="g-rmax" />,
@@ -1541,13 +1943,8 @@ function ZoneBox({ session }: { session: SessionView }) {
           ]}
         />
       </div>
-      <div className={inNe ? "g-rne" : inMax ? "g-rmax" : "g-muted"}>
-        {inNe ? t("game.app.zoneInNe") : inMax ? t("game.app.zoneInMax") : t("game.app.zoneOutOfRange")}
-        {z.now.hit &&
-          t("game.app.zoneShotNow", {
-            tof: Math.round(z.now.tofS),
-            mach: z.now.arrivalMach.toFixed(1),
-          })}
+      <div className={`g-zone-line ${inNe ? "g-rne" : inMax ? "g-rmax" : "g-muted"}`} title={statusText}>
+        {statusText}
       </div>
     </div>
   );
@@ -1616,27 +2013,56 @@ function OwnMissileTimers({ session }: { session: SessionView }) {
   );
 }
 
-/** One-line RWR readout for the selected jet: who is painting it, bearings relative to the nose. */
+const MAX_RWR_CONTACTS = 3;
+
+/** One-line RWR readout for the selected jet: highest-priority emitters painting it, bearings relative to the nose. */
 function RwrLine({ world, jet }: { world: World; jet: Jet }) {
   const { t } = useTranslation();
   const contacts = rwrContacts(world, jet);
-  if (contacts.length === 0) return <div className="g-rwr g-muted">{t("game.app.rwrClean")}</div>;
+  if (contacts.length === 0) {
+    const clean = t("game.app.rwrClean");
+    return (
+      <div className="g-rwr g-muted" title={clean}>
+        {clean}
+      </div>
+    );
+  }
   const rel = (b: number) => {
     const d = Math.round(((((b - jet.hdg) * 180) / Math.PI + 540) % 360) - 180);
     return d === 0 ? t("game.app.rwrNose") : `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
   };
+  const priority = (c: (typeof contacts)[number]) => (c.kind === "missile" ? (c.lock ? 0 : 1) : 2);
+  const distSq = (c: (typeof contacts)[number]) => {
+    const pos =
+      c.kind === "missile"
+        ? world.missiles.find((m) => m.id === c.sourceId)?.pos
+        : world.jets.find((j) => j.id === c.sourceId)?.pos;
+    if (!pos) return Number.POSITIVE_INFINITY;
+    const dx = pos.x - jet.pos.x;
+    const dy = pos.y - jet.pos.y;
+    const dz = pos.z - jet.pos.z;
+    return dx * dx + dy * dy + dz * dz;
+  };
+  const sorted = [...contacts].sort((a, b) => priority(a) - priority(b) || distSq(a) - distSq(b));
+  const labelOf = (c: (typeof contacts)[number]) =>
+    `${
+      c.kind === "missile"
+        ? `${t("game.app.rwrMissile")}${c.lock ? t("game.app.rwrLock") : ""}`
+        : t("game.app.rwrRadar")
+    }${rel(c.bearing)}`;
+  const visible = sorted.slice(0, MAX_RWR_CONTACTS);
+  const hiddenCount = sorted.length - visible.length;
+  const fullText = sorted.map(labelOf).join(" · ");
   return (
-    <div className="g-rwr">
+    <div className="g-rwr" title={`${t("game.app.rwrPrefix")} ${fullText}`}>
       {t("game.app.rwrPrefix")}{" "}
-      {contacts.map((c, i) => (
+      {visible.map((c, i) => (
         <span key={c.sourceId} className={c.kind === "missile" ? "g-rwr-missile" : "g-rwr-radar"}>
           {i > 0 ? " · " : ""}
-          {c.kind === "missile"
-            ? `${t("game.app.rwrMissile")}${c.lock ? t("game.app.rwrLock") : ""}`
-            : t("game.app.rwrRadar")}
-          {rel(c.bearing)}
+          {labelOf(c)}
         </span>
       ))}
+      {hiddenCount > 0 && <span className="g-muted"> +{hiddenCount}</span>}
     </div>
   );
 }

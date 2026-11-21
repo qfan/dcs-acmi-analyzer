@@ -114,3 +114,36 @@ export function saveMp(p: MpPrefs): void {
 export function withRecent(recent: readonly string[], url: string): string[] {
   return [url, ...recent.filter((r) => r !== url)].slice(0, MAX_RECENT_RELAYS);
 }
+
+const CONTROLS_DOCK_KEY = "bvr-trainer.controlsDock.v1";
+const CONTROLS_DOCKS = ["right", "bottom", "top-left", "bottom-left", "float"] as const;
+
+export type ControlsDock = (typeof CONTROLS_DOCKS)[number];
+
+export interface ControlsDockPrefs {
+  dock: ControlsDock;
+  x: number;
+  y: number;
+  floatLayout: "vertical" | "horizontal";
+}
+
+export function loadControlsDock(): ControlsDockPrefs {
+  const v = read(CONTROLS_DOCK_KEY) as {
+    dock?: unknown;
+    x?: unknown;
+    y?: unknown;
+    floatLayout?: unknown;
+  } | null;
+  const dock =
+    typeof v?.dock === "string" && (CONTROLS_DOCKS as readonly string[]).includes(v.dock)
+      ? (v.dock as ControlsDock)
+      : "right";
+  const x = typeof v?.x === "number" && Number.isFinite(v.x) ? v.x : 10;
+  const y = typeof v?.y === "number" && Number.isFinite(v.y) ? v.y : 10;
+  const floatLayout = v?.floatLayout === "horizontal" ? "horizontal" : "vertical";
+  return { dock, x, y, floatLayout };
+}
+
+export function saveControlsDock(p: ControlsDockPrefs): void {
+  write(CONTROLS_DOCK_KEY, p);
+}

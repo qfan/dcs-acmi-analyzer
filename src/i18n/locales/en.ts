@@ -1329,6 +1329,15 @@ export const en = {
       eventsTitle: "Events",
       watchControlsTitle: "Watch Controls",
       controlsTitle: "Controls",
+      controlsDockAria: "Controls position",
+      controlsDragHint: "Drag to move",
+      controlsDock: {
+        right: "Right panel",
+        bottom: "Bottom bar",
+        topLeft: "Top-left",
+        bottomLeft: "Bottom-left",
+        float: "Floating",
+      },
       watchControlsP1:
         "<0>Click</0> any visible jet to inspect its AI · <1>drag</1> to pan · <2>wheel</2> to zoom",
       watchControlsP2: "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> follow",
