@@ -1,6 +1,6 @@
 // Whole NPC fights take a few seconds each, hence the longer timeouts below.
 import { describe, expect, it } from "vitest";
-import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
+import { AI_SKILLS, AI_TICK_S, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 import {
   applySnapshot,
@@ -171,6 +171,88 @@ describe("game: NPC knows only what its side can see", () => {
     step(w);
     expect(b1.targetId).not.toBe(first);
     expect(jetById(w, b1.targetId)?.alive).toBe(true);
+  });
+
+  it("decouples tactical AI to 10 Hz staggered ticks while waking immediately on launch, kill, and new RWR missiles", () => {
+    // 1. Staggered 10 Hz target acquisition across jets in 6v6.
+    const w6 = scenarioById("6v6").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    step(w6); // initial AI tick at t = 0 while opposing sides are 120 nm apart (out of 80 nm detect range)
+    expect(w6.jets.every((j) => j.targetId === null)).toBe(true);
+
+    // Move Red jets into detection range (65 nm, outside Rmax) and advance across one AI_TICK_S window (5 physics steps).
+    for (const r of w6.jets) {
+      if (r.side === "red") r.pos.y -= 55 * NM;
+    }
+    const acquireSteps = new Set<number>();
+    const prevNull = new Set(w6.jets.map((j) => j.id));
+    const subSteps = Math.round(AI_TICK_S / 0.02);
+    for (let k = 0; k < subSteps; k++) {
+      step(w6);
+      for (const j of w6.jets) {
+        if (prevNull.has(j.id) && j.targetId !== null) {
+          prevNull.delete(j.id);
+          acquireSteps.add(k);
+        }
+      }
+    }
+    expect(prevNull.size).toBe(0); // all 12 jets updated within one AI_TICK_S window
+    expect(acquireSteps.size).toBeGreaterThan(1); // staggered across multiple 0.02 s physics steps
+
+    // 2. Skips 4 intermediate 50 Hz steps between 10 Hz ticks, then updates cleanly on the 5th step.
+    const wWait = scenarioById("duel").build(P(), 25000, 1, { redSkill: "normal", blueAi: null });
+    const bWait = must(jetById(wWait, "B1"));
+    const rWait = must(jetById(wWait, "R1"));
+    const botWait = new DoctrineBot(AI_SKILLS.normal);
+    wWait.controllers.set("B1", botWait);
+    rWait.pos.y = 120 * NM; // outside detection range -> stays in "Searching"
+    bWait.targetId = null;
+    step(wWait);
+    expect(bWait.targetId).toBeNull();
+
+    // Advance until botWait hits a scheduled 10 Hz tick (resets throttle back to "mil").
+    bWait.throttle = "idle";
+    for (let i = 0; i < subSteps + 2 && bWait.throttle === "idle"; i++) step(wWait);
+    expect(bWait.throttle).toBe("mil");
+
+    // Bring R1 inside detection range immediately after that tick: next 4 steps (0.08 s) must skip.
+    rWait.pos.y = 40 * NM;
+    for (let k = 0; k < subSteps - 1; k++) {
+      expect(botWait.update(wWait, bWait)).toEqual([]);
+      step(wWait);
+      expect(bWait.targetId).toBeNull();
+    }
+    // 5th physics step reaches +AI_TICK_S: bot wakes up on schedule and acquires R1.
+    step(wWait);
+    expect(bWait.targetId).toBe("R1");
+
+    // 3. Immediate wakeups bypass the 10 Hz sleep on: (a) launch transition, (b) target death, (c) new RWR missile.
+    const wWake = scenarioById("duel").build(P(), 25000, 1, { redSkill: "hard", blueAi: null });
+    wWake.controllers.delete("R1");
+    const b1 = must(jetById(wWake, "B1"));
+    const r1 = must(jetById(wWake, "R1"));
+    const bot = new DoctrineBot({ ...AI_SKILLS.hard, reactionS: 0, postureShot: false });
+    wWake.controllers.set("B1", bot);
+    r1.pos.y = 20 * NM;
+
+    for (let i = 0; i < subSteps + 2 && wWake.missiles.length === 0; i++) step(wWake);
+    expect(wWake.missiles).toHaveLength(1);
+    expect(bot.state).toBe("commit");
+    step(wWake); // immediately wakes on the very next 0.02 s step when me.missiles changes
+    expect(bot.state).toBe("support");
+
+    // (b) Immediate wakeup on target death (drops from support to Searching on a single 0.02 s step).
+    r1.alive = false;
+    step(wWake);
+    expect(bot.state).toBe("commit");
+    expect(bot.status().detail).toBe("Searching — no radar track");
+
+    // (c) Immediate wakeup on unseen active missile appearing on RWR.
+    wWake.rwr.set("B1", [
+      { sourceId: "M99", kind: "missile", bearing: 0, lock: true, lastSeenAt: wWake.t, held: false },
+    ]);
+    const cmdsOnRwr = bot.update(wWake, b1);
+    expect(cmdsOnRwr.length).toBeGreaterThan(0);
+    expect(bot.state).toBe("defend");
   });
 });
 

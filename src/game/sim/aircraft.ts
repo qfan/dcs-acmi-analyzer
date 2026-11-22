@@ -125,21 +125,72 @@ export const velocity = (j: Jet): V3 => {
 
 export const mach = (j: Jet): number => j.speed / speedOfSoundMs(j.pos.z);
 
+const AIRCRAFT_LUT_MAX_M = 30000;
+const AIRCRAFT_LUT_STEP_M = 100;
+const AIRCRAFT_LUT_INV_STEP = 1 / AIRCRAFT_LUT_STEP_M;
+const AIRCRAFT_LUT_COUNT = AIRCRAFT_LUT_MAX_M / AIRCRAFT_LUT_STEP_M;
+const MAX_LUT_CACHE = 16;
+
+function sampleAltLut(lut: Float64Array, altM: number): number {
+  if (altM <= 0) return lut[0] as number;
+  if (altM >= AIRCRAFT_LUT_MAX_M) return lut[AIRCRAFT_LUT_COUNT] as number;
+  const scaled = altM * AIRCRAFT_LUT_INV_STEP;
+  const i = scaled | 0;
+  if (i >= AIRCRAFT_LUT_COUNT) return lut[AIRCRAFT_LUT_COUNT] as number;
+  const y0 = lut[i] as number;
+  return y0 + ((lut[i + 1] as number) - y0) * (scaled - i);
+}
+
+const thrustDensityCache = new Map<number, Float64Array>();
+let lastThrustExp = Number.NaN;
+let lastThrustLut: Float64Array | null = null;
+
+function thrustDensityFactor(exp: number, altM: number): number {
+  if (exp === 0) return 1;
+  let lut = exp === lastThrustExp ? lastThrustLut : null;
+  if (!lut) {
+    lut = thrustDensityCache.get(exp) ?? null;
+    if (!lut) {
+      lut = new Float64Array(AIRCRAFT_LUT_COUNT + 1);
+      for (let i = 0; i <= AIRCRAFT_LUT_COUNT; i++) {
+        lut[i] = (airDensity(i * AIRCRAFT_LUT_STEP_M) / RHO0) ** exp;
+      }
+      if (thrustDensityCache.size >= MAX_LUT_CACHE) {
+        const oldest = thrustDensityCache.keys().next().value;
+        if (oldest !== undefined) thrustDensityCache.delete(oldest);
+      }
+      thrustDensityCache.set(exp, lut);
+    }
+    lastThrustExp = exp;
+    lastThrustLut = lut;
+  }
+  return sampleAltLut(lut, altM);
+}
+
 export function thrustN(p: AircraftParams, throttle: Throttle, altM: number, m: number): number {
   const base = throttle === "ab" ? p.abThrustKn : throttle === "mil" ? p.milThrustKn : p.idleThrustKn;
-  const sigma = airDensity(altM) / RHO0;
-  return base * 1000 * sigma ** p.thrustDensityExp * (1 + p.thrustMachGain * m);
+  return base * 1000 * thrustDensityFactor(p.thrustDensityExp, altM) * (1 + p.thrustMachGain * m);
+}
+
+function sustainedGAt(
+  p: AircraftParams,
+  altM: number,
+  speed: number,
+  throttle: Throttle,
+  gamma: number,
+): number {
+  const m = speed / speedOfSoundMs(altM);
+  const qS = 0.5 * airDensity(altM) * speed * speed * p.wingAreaM2;
+  const weight = p.massKg * G;
+  const d0 = qS * interp(p.tableMach, p.cd0, m);
+  const kTerm = (p.inducedK * weight * weight) / Math.max(qS, 1);
+  const tAvail = thrustN(p, throttle, altM, m) - weight * Math.sin(gamma);
+  return tAvail > d0 ? Math.sqrt((tAvail - d0) / Math.max(kTerm, 1e-6)) : 1;
 }
 
 /** Load factor at which thrust equals drag (zero energy bleed: dV/dt = 0) at the current state. */
 export function sustainedG(p: AircraftParams, j: Pick<Jet, "pos" | "speed" | "throttle" | "gamma">): number {
-  const m = j.speed / speedOfSoundMs(j.pos.z);
-  const qS = 0.5 * airDensity(j.pos.z) * j.speed * j.speed * p.wingAreaM2;
-  const weight = p.massKg * G;
-  const d0 = qS * interp(p.tableMach, p.cd0, m);
-  const kTerm = (p.inducedK * weight * weight) / Math.max(qS, 1);
-  const tAvail = thrustN(p, j.throttle, j.pos.z, m) - weight * Math.sin(j.gamma);
-  return tAvail > d0 ? Math.sqrt((tAvail - d0) / Math.max(kTerm, 1e-6)) : 1;
+  return sustainedGAt(p, j.pos.z, j.speed, j.throttle, j.gamma);
 }
 
 /** Load factor available right now for an effort level (lift-, thrust-, or g-limited, at least 1). */
@@ -154,7 +205,10 @@ export function availableG(
   // Hold Spd turns as if level while climbing: the turn comes first, and the climb only gets the
   // power the turn leaves over (see climbLimits). Diving, gravity helps hold the speed.
   if (effort === "sustain")
-    return Math.max(1, Math.min(p.gLimit, liftG, sustainedG(p, { ...j, gamma: Math.min(0, j.gamma) })));
+    return Math.max(
+      1,
+      Math.min(p.gLimit, liftG, sustainedGAt(p, j.pos.z, j.speed, j.throttle, Math.min(0, j.gamma))),
+    );
   return Math.max(1, Math.min(effort === "max" ? p.gLimit : p.normalG, liftG));
 }
 
@@ -166,14 +220,74 @@ export function dragN(p: AircraftParams, altM: number, speed: number, n: number)
   return qS * (interp(p.tableMach, p.cd0, m) + p.inducedK * cl * cl);
 }
 
-/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as calibrated airspeed and stays >= 1g stall speed. */
-export function minSpeedMs(p: AircraftParams, altM: number): number {
+interface MinSpeedCacheEntry {
+  minSpeedKt: number;
+  massKg: number;
+  wingAreaM2: number;
+  tableMach: readonly number[];
+  clMax: readonly number[];
+  lut: Float64Array;
+}
+
+const minSpeedByParams = new WeakMap<AircraftParams, MinSpeedCacheEntry>();
+const minSpeedByValue = new Map<string, Float64Array>();
+let lastMinSpdRef: AircraftParams | null = null;
+let lastMinSpdEntry: MinSpeedCacheEntry | null = null;
+
+function computeMinSpeedMs(p: AircraftParams, altM: number): number {
   const rho = Math.max(airDensity(altM), 1e-4);
   const iasFloor = tasFromCas(p.minSpeedKt * KT, altM);
   const m = iasFloor / speedOfSoundMs(altM);
   const cl1g = Math.max(interp(p.tableMach, p.clMax, m), 0.1);
   const stall1g = Math.sqrt((2 * p.massKg * G) / (rho * Math.max(p.wingAreaM2, 1) * cl1g));
   return Math.max(1, iasFloor, stall1g);
+}
+
+function minSpeedMatches(e: MinSpeedCacheEntry, p: AircraftParams): boolean {
+  return (
+    e.minSpeedKt === p.minSpeedKt &&
+    e.massKg === p.massKg &&
+    e.wingAreaM2 === p.wingAreaM2 &&
+    e.tableMach === p.tableMach &&
+    e.clMax === p.clMax
+  );
+}
+
+/** Minimum true airspeed (m/s) at `altM`: respects minSpeedKt as calibrated airspeed and stays >= 1g stall speed. */
+export function minSpeedMs(p: AircraftParams, altM: number): number {
+  let entry = lastMinSpdRef === p ? lastMinSpdEntry : null;
+  if (!entry || !minSpeedMatches(entry, p)) {
+    const cached = minSpeedByParams.get(p);
+    if (cached && minSpeedMatches(cached, p)) {
+      entry = cached;
+    } else {
+      const key = `${p.minSpeedKt}|${p.massKg}|${p.wingAreaM2}|${p.tableMach.join(",")}|${p.clMax.join(",")}`;
+      let lut = minSpeedByValue.get(key);
+      if (!lut) {
+        lut = new Float64Array(AIRCRAFT_LUT_COUNT + 1);
+        for (let i = 0; i <= AIRCRAFT_LUT_COUNT; i++) {
+          lut[i] = computeMinSpeedMs(p, i * AIRCRAFT_LUT_STEP_M);
+        }
+        if (minSpeedByValue.size >= MAX_LUT_CACHE) {
+          const oldest = minSpeedByValue.keys().next().value;
+          if (oldest !== undefined) minSpeedByValue.delete(oldest);
+        }
+        minSpeedByValue.set(key, lut);
+      }
+      entry = {
+        minSpeedKt: p.minSpeedKt,
+        massKg: p.massKg,
+        wingAreaM2: p.wingAreaM2,
+        tableMach: p.tableMach,
+        clMax: p.clMax,
+        lut,
+      };
+      minSpeedByParams.set(p, entry);
+    }
+    lastMinSpdRef = p;
+    lastMinSpdEntry = entry;
+  }
+  return sampleAltLut(entry.lut, altM);
 }
 
 /** Specific excess power (m/s) at a load factor: positive means the jet gains energy. */
@@ -246,7 +360,8 @@ export function climbLimits(
     // starting or ending the climb): turning hard leaves nothing to climb with.
     const weight = Math.max(p.massKg, 1) * G;
     const t = thrustN(p, j.throttle, j.pos.z, j.speed / speedOfSoundMs(j.pos.z));
-    const nTurn = Math.hypot(1, j.g * Math.sin(j.bank));
+    const turnG = j.g * Math.sin(j.bank);
+    const nTurn = Math.sqrt(1 + turnG * turnG);
     const share = 1 + (j.speed * machHoldDvDh(j.pos.z, j.speed)) / G;
     const sinG = (t - dragN(p, j.pos.z, j.speed, nTurn)) / weight / Math.max(share, 0.5);
     up = Math.asin(Math.max(0, Math.min(Math.sin(angle), sinG)));
@@ -302,7 +417,7 @@ export function stepJet(p: AircraftParams, j: Jet, desiredHdg: number, dt: numbe
   // Bank is the lift vector's angle from vertical; pushing below 0 g must not read as inverted
   // (atan2 would give 180°, and the roll logic would turn that into a turn nobody asked for).
   j.bank = Math.atan2(lh, Math.max(lv, 0.01));
-  j.g = Math.hypot(lh, lv) / G;
+  j.g = Math.sqrt(lh * lh + lv * lv) / G;
   j.hdg = (j.hdg + (lh / (v * Math.max(cosG, 0.2))) * dt + 2 * Math.PI) % (2 * Math.PI);
   j.gamma = Math.max(-GAMMA_MAX, Math.min(GAMMA_MAX, j.gamma + ((lv - G * cosG) / v) * dt));
 

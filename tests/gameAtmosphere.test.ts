@@ -1,18 +1,31 @@
 import { describe, expect, it } from "vitest";
+import { minSpeedMs, thrustN } from "../src/game/sim/aircraft.ts";
 import {
+  airDensity,
   casFromMach,
   casFromTas,
   FT,
+  G,
+  interp,
   isaTempK,
   KT,
   machFromCas,
   P0,
   pressurePa,
+  RHO0,
   speedOfSoundMs,
   tasFromCas,
 } from "../src/game/sim/atmosphere.ts";
+import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
 
 const kt = (ms: number) => ms / KT;
+
+function exactIsaDensity(altM: number): number {
+  const h = Math.max(0, Math.min(30000, altM));
+  return h <= 11000
+    ? 1.225 * ((288.15 - 0.0065 * h) / 288.15) ** 4.2559
+    : 0.36392 * Math.exp(-(h - 11000) / 6341.6);
+}
 
 describe("game: ISA pressure and airspeed conversions", () => {
   it("matches standard-atmosphere pressure and temperature", () => {
@@ -49,5 +62,43 @@ describe("game: ISA pressure and airspeed conversions", () => {
     const above = casFromMach(1.0001, h);
     expect(above).toBeGreaterThan(below);
     expect(above - below).toBeLessThan(0.1);
+  });
+
+  it("airDensity LUT matches ISA across knots, off-grid altitudes, bounds, and NaN", () => {
+    for (const h of [0, 11000, 30000]) {
+      expect(airDensity(h)).toBeCloseTo(exactIsaDensity(h), 12);
+    }
+    for (const h of [25, 3712, 10987, 11023, 18456, 29975, 29999.999999]) {
+      const ref = exactIsaDensity(h);
+      expect(Math.abs(airDensity(h) - ref) / ref).toBeLessThan(1e-4);
+    }
+    expect(airDensity(-500)).toBe(airDensity(0));
+    expect(airDensity(40000)).toBe(airDensity(30000));
+    expect(airDensity(Number.NaN)).toBeNaN();
+  });
+
+  it("minSpeedMs and thrustN LUTs stay accurate across 0-30 km and invalidate on in-place param mutation", () => {
+    const p = cloneParams(DEFAULT_PARAMS).aircraft;
+    for (const h of [25, 4320, 11000, 14750, 29999.999999]) {
+      const rho = Math.max(airDensity(h), 1e-4);
+      const iasFloor = tasFromCas(p.minSpeedKt * KT, h);
+      const m = iasFloor / speedOfSoundMs(h);
+      const cl1g = Math.max(interp(p.tableMach, p.clMax, m), 0.1);
+      const stall1g = Math.sqrt((2 * p.massKg * G) / (rho * Math.max(p.wingAreaM2, 1) * cl1g));
+      const refMin = Math.max(1, iasFloor, stall1g);
+      expect(Math.abs(minSpeedMs(p, h) - refMin) / refMin).toBeLessThan(1e-4);
+
+      const refThrust =
+        p.abThrustKn * 1000 * (airDensity(h) / RHO0) ** p.thrustDensityExp * (1 + p.thrustMachGain * 0.9);
+      expect(Math.abs(thrustN(p, "ab", h, 0.9) - refThrust) / refThrust).toBeLessThan(1e-4);
+    }
+
+    const beforeMin = minSpeedMs(p, 5000);
+    p.minSpeedKt += 60;
+    expect(minSpeedMs(p, 5000)).toBeGreaterThan(beforeMin + 25);
+
+    const beforeThrust = thrustN(p, "mil", 10000, 0.8);
+    p.thrustDensityExp += 0.3;
+    expect(thrustN(p, "mil", 10000, 0.8)).toBeLessThan(beforeThrust * 0.85);
   });
 });

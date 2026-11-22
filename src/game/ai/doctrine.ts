@@ -179,14 +179,28 @@ function sampleScale(rng: Rng, sigma: number, cap = 2): number {
   return 1 + sigma * randNormal(rng, cap);
 }
 
-/** Deterministic phase offset in [0, 0.9 * periodS) without consuming w.rng(). */
-function phaseOffsetS(key: string, periodS: number): number {
+/** Decoupled AI update period (s): tactical decisions run at 10 Hz instead of the 50 Hz physics step. */
+export const AI_TICK_S = 0.1;
+const AI_TICK_SLOTS = 5;
+const EMPTY_COMMANDS: Command[] = [];
+
+function fnv1a(key: string): number {
   let h = 2166136261;
   for (let i = 0; i < key.length; i++) {
     h ^= key.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  return ((h >>> 0) / 4294967296) * periodS * 0.9;
+  return h >>> 0;
+}
+
+/** Deterministic phase offset in [0, 0.9 * periodS) without consuming w.rng(). */
+function phaseOffsetS(key: string, periodS: number): number {
+  return (fnv1a(key) / 4294967296) * periodS * 0.9;
+}
+
+/** Staggers bots evenly across the 5 × 0.02 s physics steps inside each 10 Hz AI tick window. */
+function tickSlotS(key: string): number {
+  return (fnv1a(key) % AI_TICK_SLOTS) * (AI_TICK_S / AI_TICK_SLOTS);
 }
 
 export type AiState = "commit" | "support" | "pump" | "defend" | "egress";
@@ -225,6 +239,8 @@ export class DoctrineBot implements Controller {
   private pumpDir: 1 | -1 | null = null;
   private egressDir: 1 | -1 | null = null;
   private lastT: number | null = null;
+  private nextTickAt = Number.NEGATIVE_INFINITY;
+  private lastMissiles: number | null = null;
   private zoneAt = Number.NEGATIVE_INFINITY;
   private zoneFor: string | null = null;
   private rmaxNm = 0;
@@ -250,7 +266,24 @@ export class DoctrineBot implements Controller {
     this.preferredCrankDir = preferredCrankDir;
   }
 
+  private shouldSkipTick(w: World, me: Jet): boolean {
+    if (this.lastT === null) return false;
+    if (w.t >= this.nextTickAt - 1e-9) return false;
+    if (this.lastMissiles !== me.missiles) return false;
+    if (me.targetId !== null && !jetById(w, me.targetId)?.alive) return false;
+    const rwr = w.rwr.get(me.id);
+    if (rwr) {
+      for (const c of rwr) {
+        if (c.kind === "missile" && !this.rwrFirstSeen.has(c.sourceId)) return false;
+      }
+    }
+    return true;
+  }
+
   update(w: World, me: Jet): Command[] {
+    if (this.shouldSkipTick(w, me)) return EMPTY_COMMANDS;
+    const firstTick = this.lastT === null;
+    const due = !firstTick && w.t >= this.nextTickAt - 1e-9;
     const before = this.state;
     if (this.startAltM === null) this.startAltM = me.pos.z;
     let out = this.decide(w, me);
@@ -263,6 +296,14 @@ export class DoctrineBot implements Controller {
     if ((this.state === "commit" || this.state === "support") && target - me.pos.z > ALT_EPS_M) {
       out = out.filter((c) => c.type !== "effort");
       if (me.effort !== "sustain") out.push({ type: "effort", jetId: me.id, effort: "sustain" });
+    }
+    this.lastMissiles = me.missiles;
+    if (firstTick) {
+      const slot = tickSlotS(me.id);
+      this.nextTickAt = w.t + (slot > 0 ? slot : AI_TICK_S);
+    } else if (due) {
+      const steps = Math.floor((w.t - this.nextTickAt + 1e-9) / AI_TICK_S) + 1;
+      this.nextTickAt += steps * AI_TICK_S;
     }
     return out;
   }
