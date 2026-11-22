@@ -18,7 +18,7 @@
  */
 import { airDensity, DEG, FT, G, interp, KT, RHO0, speedOfSoundMs, tasFromCas } from "./atmosphere.ts";
 import type { AircraftParams } from "./params.ts";
-import { headingVec, type V3, wrapPi } from "./vec.ts";
+import { headingVec, type V3, wrap2Pi, wrapPi } from "./vec.ts";
 
 export type Side = "blue" | "red";
 export type Throttle = "idle" | "mil" | "ab";
@@ -26,12 +26,31 @@ export type Effort = "sustain" | "normal" | "max";
 
 /**
  * What the pilot asks for. "heading" holds a compass heading. "relative" keeps a threat at a fixed
- * angle off the nose and keeps adjusting as the geometry changes: 0° hot, ~50° crank, 90° notch
- * (beam), 180° cold. dir +1 turns right (threat ends up on the left), −1 turns left.
+ * angle off the nose and keeps adjusting as the geometry changes: 0° hot, ~50° crank, 180° cold.
+ * "notch" holds a 90° beam heading and periodically re-aligns against the threat's sensor bearing.
+ * dir +1 turns right (threat ends up on the left), −1 turns left.
  */
 export type Steer =
   | { mode: "heading"; hdg: number }
-  | { mode: "relative"; threatId: string; offsetDeg: number; dir: 1 | -1; label: string };
+  | {
+      mode: "relative";
+      threatId: string;
+      offsetDeg: number;
+      dir: 1 | -1;
+      label: string;
+      /** Last commanded heading (rad) from RWR, held across brief missile RWR drop-outs. */
+      lastHdg?: number;
+    }
+  | {
+      mode: "notch";
+      threatId: string;
+      dir: 1 | -1;
+      label: string;
+      /** Locked-in heading (rad) held between periodic re-alignments. */
+      hdg: number;
+      /** Sim time of next periodic re-alignment check. */
+      nextAlignAt: number;
+    };
 
 export interface Jet {
   id: string;
@@ -166,9 +185,10 @@ export function specificExcessPower(p: AircraftParams, j: Jet, n: number): numbe
 /** Heading the steering mode asks for, given where the threat is. */
 export function desiredHeading(j: Jet, threatPos: V3 | null): number {
   const s = j.steer;
-  if (s.mode === "heading" || !threatPos) return s.mode === "heading" ? s.hdg : j.hdg;
+  if (s.mode === "heading" || s.mode === "notch") return s.hdg;
+  if (!threatPos) return s.lastHdg ?? j.hdg;
   const brg = Math.atan2(threatPos.x - j.pos.x, threatPos.y - j.pos.y);
-  return brg + s.dir * s.offsetDeg * DEG;
+  return wrap2Pi(brg + s.dir * s.offsetDeg * DEG);
 }
 
 /** Heading gain: desired turn rate per radian of heading error (1/s). */

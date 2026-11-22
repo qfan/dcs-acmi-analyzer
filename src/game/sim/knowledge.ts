@@ -46,6 +46,7 @@ const MISSILE_INTERNAL = new Set<GameEvent["type"]>([
   "pitbull",
   "acquired",
   "seeker-lost",
+  "seeker-notched",
   "seeker-chaffed",
   "miss",
   "spent",

@@ -19,6 +19,7 @@ import { launchZone } from "../src/game/sim/wez.ts";
 import {
   awaitingCall,
   command,
+  desiredSteerHeading,
   jetById,
   step,
   type World,
@@ -120,7 +121,7 @@ describe("game: NPC knows only what its side can see", () => {
 
     // Missile continues chasing R1 far outside R2's illumination cone.
     const leftConeAt = w.t;
-    while (w.t < leftConeAt + 1.0) {
+    while (w.t < leftConeAt + w.params.radar.rwrHoldS + 1.0) {
       m.phase = "tracking";
       m.targetId = "R1";
       m.tof = 5;
@@ -129,7 +130,7 @@ describe("game: NPC knows only what its side can see", () => {
       step(w);
     }
     expect(m.end).toBeNull();
-    // Should exit defend promptly (< 1 s) instead of holding hard defendHoldS (~8 s) until the missile ends.
+    // Should exit defend promptly after RWR hold expires (< 1 s after rwrHoldS) instead of holding hard defendHoldS (~8 s).
     expect(npcOf(w, "R2").state).not.toBe("defend");
   });
 
@@ -827,5 +828,130 @@ describe("game: NPC missile-change adaptations", () => {
     expect(crankOffDeg).toBeGreaterThanOrEqual(35);
     expect(peakMach).toBeLessThanOrEqual(1.36);
     expect(mach(b1)).toBeLessThan(1.25);
+  });
+});
+
+describe("game: NPC notch defense and bank-blind cold turn completion", () => {
+  it("uses notch steer mode when notchChance = 1 and tries notch ~5% of the time with default skill", () => {
+    // Forced notch (notchChance = 1)
+    const wForced = scenarioById("duel").build(P(), 25000, 1, { redSkill: "hard", blueAi: null });
+    const bot = new DoctrineBot({ ...AI_SKILLS.hard, notchChance: 1 });
+    wForced.controllers.set("R1", bot);
+    const rForced = must(jetById(wForced, "R1"));
+    rForced.pos.y = 15 * NM;
+    rForced.missiles = 0;
+    expect(command(wForced, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    for (let i = 0; i < 2000 && bot.state !== "defend"; i++) step(wForced);
+    expect(bot.state).toBe("defend");
+    expect(rForced.steer.mode).toBe("notch");
+    expect(bot.status().detail).toMatch(/Notching active missile/);
+
+    // Statistical check across 200 seeds with default 5% notchChance (Hard skill).
+    let notchPicks = 0;
+    const n = 200;
+    for (let seed = 1; seed <= n; seed++) {
+      const w = scenarioById("duel").build(P(), 25000, seed, { redSkill: "hard", blueAi: null });
+      const red = must(jetById(w, "R1"));
+      red.pos.y = 15 * NM;
+      red.missiles = 0;
+      command(w, { type: "fire", jetId: "B1", targetId: "R1" });
+      for (let i = 0; i < 1500 && npcOf(w, "R1").state !== "defend" && !w.outcome; i++) step(w);
+      if (npcOf(w, "R1").state === "defend" && red.steer.mode === "notch") notchPicks++;
+    }
+    expect(notchPicks).toBeGreaterThanOrEqual(2);
+    expect(notchPicks).toBeLessThanOrEqual(25);
+  }, 30_000);
+
+  it("completes a cold turn to ~180 deg even when steep bank masks RWR past rwrHoldS", () => {
+    const p = P();
+    p.radar.rwrHoldS = 0.2;
+    const w = scenarioById("duel").build(p, 25000, 2, { redSkill: "hard", blueAi: null });
+    const coldBot = new DoctrineBot({ ...AI_SKILLS.hard, notchChance: 0, postureShot: false });
+    w.controllers.set("R1", coldBot);
+    const red = must(jetById(w, "R1"));
+    red.pos.y = 50 * NM;
+    expect(command(w, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    const m = must(w.missiles[0]);
+
+    for (let i = 0; i < 300 && coldBot.state !== "defend"; i++) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+    }
+    expect(coldBot.state).toBe("defend");
+
+    // Keep M1 active 6 nm due south of R1 while R1 turns through beam with steep >45 deg bank
+    // (long enough for the 0.2 s RWR hold to expire mid-turn). R1 must still complete ~180 deg turn.
+    let sawBankBlindDrop = false;
+    for (let i = 0; i < 1000; i++) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+      if (Math.abs(red.bank) > 45 * DEG && red.steer.mode === "heading") sawBankBlindDrop = true;
+    }
+    expect(sawBankBlindDrop).toBe(true);
+    expect(Math.abs(wrapPi(red.hdg - 0))).toBeLessThan(0.25);
+  });
+
+  it("holds steady cold offsetDeg and commanded heading when an active Fox-3 sits in the 120 deg bin or on bin borders", () => {
+    const w = scenarioById("duel").build(P(), 25000, 2, { redSkill: "hard", blueAi: null });
+    const coldBot = new DoctrineBot({ ...AI_SKILLS.hard, notchChance: 0, postureShot: false });
+    w.controllers.set("R1", coldBot);
+    const red = must(jetById(w, "R1"));
+    red.pos.y = 50 * NM;
+    expect(command(w, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    const m = must(w.missiles[0]);
+
+    // Keep M1 in the 120 deg RWR bin relative to R1 while R1 enters defend and maneuvers.
+    const placeRel = (relDeg: number) => {
+      const brg = red.hdg + relDeg * DEG;
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x + Math.sin(brg) * 6 * NM, y: red.pos.y + Math.cos(brg) * 6 * NM, z: red.pos.z };
+      m.vel = { x: -Math.sin(brg) * 800, y: -Math.cos(brg) * 800, z: 0 };
+    };
+    for (let i = 0; i < 300 && coldBot.state !== "defend"; i++) {
+      placeRel(120);
+      step(w);
+    }
+    expect(coldBot.state).toBe("defend");
+
+    const offsets = new Set<number>();
+    for (let i = 0; i < 100; i++) {
+      placeRel(120);
+      step(w);
+      if (red.steer.mode === "relative") offsets.add(red.steer.offsetDeg);
+    }
+    // 120 deg bin is cleanly past the 115 deg threshold, so offsetDeg stays 180 (no 160/180 toggle).
+    expect([...offsets]).toEqual([180]);
+
+    // Now let R1 flee cold against M1 fixed due south starting on the 175 deg bin border.
+    red.hdg = 5 * DEG;
+    m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+    m.vel = { x: 0, y: 800, z: 0 };
+    step(w);
+    let prevCmd = desiredSteerHeading(w, red);
+    let cmdFlips = 0;
+    for (let i = 0; i < 150; i++) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+      const nextCmd = desiredSteerHeading(w, red);
+      if (Math.abs(wrapPi(nextCmd - prevCmd)) > 1 * DEG) {
+        cmdFlips++;
+        prevCmd = nextCmd;
+      }
+    }
+    expect(cmdFlips).toBeLessThanOrEqual(2);
   });
 });

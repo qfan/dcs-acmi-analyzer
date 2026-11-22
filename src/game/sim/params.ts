@@ -109,18 +109,48 @@ export interface RadarParams {
    * Kept long so lofted long-range shots are possible.
    */
   rangeNm: number;
+  /** RWR vertical receive limit above the aircraft's wing plane (deg, 0–90). */
+  rwrUpDeg: number;
+  /** RWR vertical receive limit below the aircraft's wing plane (deg, 0–90). */
+  rwrDownDeg: number;
+  /** How long (s) a lost RWR emitter remains shown at its last bearing/lock state. */
+  rwrHoldS: number;
+  /** Aircraft-relative RWR bearing bin size (deg; 0 = exact unbinned bearing). */
+  rwrBinDeg: number;
 }
 
 /**
- * Chaff, as a simple game rule: each bundle has a chance to pull a radar or seeker off the jet for
- * a moment. Off by default for now (chance 0): releasing chaff and flares is visual only. Flares do
- * nothing against these radar-guided missiles. There is no notch rule: beaming only changes the
- * geometry.
+ * Notch and chaff rules:
+ *
+ * Notch (hybrid): when an observer looks down at a beaming target, notch effectiveness ramps
+ * linearly with target 3D radial speed from 0 at `notchMaxKt` (≥ 100 kt) to 1 at `notchMinKt`
+ * (≤ 25 kt), scaled by look-down depression angle up to `notchLookDownDeg` (looking up is immune).
+ * At 100% effectiveness, radars break track and missile seekers cannot acquire and drop into
+ * inertial coast; in partial notch (0 < eff < 1), break chance scales with `eff` and seekers
+ * acquire sluggishly.
+ *
+ * Chaff: each bundle has a chance to pull a radar or seeker off the jet for a moment. Off by
+ * default for now (chance 0): releasing chaff and flares is visual only. Flares do nothing against
+ * these radar-guided missiles.
  */
 export interface CountermeasureParams {
   /** Chaff bundles and flares per jet. */
   chaff: number;
   flares: number;
+  /** Target 3D radial speed (kt) at or below which notch effectiveness is 100%. */
+  notchMinKt: number;
+  /** Target 3D radial speed (kt) at or above which notch effectiveness is 0% (0 disables notch). */
+  notchMaxKt: number;
+  /** Look-down depression angle (deg) where look-down clutter reaches 100% (0 = co-altitude counts). */
+  notchLookDownDeg: number;
+  /** Max per-second chance that a fighter radar breaks track in partial notch (scales with effect). */
+  radarNotchPerS: number;
+  /** Max per-second chance that a tracking missile seeker breaks lock in partial notch. */
+  seekerNotchPerS: number;
+  /** Coast/blind time (s) after a probabilistic partial-notch break. */
+  notchReacquireS: number;
+  /** Interval (s) between periodic continuous auto-notch heading re-alignments. */
+  autoNotchAlignS: number;
   /** Chance that one chaff bundle pulls a radar or seeker off the jet. */
   chaffPullChance: number;
   /** How long (s) that lasts before it looks for the jet again. */
@@ -193,11 +223,22 @@ export const DEFAULT_RADAR: RadarParams = {
   gimbalDeg: 60,
   detectRangeNm: 80,
   rangeNm: 70,
+  rwrUpDeg: 45,
+  rwrDownDeg: 45,
+  rwrHoldS: 3,
+  rwrBinDeg: 10,
 };
 
 export const DEFAULT_COUNTERMEASURES: CountermeasureParams = {
   chaff: 60,
   flares: 30,
+  notchMinKt: 25,
+  notchMaxKt: 100,
+  notchLookDownDeg: 3,
+  radarNotchPerS: 0.25,
+  seekerNotchPerS: 0.35,
+  notchReacquireS: 1.5,
+  autoNotchAlignS: 5,
   // Off for now (0): chaff is visual only until this is revisited.
   chaffPullChance: 0,
   chaffPullS: 1,
@@ -459,6 +500,45 @@ export const PARAM_FIELDS: ParamField[] = [
     min: 1,
   },
   {
+    group: "radar",
+    key: "rwrUpDeg",
+    label: "RWR receive limit (above wing plane)",
+    unit: "°",
+    kind: "number",
+    step: 1,
+    min: 0,
+    max: 90,
+  },
+  {
+    group: "radar",
+    key: "rwrDownDeg",
+    label: "RWR receive limit (below wing plane)",
+    unit: "°",
+    kind: "number",
+    step: 1,
+    min: 0,
+    max: 90,
+  },
+  {
+    group: "radar",
+    key: "rwrHoldS",
+    label: "RWR signal memory when lost",
+    unit: "s",
+    kind: "number",
+    step: 0.5,
+    min: 0,
+  },
+  {
+    group: "radar",
+    key: "rwrBinDeg",
+    label: "RWR bearing resolution (0 = exact)",
+    unit: "°",
+    kind: "number",
+    step: 1,
+    min: 0,
+    max: 90,
+  },
+  {
     group: "countermeasures",
     key: "chaff",
     label: "Chaff bundles per jet",
@@ -473,6 +553,70 @@ export const PARAM_FIELDS: ParamField[] = [
     kind: "number",
     min: 0,
     int: true,
+  },
+  {
+    group: "countermeasures",
+    key: "notchMinKt",
+    label: "Notch: 100% effect below radial speed",
+    unit: "kt",
+    kind: "number",
+    step: 1,
+    min: 0,
+  },
+  {
+    group: "countermeasures",
+    key: "notchMaxKt",
+    label: "Notch: 0% effect above radial speed (0 = off)",
+    unit: "kt",
+    kind: "number",
+    step: 5,
+    min: 0,
+  },
+  {
+    group: "countermeasures",
+    key: "notchLookDownDeg",
+    label: "Notch: full look-down depression angle",
+    unit: "°",
+    kind: "number",
+    step: 0.5,
+    min: 0,
+    max: 90,
+  },
+  {
+    group: "countermeasures",
+    key: "radarNotchPerS",
+    label: "Notch: max radar break rate (partial)",
+    unit: "chance/s",
+    kind: "number",
+    step: 0.05,
+    min: 0,
+  },
+  {
+    group: "countermeasures",
+    key: "seekerNotchPerS",
+    label: "Notch: max seeker break rate (partial)",
+    unit: "chance/s",
+    kind: "number",
+    step: 0.05,
+    min: 0,
+  },
+  {
+    group: "countermeasures",
+    key: "notchReacquireS",
+    label: "Notch: coast time after break",
+    unit: "s",
+    kind: "number",
+    step: 0.1,
+    min: 0,
+  },
+  {
+    group: "countermeasures",
+    key: "autoNotchAlignS",
+    label: "Auto-notch re-align interval",
+    unit: "s",
+    kind: "number",
+    step: 0.5,
+    min: 0,
   },
   {
     group: "countermeasures",

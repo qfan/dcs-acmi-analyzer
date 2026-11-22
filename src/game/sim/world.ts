@@ -3,12 +3,21 @@
  * through `command()` or `step()`, so the same seed, commands and step count always give the same
  * fight. Time control (real time, pause, auto-pause on events, turns) lives outside, in the UI.
  */
-import { clampAltCmd, desiredHeading, type Jet, type Side, stepJet, velocity } from "./aircraft.ts";
+import {
+  clampAltCmd,
+  desiredHeading,
+  type Jet,
+  type Side,
+  type Steer,
+  stepJet,
+  velocity,
+} from "./aircraft.ts";
 import { DEG, NM } from "./atmosphere.ts";
+import { chanceInStep, notchEffect } from "./countermeasures.ts";
 import { launchMissile, type Missile, type MissileEvent, stepMissile, type TargetTruth } from "./missile.ts";
 import type { GameParams } from "./params.ts";
 import { makeRng, type Rng } from "./rng.ts";
-import { add, angleBetween, bearing, headingVec, len, scale, sub, type V3 } from "./vec.ts";
+import { add, angleBetween, bearing, headingVec, len, scale, sub, type V3, wrap2Pi, wrapPi } from "./vec.ts";
 
 export const SIM_DT = 0.02;
 /** Maximum distance (nm) a jet may travel from its initial position before counting as a loss. */
@@ -32,6 +41,7 @@ export type GameEventType =
   | "spent"
   | "radar-lost"
   | "radar-gained"
+  | "seeker-notched"
   | "seeker-chaffed"
   | "rwr-missile"
   | "chaff"
@@ -103,7 +113,11 @@ export interface World {
   decoys: Decoy[];
   /** "missileId>jetId" pairs already announced on that jet's RWR. */
   rwrSeen: Set<string>;
-  /** "radarJetId>targetJetId" → sim time until which that radar cannot lock the target (chaff). */
+  /** Current RWR contacts per jet (including held contacts during `rwrHoldS`). */
+  rwr: Map<string, RwrContact[]>;
+  /** Previous live quantized relative RWR bearing (rad) per jet and emitter, for bin hysteresis. */
+  rwrRel: Map<string, Map<string, number>>;
+  /** "radarJetId>targetJetId" → sim time until which that radar cannot lock the target (notch, chaff). */
   radarBreak: Map<string, number>;
   outcome: Outcome | null;
   /** Number of early events trimmed from `events` in infinite mode, to keep HUD cursors aligned. */
@@ -136,6 +150,8 @@ export function makeWorld(params: GameParams, seed = 1): World {
     radarTrack: new Map(),
     decoys: [],
     rwrSeen: new Set(),
+    rwr: new Map(),
+    rwrRel: new Map(),
     radarBreak: new Map(),
     outcome: null,
     eventOffset: 0,
@@ -170,9 +186,15 @@ export function radarScans(w: World, shooter: Jet, target: Jet): boolean {
   return radarCovers(w, shooter, target, detectRange(w));
 }
 
-/** True while a chaff break keeps `shooter`'s radar off `target`. */
+/** Brief coast floor (s) on radar track after a 100% notch to prevent boundary thrashing. */
+const FULL_NOTCH_RADAR_FLOOR_S = 0.4;
+
+/** True while a notch or chaff break keeps `shooter`'s radar off `target`. */
 export function radarBroken(w: World, shooter: Jet, target: Jet): boolean {
-  return w.t < (w.radarBreak.get(`${shooter.id}>${target.id}`) ?? Number.NEGATIVE_INFINITY);
+  return (
+    w.t < (w.radarBreak.get(`${shooter.id}>${target.id}`) ?? Number.NEGATIVE_INFINITY) ||
+    notchEffect(shooter.pos, truthOf(target), w.params.countermeasures) >= 1
+  );
 }
 
 /** True when `shooter`'s radar sees `target` (detection range, gimbal, not broken). Missiles are never seen. */
@@ -186,16 +208,23 @@ export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
 }
 
 /**
- * Chaff against radars, once per step: a fresh chaff bundle has a small chance to pull each radar
- * scanning the jet off it for a moment.
+ * Notch and chaff against radars, once per step: full notch holds track broken; partial notch has
+ * a scaled per-second break chance; a fresh chaff bundle has a chance to pull each scanning radar.
  */
-function updateRadarBreaks(w: World, freshChaff: Map<string, Decoy>): void {
+function updateRadarBreaks(w: World, dt: number, freshChaff: Map<string, Decoy>): void {
   const cm = w.params.countermeasures;
   for (const radar of w.jets) {
     if (!radar.alive) continue;
     for (const tgt of w.jets) {
       if (tgt.side === radar.side || !tgt.alive || !radarScans(w, radar, tgt)) continue;
       const key = `${radar.id}>${tgt.id}`;
+      const until = w.radarBreak.get(key) ?? Number.NEGATIVE_INFINITY;
+      const eff = notchEffect(radar.pos, truthOf(tgt), cm);
+      if (eff >= 1) {
+        w.radarBreak.set(key, Math.max(until, w.t + Math.min(FULL_NOTCH_RADAR_FLOOR_S, cm.notchReacquireS)));
+      } else if (eff > 0 && w.t >= until && w.rng() < chanceInStep(cm.radarNotchPerS * eff, dt)) {
+        w.radarBreak.set(key, w.t + cm.notchReacquireS);
+      }
       if (freshChaff.has(tgt.id) && w.rng() < cm.chaffPullChance)
         w.radarBreak.set(key, Math.max(w.radarBreak.get(key) ?? 0, w.t + cm.chaffPullS));
     }
@@ -213,17 +242,88 @@ function updateRadarBreaks(w: World, freshChaff: Map<string, Decoy>): void {
 export interface RwrContact {
   sourceId: string;
   kind: "radar" | "missile";
-  /** Compass bearing from the jet to the emitter (rad). */
+  /** Compass bearing from the jet to the emitter (rad), binned by `rwrBinDeg` when live. */
   bearing: number;
   lock: boolean;
+  /** Sim time this emitter was last received inside the RWR cone. */
+  lastSeenAt: number;
+  /** True while kept in RWR memory after signal loss (`rwrHoldS`). */
+  held: boolean;
 }
 
-export function rwrContacts(w: World, j: Jet): RwrContact[] {
+/** True when `emitterPos` sits inside the jet's 3D vertical RWR receive cone (`-downDeg`..`+upDeg`). */
+export function rwrInElevation(jet: Jet, emitterPos: V3, upDeg: number, downDeg: number): boolean {
+  const los = sub(emitterPos, jet.pos);
+  const l = len(los);
+  if (l < 1e-6) return true;
+  const sinH = Math.sin(jet.hdg);
+  const cosH = Math.cos(jet.hdg);
+  const sinG = Math.sin(jet.gamma);
+  const cosG = Math.cos(jet.gamma);
+  const sinB = Math.sin(jet.bank);
+  const cosB = Math.cos(jet.bank);
+  // World unit dorsal ("canopy up") vector: sin(bank) * right + cos(bank) * levelUp.
+  const ux = sinB * cosH - cosB * sinH * sinG;
+  const uy = -sinB * sinH - cosB * cosH * sinG;
+  const uz = cosB * cosG;
+  const sinElev = Math.max(-1, Math.min(1, (los.x * ux + los.y * uy + los.z * uz) / l));
+  const elevDeg = Math.asin(sinElev) / DEG;
+  return elevDeg <= upDeg && elevDeg >= -downDeg;
+}
+
+/** Fraction of a bin width past the midpoint before a live RWR contact switches bins (Schmitt hysteresis). */
+const RWR_BIN_HYST_FRAC = 0.25;
+
+function quantizeRwrRel(rel: number, binDeg: number, prevRelRad?: number): number {
+  if (binDeg <= 0) return rel;
+  const binRad = binDeg * DEG;
+  if (prevRelRad !== undefined && Math.abs(wrapPi(rel - prevRelRad)) <= (0.5 + RWR_BIN_HYST_FRAC) * binRad) {
+    return prevRelRad;
+  }
+  return wrapPi(Math.round(rel / binRad) * binRad);
+}
+
+/**
+ * Quantizes a compass bearing into `binDeg`-wide bins relative to the jet's nose (0 = exact).
+ * When `prevRelRad` is given, applies bin-border hysteresis so contacts near a boundary do not flicker.
+ */
+export function quantizeRwrBearing(
+  jetHdg: number,
+  trueBrg: number,
+  binDeg: number,
+  prevRelRad?: number,
+): number {
+  if (binDeg <= 0) return wrap2Pi(trueBrg);
+  return wrap2Pi(jetHdg + quantizeRwrRel(wrapPi(trueBrg - jetHdg), binDeg, prevRelRad));
+}
+
+function computeRawRwr(
+  w: World,
+  j: Jet,
+  prevRel?: Map<string, number>,
+  nextRel?: Map<string, number>,
+): RwrContact[] {
   if (!j.alive) return [];
+  const rp = w.params.radar;
   const out: RwrContact[] = [];
+  const binBearing = (key: string, emitterPos: V3): number => {
+    const trueBrg = bearing(j.pos, emitterPos);
+    if (rp.rwrBinDeg <= 0) return wrap2Pi(trueBrg);
+    const qRel = quantizeRwrRel(wrapPi(trueBrg - j.hdg), rp.rwrBinDeg, prevRel?.get(key));
+    nextRel?.set(key, qRel);
+    return wrap2Pi(j.hdg + qRel);
+  };
   for (const e of w.jets) {
     if (e.side === j.side || !e.alive || !radarScans(w, e, j)) continue;
-    out.push({ sourceId: e.id, kind: "radar", bearing: bearing(j.pos, e.pos), lock: false });
+    if (!rwrInElevation(j, e.pos, rp.rwrUpDeg, rp.rwrDownDeg)) continue;
+    out.push({
+      sourceId: e.id,
+      kind: "radar",
+      bearing: binBearing(`radar:${e.id}`, e.pos),
+      lock: false,
+      lastSeenAt: w.t,
+      held: false,
+    });
   }
   const mp = w.params.missile;
   for (const m of w.missiles) {
@@ -231,14 +331,48 @@ export function rwrContacts(w: World, j: Jet): RwrContact[] {
     if (m.phase !== "search" && m.phase !== "tracking") continue;
     const los = sub(j.pos, m.pos);
     if (len(los) > mp.seekerRangeNm * NM || angleBetween(los, m.vel) > mp.seekerGimbalDeg * DEG) continue;
+    if (!rwrInElevation(j, m.pos, rp.rwrUpDeg, rp.rwrDownDeg)) continue;
     out.push({
       sourceId: m.id,
       kind: "missile",
-      bearing: bearing(j.pos, m.pos),
+      bearing: binBearing(`missile:${m.id}`, m.pos),
       lock: m.phase === "tracking" && m.targetId === j.id,
+      lastSeenAt: w.t,
+      held: false,
     });
   }
   return out;
+}
+
+function updateRwr(w: World): void {
+  const holdS = Math.max(0, w.params.radar.rwrHoldS);
+  for (const j of w.jets) {
+    if (!j.alive) {
+      w.rwr.delete(j.id);
+      w.rwrRel.delete(j.id);
+      continue;
+    }
+    const nextRel = new Map<string, number>();
+    const raw = computeRawRwr(w, j, w.rwrRel.get(j.id), nextRel);
+    w.rwrRel.set(j.id, nextRel);
+    const prev = w.rwr.get(j.id);
+    if (!prev || prev.length === 0) {
+      w.rwr.set(j.id, raw);
+      continue;
+    }
+    const seen = new Set(raw.map((c) => `${c.kind}:${c.sourceId}`));
+    const next = [...raw];
+    for (const old of prev) {
+      if (seen.has(`${old.kind}:${old.sourceId}`)) continue;
+      if (w.t - old.lastSeenAt <= holdS) next.push({ ...old, held: true });
+    }
+    w.rwr.set(j.id, next);
+  }
+}
+
+export function rwrContacts(w: World, j: Jet): RwrContact[] {
+  if (!j.alive) return [];
+  return w.rwr.get(j.id) ?? computeRawRwr(w, j);
 }
 
 /**
@@ -256,6 +390,59 @@ export function steerThreatPos(w: World, j: Jet): V3 | null {
   return m && !m.end && m.phase !== "lost" ? m.pos : null;
 }
 
+/** Sensor-aware bearing from `j` to `threatId` (RWR contact first, else friendly radar detection). */
+function resolveNotchBearing(w: World, j: Jet, threatId: string): number | null {
+  const rwr = rwrContacts(w, j).find((c) => c.sourceId === threatId);
+  if (rwr) return rwr.bearing;
+  const enemy = jetById(w, threatId);
+  if (
+    enemy?.alive &&
+    enemy.side !== j.side &&
+    w.jets.some((f) => f.alive && f.side === j.side && radarCanDetect(w, f, enemy))
+  ) {
+    return bearing(j.pos, enemy.pos);
+  }
+  return null;
+}
+
+/** Commanded heading for `j`, using RWR bearings for missile-relative steering and held heading for notch. */
+export function desiredSteerHeading(w: World, j: Jet): number {
+  const s = j.steer;
+  if (s.mode === "heading" || s.mode === "notch") return s.hdg;
+  if (jetById(w, s.threatId)) return desiredHeading(j, steerThreatPos(w, j));
+  const c = rwrContacts(w, j).find((x) => x.kind === "missile" && x.sourceId === s.threatId);
+  if (c) return wrap2Pi(c.bearing + s.dir * s.offsetDeg * DEG);
+  if (s.lastHdg !== undefined) return s.lastHdg;
+  return desiredHeading(j, steerThreatPos(w, j));
+}
+
+function updateAutoNotch(w: World): void {
+  const rp = w.params.radar;
+  const alignS = Math.max(0, w.params.countermeasures.autoNotchAlignS);
+  const maskBankRad = Math.min(rp.rwrUpDeg, rp.rwrDownDeg) * DEG;
+  for (const j of w.jets) {
+    if (!j.alive) {
+      if (j.steer.mode === "notch") j.steer = { mode: "heading", hdg: j.steer.hdg };
+      continue;
+    }
+    if (j.steer.mode !== "notch") continue;
+    const s = j.steer;
+    const tgtJet = jetById(w, s.threatId);
+    if (tgtJet && !tgtJet.alive) {
+      j.steer = { mode: "heading", hdg: s.hdg };
+      continue;
+    }
+    if (w.t < s.nextAlignAt - 1e-9) continue;
+    const brg = resolveNotchBearing(w, j, s.threatId);
+    if (brg !== null) {
+      s.hdg = wrap2Pi(brg + s.dir * 90 * DEG);
+      s.nextAlignAt = w.t + alignS;
+    } else if (Math.abs(j.bank) <= maskBankRad || Math.abs(wrapPi(s.hdg - j.hdg)) < 5 * DEG) {
+      j.steer = { mode: "heading", hdg: s.hdg };
+    }
+  }
+}
+
 export const truthOf = (j: Jet): TargetTruth => ({ pos: { ...j.pos }, vel: velocity(j), alive: j.alive });
 
 function emit(w: World, e: Omit<GameEvent, "t">): void {
@@ -267,9 +454,32 @@ export function command(w: World, c: Command): string | null {
   const j = jetById(w, c.jetId);
   if (!j?.alive) return "That jet is not flying.";
   switch (c.type) {
-    case "steer":
-      j.steer = c.steer;
+    case "steer": {
+      if (c.steer.mode === "notch") {
+        const brg = resolveNotchBearing(w, j, c.steer.threatId);
+        if (brg === null) {
+          j.steer = { mode: "heading", hdg: c.steer.hdg };
+        } else {
+          j.steer = {
+            mode: "notch",
+            threatId: c.steer.threatId,
+            dir: c.steer.dir,
+            label: c.steer.label,
+            hdg: wrap2Pi(brg + c.steer.dir * 90 * DEG),
+            nextAlignAt: w.t + Math.max(0, w.params.countermeasures.autoNotchAlignS),
+          };
+        }
+      } else if (c.steer.mode === "relative") {
+        const steer = c.steer;
+        const next: Steer = { ...steer };
+        const rwr = rwrContacts(w, j).find((x) => x.kind === "missile" && x.sourceId === steer.threatId);
+        if (rwr) next.lastHdg = wrap2Pi(rwr.bearing + steer.dir * steer.offsetDeg * DEG);
+        j.steer = next;
+      } else {
+        j.steer = c.steer;
+      }
       return null;
+    }
     case "throttle":
       j.throttle = c.throttle;
       return null;
@@ -344,6 +554,7 @@ const MISSILE_TEXT: Partial<Record<MissileEvent, [GameEventType, string]>> = {
   "datalink-lost": ["datalink-lost", "datalink lost: flying to last known position"],
   "datalink-regained": ["datalink-regained", "datalink regained"],
   "seeker-lost": ["seeker-lost", "seeker lost the target"],
+  "seeker-notched": ["seeker-notched", "seeker lost lock in the notch"],
   "seeker-chaffed": ["seeker-chaffed", "seeker pulled onto chaff"],
   miss: ["miss", "missed"],
   spent: ["spent", "self-destructed (flight time or speed limit)"],
@@ -357,9 +568,17 @@ export function step(w: World, dt = SIM_DT): void {
     const ctl = w.controllers.get(j.id);
     if (ctl) for (const c of ctl.update(w, j)) command(w, c);
   }
+  updateAutoNotch(w);
   for (const j of w.jets) {
     if (!j.alive) continue;
-    stepJet(w.params.aircraft, j, desiredHeading(j, steerThreatPos(w, j)), dt);
+    const hdg = desiredSteerHeading(w, j);
+    if (j.steer.mode === "relative") {
+      const steer = j.steer;
+      if (rwrContacts(w, j).some((x) => x.kind === "missile" && x.sourceId === steer.threatId)) {
+        steer.lastHdg = hdg;
+      }
+    }
+    stepJet(w.params.aircraft, j, hdg, dt);
     if (j.pos.z <= 0) {
       j.alive = false;
       j.g = 1;
@@ -381,7 +600,7 @@ export function step(w: World, dt = SIM_DT): void {
       d.rolled = true;
       freshChaff.set(d.jetId, d);
     }
-  updateRadarBreaks(w, freshChaff);
+  updateRadarBreaks(w, dt, freshChaff);
 
   for (const j of w.jets) {
     const tgt = jetById(w, j.targetId);
@@ -468,6 +687,13 @@ export function step(w: World, dt = SIM_DT): void {
     }
   }
 
+  updateRwr(w);
+
+  // Clean up auto-notch steering on jets killed during this step.
+  for (const j of w.jets) {
+    if (!j.alive && j.steer.mode === "notch") j.steer = { mode: "heading", hdg: j.steer.hdg };
+  }
+
   // Announce each active missile the first time it shows on a jet's RWR.
   for (const j of w.jets) {
     if (!j.alive) continue;
@@ -546,6 +772,8 @@ function maintainInfiniteWorld(w: World): void {
       w.egressSafeSince.delete(d.id);
       w.controllers.delete(d.id);
       w.radarTrack.delete(d.id);
+      w.rwr.delete(d.id);
+      w.rwrRel.delete(d.id);
       const rep = w.respawn?.(w, d);
       if (rep) {
         w.jets.push(rep.jet);

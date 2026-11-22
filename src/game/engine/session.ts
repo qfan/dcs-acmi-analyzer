@@ -251,7 +251,7 @@ export class GameSession {
         }
       } else {
         const onRwr = rwrContacts(w, j).some((c) => c.kind === "missile" && c.sourceId === id);
-        if (!onRwr) j.steer = { mode: "heading", hdg: j.hdg };
+        if (!onRwr) j.steer = { mode: "heading", hdg: j.steer.lastHdg ?? j.hdg };
       }
     }
   }

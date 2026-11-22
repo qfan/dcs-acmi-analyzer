@@ -386,6 +386,86 @@ export function GameApp() {
     [issue, session],
   );
 
+  /**
+   * Periodic continuous notch steering: locks in a 90° beam heading against the highest-priority
+   * sensor threat (RWR missile > radar/RWR enemy > RWR radar strobe), re-aligning every
+   * `autoNotchAlignS`. Falls back to a one-shot heading turn if only a ghost is known.
+   */
+  const steerNotch = useCallback(
+    (dir: 1 | -1, label: string) =>
+      issue((j) => {
+        if (!session) return null;
+        const w = session.world;
+        const rwr = rwrContacts(w, j);
+        const missile = nearestRwrMissile(w, j);
+        if (missile) {
+          const c = rwr.find((x) => x.kind === "missile" && x.sourceId === missile);
+          const fallbackHdg = c ? wrap2Pi(c.bearing + (dir * 90 * Math.PI) / 180) : j.hdg;
+          return {
+            type: "steer",
+            jetId: j.id,
+            steer: {
+              mode: "notch",
+              threatId: missile,
+              dir,
+              label: `${label} vs ${missile}`,
+              hdg: fallbackHdg,
+              nextAlignAt: 0,
+            },
+          };
+        }
+        const enemy = nearestKnownEnemy(session, j);
+        if (enemy && (session.known.has(enemy.id) || rwr.some((c) => c.sourceId === enemy.id))) {
+          const brg = Math.atan2(enemy.pos.x - j.pos.x, enemy.pos.y - j.pos.y);
+          return {
+            type: "steer",
+            jetId: j.id,
+            steer: {
+              mode: "notch",
+              threatId: enemy.id,
+              dir,
+              label,
+              hdg: wrap2Pi(brg + (dir * 90 * Math.PI) / 180),
+              nextAlignAt: 0,
+            },
+          };
+        }
+        const rwrRadars = rwr.filter((c) => c.kind === "radar");
+        if (rwrRadars.length > 0) {
+          let bestRadar = rwrRadars[0] as (typeof rwrRadars)[number];
+          let bestDist = Number.POSITIVE_INFINITY;
+          for (const rc of rwrRadars) {
+            const e = w.jets.find((x) => x.id === rc.sourceId);
+            const d = e ? Math.hypot(e.pos.x - j.pos.x, e.pos.y - j.pos.y) : 1e9;
+            if (d < bestDist) {
+              bestDist = d;
+              bestRadar = rc;
+            }
+          }
+          return {
+            type: "steer",
+            jetId: j.id,
+            steer: {
+              mode: "notch",
+              threatId: bestRadar.sourceId,
+              dir,
+              label,
+              hdg: wrap2Pi(bestRadar.bearing + (dir * 90 * Math.PI) / 180),
+              nextAlignAt: 0,
+            },
+          };
+        }
+        if (!enemy) return null;
+        const brg = Math.atan2(enemy.pos.x - j.pos.x, enemy.pos.y - j.pos.y);
+        return {
+          type: "steer",
+          jetId: j.id,
+          steer: { mode: "heading", hdg: wrap2Pi(brg + (dir * 90 * Math.PI) / 180) },
+        };
+      }),
+    [issue, session],
+  );
+
   /** Climbs or dives every selected jet by `deltaFt` from its current altitude order, snapped to the step. */
   const stepAlt = useCallback(
     (deltaFt: number) =>
@@ -550,8 +630,8 @@ export function GameApp() {
       } else if (k === "h") steerRel(0, 1, "hot");
       else if (k === "q") steerRel(CRANK_DEG, -1, "crank left");
       else if (k === "e") steerRel(CRANK_DEG, 1, "crank right");
-      else if (k === "a") steerRel(90, -1, "notch left", true);
-      else if (k === "d") steerRel(90, 1, "notch right", true);
+      else if (k === "a") steerNotch(-1, "notch left");
+      else if (k === "d") steerNotch(1, "notch right");
       else if (k === "c") steerRel(180, 1, "cold", true);
       else if (k === "insert") issue((j) => ({ type: "chaff", jetId: j.id }));
       else if (k === "delete") issue((j) => ({ type: "flare", jetId: j.id }));
@@ -589,7 +669,7 @@ export function GameApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [issue, steerRel, stepAlt, levelOff, togglePause, setScale, showParams, showStart, session]);
+  }, [issue, steerRel, steerNotch, stepAlt, levelOff, togglePause, setScale, showParams, showStart, session]);
 
   useEffect(() => {
     if (!flash) return;
@@ -912,6 +992,7 @@ export function GameApp() {
               fox3Label={fox3Label}
               issue={issue}
               steerRel={steerRel}
+              steerNotch={steerNotch}
               stepAlt={stepAlt}
               levelOff={levelOff}
             />
@@ -1012,6 +1093,7 @@ export function GameApp() {
                   fox3Label={fox3Label}
                   issue={issue}
                   steerRel={steerRel}
+                  steerNotch={steerNotch}
                   stepAlt={stepAlt}
                   levelOff={levelOff}
                 />
@@ -1051,7 +1133,9 @@ export function GameApp() {
                   v={`${String(deg(p.hdg)).padStart(3, "0")}°`}
                   sub={
                     session.npc[p.id]?.line ??
-                    (p.steer.mode === "relative" ? p.steer.label : t("game.app.stats.headingDefault"))
+                    (p.steer.mode === "relative" || p.steer.mode === "notch"
+                      ? p.steer.label
+                      : t("game.app.stats.headingDefault"))
                   }
                 />
                 <OrdnanceStat jet={p} />
@@ -1491,6 +1575,7 @@ interface FlightControlsProps {
   fox3Label: string;
   issue: (make: (j: Jet) => Command | null) => void;
   steerRel: (offsetDeg: number, dir: 1 | -1, label: string, vsMissile?: boolean) => void;
+  steerNotch: (dir: 1 | -1, label: string) => void;
   stepAlt: (deltaFt: number) => void;
   levelOff: () => void;
 }
@@ -1531,6 +1616,7 @@ function FlightControls({
   fox3Label,
   issue,
   steerRel,
+  steerNotch,
   stepAlt,
   levelOff,
 }: FlightControlsProps) {
@@ -1661,7 +1747,7 @@ function FlightControls({
         </button>
         <button
           type="button"
-          onClick={() => steerRel(90, -1, "notch left", true)}
+          onClick={() => steerNotch(-1, "notch left")}
           title={`${t("game.app.notchL")} (A)`}
         >
           {t("game.app.notchL")}
@@ -1675,7 +1761,7 @@ function FlightControls({
         </button>
         <button
           type="button"
-          onClick={() => steerRel(90, 1, "notch right", true)}
+          onClick={() => steerNotch(1, "notch right")}
           title={`${t("game.app.notchR")} (D)`}
         >
           {t("game.app.notchR")}
@@ -1957,11 +2043,11 @@ function nearestRwrMissile(w: World, j: Jet): string | null {
   for (const c of rwrContacts(w, j)) {
     if (c.kind !== "missile") continue;
     const m = w.missiles.find((x) => x.id === c.sourceId);
-    if (!m) continue;
-    const d = Math.hypot(m.pos.x - j.pos.x, m.pos.y - j.pos.y) - (c.lock ? 1e7 : 0);
-    if (d < bestScore) {
-      bestScore = d;
-      best = m.id;
+    const dist = m ? Math.hypot(m.pos.x - j.pos.x, m.pos.y - j.pos.y) : 1e6;
+    const score = dist - (c.lock ? 1e7 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = c.sourceId;
     }
   }
   return best;
@@ -2029,7 +2115,9 @@ function RwrLine({ world, jet }: { world: World; jet: Jet }) {
   }
   const rel = (b: number) => {
     const d = Math.round(((((b - jet.hdg) * 180) / Math.PI + 540) % 360) - 180);
-    return d === 0 ? t("game.app.rwrNose") : `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
+    if (d === 0) return t("game.app.rwrNose");
+    if (Math.abs(d) === 180) return "180°";
+    return `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
   };
   const priority = (c: (typeof contacts)[number]) => (c.kind === "missile" ? (c.lock ? 0 : 1) : 2);
   const distSq = (c: (typeof contacts)[number]) => {

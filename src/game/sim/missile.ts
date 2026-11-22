@@ -17,6 +17,7 @@
 
 import type { Side } from "./aircraft.ts";
 import { airDensity, DEG, FT, G, interp, KT, NM, speedOfSoundMs } from "./atmosphere.ts";
+import { chanceInStep, notchEffect } from "./countermeasures.ts";
 import type { CountermeasureParams, MissileParams } from "./params.ts";
 import type { Rng } from "./rng.ts";
 import { add, angleBetween, dot, len, norm, perp, scale, segmentClosest, sub, type V3, v3 } from "./vec.ts";
@@ -48,7 +49,7 @@ export interface Missile {
   latAccel: number;
   /** Flight time at which the seeker gave up or the missile overshot (it then flies on unguided). */
   lostAt: number | null;
-  /** Flight time before which the seeker cannot lock (just after a chaff break). */
+  /** Flight time before which the seeker cannot lock (just after a notch or chaff break). */
   blindUntil: number;
   /** Callsign cached on launch so in-flight events keep it if the shooter is removed in infinite mode. */
   shooterCallsign?: string;
@@ -71,6 +72,7 @@ export type MissileEvent =
   | "miss"
   | "spent"
   | "ground"
+  | "seeker-notched"
   | "seeker-chaffed";
 
 export function loftGainM(p: MissileParams, rangeM: number): number {
@@ -128,13 +130,18 @@ export function motorAccel(p: MissileParams, tof: number): number {
   return 0;
 }
 
-/** Chaff inputs for one missile step (see CountermeasureParams). */
+/** Notch and chaff inputs for one missile step (see CountermeasureParams). */
 export interface SeekerEcm {
   rng: Rng;
   cm: CountermeasureParams;
   /** A chaff bundle the target released this step, if any. */
   chaff: { pos: V3; vel: V3 } | null;
 }
+
+/** Base seeker acquisition rate (1/s) during partial notch (scales with 1 - notchEff). */
+const PARTIAL_NOTCH_ACQ_BASE_PER_S = 1.5;
+/** Brief coast floor (s) after a 100% notch break to prevent boundary thrashing. */
+const FULL_NOTCH_COAST_FLOOR_S = 0.4;
 
 /** Steering gain for pursuit-type guidance: lateral accel = gain · v · angle error (1/s). */
 const PURSUIT_GAIN = 2.5;
@@ -220,7 +227,7 @@ function interceptPoint(pos: V3, speed: number, tp: V3, tv: V3): V3 {
 /**
  * Advances a missile by dt. `datalink` says whether the shooter's radar is tracking the target this
  * step. `fuzeRadiusM` can be overridden (the launch-zone calculator uses coarse steps). `ecm`
- * turns on chaff (the real fight; predictions leave it out). Returns the events of this step.
+ * turns on notch and chaff (the real fight; predictions leave it out). Returns the events of this step.
  */
 export function stepMissile(
   p: MissileParams,
@@ -270,13 +277,20 @@ export function stepMissile(
     ev.push("pitbull");
   }
   const toTrue = sub(target.pos, m.pos);
+  const notchEff = ecm ? notchEffect(m.pos, target, ecm.cm) : 0;
   if (m.phase === "search") {
-    const seen =
+    const inCone =
       target.alive &&
       m.tof >= m.blindUntil &&
       len(toTrue) <= p.seekerRangeNm * NM &&
       angleBetween(toTrue, toEst) <= p.seekerSearchDeg * DEG &&
       angleBetween(toTrue, m.vel) <= p.seekerGimbalDeg * DEG;
+    const seen =
+      inCone &&
+      (notchEff <= 0 ||
+        (notchEff < 1 &&
+          !!ecm &&
+          ecm.rng() < chanceInStep(PARTIAL_NOTCH_ACQ_BASE_PER_S * (1 - notchEff), dt)));
     if (seen) {
       m.phase = "tracking";
       ev.push("acquired");
@@ -300,6 +314,16 @@ export function stepMissile(
         m.estVel = { ...ecm.chaff.vel };
         m.blindUntil = m.tof + cm.chaffPullS;
         ev.push("seeker-chaffed");
+      } else if (notchEff >= 1) {
+        // 100% notched: drop into inertial coast and require re-acquisition after a brief floor.
+        m.phase = "search";
+        m.blindUntil = m.tof + Math.min(FULL_NOTCH_COAST_FLOOR_S, cm.notchReacquireS);
+        ev.push("seeker-notched");
+      } else if (notchEff > 0 && ecm.rng() < chanceInStep(cm.seekerNotchPerS * notchEff, dt)) {
+        // Partial notch break: keep flying toward extrapolated track and search again after blindUntil.
+        m.phase = "search";
+        m.blindUntil = m.tof + cm.notchReacquireS;
+        ev.push("seeker-notched");
       }
     }
   }

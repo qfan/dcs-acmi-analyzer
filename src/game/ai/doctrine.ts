@@ -42,6 +42,8 @@ export interface AiSkill {
   pumpS: number;
   /** Keeps defending this long (s) after the missile leaves the RWR. */
   defendHoldS: number;
+  /** Probability [0, 1] of defending an active missile with a notch instead of turning cold. */
+  notchChance: number;
   /** Fires a posture shot near head-on Rmax when carrying plenty of missiles (even if the enemy cranks). */
   postureShot: boolean;
   /** Takes high-Pk opportunity shots at other TWS-tracked enemies in lethal range. */
@@ -70,6 +72,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: false,
     pumpS: 0,
     defendHoldS: 3,
+    notchChance: 0.05,
     postureShot: false,
     opportunityShot: false,
     commitAltFt: null,
@@ -83,6 +86,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 15,
     defendHoldS: 6,
+    notchChance: 0.05,
     postureShot: false,
     opportunityShot: true,
     commitAltFt: null,
@@ -96,6 +100,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 20,
     defendHoldS: 8,
+    notchChance: 0.05,
     postureShot: true,
     opportunityShot: true,
     commitAltFt: null,
@@ -151,7 +156,8 @@ const STEER_EPS = 2 * DEG;
 const OFFSET_DECISION_RAD = 12 * DEG;
 /** Intermediate cold-turn offset (< 180°) while rotating past beam so head-on breaks actually go left or right. */
 const COLD_COMMIT_OFFSET_DEG = 160;
-const COLD_PAST_BEAM_RAD = 120 * DEG;
+/** Sits between the 110° and 120° RWR bins so float rounding at 120° cannot toggle cold offsetDeg. */
+const COLD_PAST_BEAM_RAD = 115 * DEG;
 /** Brief hold (s) after leaving an unlocked missile's illumination cone (e.g. a missile chasing another jet). */
 const UNLOCKED_ILLUM_HOLD_S = 0.5;
 /** Altitude orders closer than this (m) to the current one are not re-issued. */
@@ -204,6 +210,8 @@ export class DoctrineBot implements Controller {
   private defendDir: 1 | -1 | null = null;
   private defendHoldS = 0;
   private defendLocked = false;
+  private defendTactic: "cold" | "notch" = "cold";
+  private defendLastBearing: number | null = null;
   private pumpDir: 1 | -1 | null = null;
   private egressDir: 1 | -1 | null = null;
   private lastT: number | null = null;
@@ -332,10 +340,12 @@ export class DoctrineBot implements Controller {
         this.defendDir = this.chooseSide(w, me, threat.bearing);
         this.defendHoldS = s.defendHoldS * clamp(sampleScale(w.rng, 0.1), 0.8, 1.2);
         this.defendLocked = threat.lock;
+        this.defendTactic = w.rng() < s.notchChance ? "notch" : "cold";
       } else if (threat.lock) {
         this.defendLocked = true;
       }
       this.defendFrom = threat.sourceId;
+      this.defendLastBearing = threat.bearing;
       const holdS = this.defendLocked ? this.defendHoldS : Math.min(this.defendHoldS, UNLOCKED_ILLUM_HOLD_S);
       this.defendUntil = t + holdS;
     }
@@ -347,22 +357,48 @@ export class DoctrineBot implements Controller {
       this.state = "defend";
       out.push(...this.fly(me, "ab", "max"));
       const rwrThreat = missiles.find((c) => c.sourceId === this.defendFrom);
-      if (rwrThreat) {
+      const dir = this.defendDir ?? 1;
+      if (this.defendTactic === "notch") {
+        if (rwrThreat) {
+          this.actionDetail = `Notching active missile (${rwrThreat.lock ? "locked" : "searching"})`;
+          if (me.steer.mode !== "notch" || me.steer.threatId !== this.defendFrom || me.steer.dir !== dir) {
+            out.push({
+              type: "steer",
+              jetId: me.id,
+              steer: {
+                mode: "notch",
+                threatId: this.defendFrom,
+                dir,
+                label: "notching",
+                hdg: wrap2Pi(rwrThreat.bearing + dir * 90 * DEG),
+                nextAlignAt: 0,
+              },
+            });
+          }
+        } else {
+          this.actionDetail = `Holding notch evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
+          if (me.steer.mode !== "notch" && this.defendLastBearing !== null) {
+            out.push(...this.setHeading(me, wrap2Pi(this.defendLastBearing + dir * 90 * DEG)));
+          }
+        }
+      } else if (rwrThreat) {
         const offsetDeg = this.coldOffsetDeg(me, rwrThreat.bearing);
         this.actionDetail = `Turning cold from active missile (${rwrThreat.lock ? "locked" : "searching"})`;
         // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
-        out.push(
-          ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
-        );
+        out.push(...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, dir, "defending"));
       } else {
         this.actionDetail = `Holding cold evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
-        out.push(...this.setHeading(me, me.hdg));
+        const brg = this.defendLastBearing;
+        const holdHdg = brg !== null ? wrap2Pi(brg + dir * this.coldOffsetDeg(me, brg) * DEG) : me.hdg;
+        out.push(...this.setHeading(me, holdHdg));
       }
       return out;
     }
     this.defendFrom = null;
     this.defendDir = null;
     this.defendLocked = false;
+    this.defendTactic = "cold";
+    this.defendLastBearing = null;
 
     // Pump once per supported missile after it went active (posture shots are fire-and-forget).
     if (s.pumpAfterPitbull)

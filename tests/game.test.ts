@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
 import {
+  applySnapshot,
+  buildSnapshot,
+  makeMirror,
+  SnapshotCursor,
+  snapshotFromNet,
+  snapshotToJson,
+  worldShape,
+} from "../src/game/engine/snapshot.ts";
+import {
   mach,
   makeJet,
   minSpeedMs,
@@ -12,12 +21,15 @@ import { DEG, FT, G, KT, NM } from "../src/game/sim/atmosphere.ts";
 import { launchMissile, missileMach, stepMissile } from "../src/game/sim/missile.ts";
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
-import { add, scale } from "../src/game/sim/vec.ts";
+import { add, scale, wrap2Pi, wrapPi } from "../src/game/sim/vec.ts";
 import { launchZone } from "../src/game/sim/wez.ts";
 import {
   command,
+  desiredSteerHeading,
   jetById,
+  quantizeRwrBearing,
   rwrContacts,
+  rwrInElevation,
   steerThreatPos,
   step,
   type World,
@@ -700,5 +712,284 @@ describe("game: review fixes", () => {
     expect(w.events.some((e) => e.type === "kill" && e.targetId === "B1" && e.text.includes("500 nm"))).toBe(
       true,
     );
+  });
+});
+
+describe("game: RWR elevation cone, signal hold, 10-deg binning, and periodic auto-notch", () => {
+  it("enforces 3D vertical RWR limits across bank angles and asymmetric up/down limits", () => {
+    const p = P();
+    const j = jetAt(p, 25000, 0.9, "blue", 0, 0);
+    const east = { x: 10 * NM, y: 0, z: j.pos.z };
+    const west = { x: -10 * NM, y: 0, z: j.pos.z };
+    const north = { x: 0, y: 10 * NM, z: j.pos.z };
+
+    // Wings level: co-altitude emitters are at 0 deg elevation (inside +-45).
+    expect(rwrInElevation(j, east, 45, 45)).toBe(true);
+    expect(rwrInElevation(j, west, 45, 45)).toBe(true);
+
+    // Steep right bank (60 deg): east lies +60 deg above wing plane, west lies -60 deg below -> masked.
+    j.bank = 60 * DEG;
+    expect(rwrInElevation(j, east, 45, 45)).toBe(false);
+    expect(rwrInElevation(j, west, 45, 45)).toBe(false);
+    // Ahead on nose stays inside vertical limits regardless of bank.
+    expect(rwrInElevation(j, north, 45, 45)).toBe(true);
+
+    // Asymmetric limits (up 20, down 60) on wings-level jet.
+    j.bank = 0;
+    const high = { x: 0, y: 10 * NM, z: j.pos.z + 10 * NM * Math.tan(30 * DEG) };
+    const low50 = { x: 0, y: 10 * NM, z: j.pos.z - 10 * NM * Math.tan(50 * DEG) };
+    const low70 = { x: 0, y: 10 * NM, z: j.pos.z - 10 * NM * Math.tan(70 * DEG) };
+    expect(rwrInElevation(j, high, 20, 60)).toBe(false);
+    expect(rwrInElevation(j, low50, 20, 60)).toBe(true);
+    expect(rwrInElevation(j, low70, 20, 60)).toBe(false);
+  });
+
+  it("quantizes live RWR bearings into rwrBinDeg bins relative to nose and supports 0 = exact", () => {
+    const p = P();
+    const w = scenarioById("duel").build(p, 25000, 1);
+    w.controllers.clear();
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    const trueBrgDeg = 23;
+    r1.pos = {
+      x: Math.sin(trueBrgDeg * DEG) * 20 * NM,
+      y: Math.cos(trueBrgDeg * DEG) * 20 * NM,
+      z: b1.pos.z,
+    };
+    r1.hdg = (trueBrgDeg + 180) * DEG; // radar pointed right at B1
+
+    // B1 heading 5 deg -> relative bearing is 18 deg -> snaps to 20 deg rel -> 25 deg compass.
+    b1.hdg = 5 * DEG;
+    b1.steer = { mode: "heading", hdg: 5 * DEG };
+    const cBinned = must(rwrContacts(w, b1).find((c) => c.sourceId === "R1"));
+    expect(cBinned.bearing / DEG).toBeCloseTo(25, 4);
+
+    // rwrBinDeg = 0 returns exact bearing.
+    w.params.radar.rwrBinDeg = 0;
+    const cExact = must(rwrContacts(w, b1).find((c) => c.sourceId === "R1"));
+    expect(cExact.bearing / DEG).toBeCloseTo(trueBrgDeg, 4);
+  });
+
+  it("holds lost RWR contacts with frozen bearing for rwrHoldS (3 s), then drops them", () => {
+    const p = P();
+    const w = scenarioById("duel").build(p, 25000, 1);
+    w.controllers.clear();
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos = { x: 0, y: 30 * NM, z: b1.pos.z };
+    step(w);
+    const initial = must(rwrContacts(w, b1).find((c) => c.sourceId === "R1"));
+    expect(initial.held).toBe(false);
+    const frozenBearing = initial.bearing;
+
+    // R1 turns away and stops scanning B1 (and flies north).
+    r1.hdg = 0;
+    r1.steer = { mode: "heading", hdg: 0 };
+    for (let i = 0; i < 100; i++) step(w); // +2.0 s (< 3 s hold)
+    const held = rwrContacts(w, b1).find((c) => c.sourceId === "R1");
+    expect(held).toBeDefined();
+    expect(held?.held).toBe(true);
+    expect(held?.bearing).toBeCloseTo(frozenBearing, 6);
+
+    for (let i = 0; i < 60; i++) step(w); // +1.2 s -> 3.2 s elapsed (> 3 s hold)
+    expect(rwrContacts(w, b1).find((c) => c.sourceId === "R1")).toBeUndefined();
+  });
+
+  it("periodic auto-notch updates every autoNotchAlignS (5 s), survives bank blind-out, and cleans up", () => {
+    const p = P();
+    p.radar.rwrBinDeg = 0;
+    const w = scenarioById("duel").build(p, 25000, 1);
+    w.controllers.clear();
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos = { x: 0, y: 30 * NM, z: b1.pos.z };
+
+    expect(
+      command(w, {
+        type: "steer",
+        jetId: "B1",
+        steer: { mode: "notch", threatId: "R1", dir: 1, label: "notch right", hdg: 0, nextAlignAt: 0 },
+      }),
+    ).toBeNull();
+    expect(b1.steer.mode).toBe("notch");
+    if (b1.steer.mode !== "notch") throw new Error("expected notch");
+    const firstHdg = b1.steer.hdg;
+    expect(firstHdg).toBeCloseTo(Math.PI / 2, 2);
+    expect(b1.steer.nextAlignAt).toBeCloseTo(5, 6);
+
+    // Move R1 east-northeast (~45 deg) so its true bearing changes, and step 4 s (< 5 s align interval).
+    for (let i = 0; i < 200; i++) {
+      r1.pos = { x: b1.pos.x + 20 * NM, y: b1.pos.y + 20 * NM, z: b1.pos.z };
+      r1.hdg = Math.atan2(b1.pos.x - r1.pos.x, b1.pos.y - r1.pos.y);
+      step(w);
+    }
+    expect(b1.steer.mode).toBe("notch");
+    if (b1.steer.mode === "notch") expect(b1.steer.hdg).toBeCloseTo(firstHdg, 6);
+
+    // Cross t = 5.0 s: auto-notch re-aligns to new bearing + 90 deg and schedules nextAlignAt at ~10 s.
+    for (let i = 0; i < 55; i++) {
+      r1.pos = { x: b1.pos.x + 20 * NM, y: b1.pos.y + 20 * NM, z: b1.pos.z };
+      r1.hdg = Math.atan2(b1.pos.x - r1.pos.x, b1.pos.y - r1.pos.y);
+      step(w);
+    }
+    expect(b1.steer.mode).toBe("notch");
+    if (b1.steer.mode === "notch") {
+      expect(b1.steer.hdg).toBeCloseTo(wrap2Pi(45 * DEG + 90 * DEG), 2);
+      expect(b1.steer.nextAlignAt).toBeGreaterThan(9.5);
+    }
+
+    // Threat jet dies -> notch immediately cleans up to heading mode on next step.
+    r1.alive = false;
+    step(w);
+    expect(b1.steer.mode).toBe("heading");
+
+    // Re-enter notch vs a live threat, then overwrite with heading/relative -> notch is cleared.
+    r1.alive = true;
+    r1.pos = { x: b1.pos.x, y: b1.pos.y + 30 * NM, z: b1.pos.z };
+    r1.hdg = Math.PI;
+    command(w, {
+      type: "steer",
+      jetId: "B1",
+      steer: { mode: "notch", threatId: "R1", dir: -1, label: "notch left", hdg: 0, nextAlignAt: 0 },
+    });
+    expect(b1.steer.mode).toBe("notch");
+    command(w, { type: "steer", jetId: "B1", steer: { mode: "heading", hdg: 0 } });
+    expect(b1.steer.mode).toBe("heading");
+
+    // Jet dies while in notch -> cleans up to heading on step.
+    command(w, {
+      type: "steer",
+      jetId: "B1",
+      steer: { mode: "notch", threatId: "R1", dir: 1, label: "notch right", hdg: 0, nextAlignAt: 0 },
+    });
+    expect(b1.steer.mode).toBe("notch");
+    b1.alive = false;
+    step(w);
+    expect(b1.steer.mode).toBe("heading");
+  });
+
+  it("keeps auto-notch alive across steep-bank RWR blind-out until wings level out", () => {
+    const p = P();
+    p.radar.rwrHoldS = 0.1;
+    p.countermeasures.autoNotchAlignS = 1;
+    const w = scenarioById("duel").build(p, 25000, 1);
+    w.controllers.clear();
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    // Launch a missile at B1 from due east while B1 is heading north, so turning left (dir = -1)
+    // commands heading 0 deg? Wait: beam left from east (90 deg) = 0 deg; beam right = 180 deg!
+    r1.pos = { x: 20 * NM, y: 0, z: b1.pos.z };
+    r1.hdg = 270 * DEG;
+    step(w);
+    expect(command(w, { type: "fire", jetId: "R1", targetId: "B1" })).toBeNull();
+    const m = must(w.missiles[0]);
+    m.phase = "tracking";
+    m.pitbull = true;
+    m.pos = { x: 5 * NM, y: 0, z: b1.pos.z };
+    m.vel = { x: -700, y: 0, z: 0 };
+    step(w);
+
+    b1.effort = "max";
+    b1.throttle = "ab";
+    command(w, {
+      type: "steer",
+      jetId: "B1",
+      steer: { mode: "notch", threatId: m.id, dir: 1, label: "notch right", hdg: 0, nextAlignAt: 0 },
+    });
+    expect(b1.steer.mode).toBe("notch");
+
+    // Step ~1.2 s so B1 reaches a steep > 45 deg bank turning toward 180 deg and move M1 away so
+    // it would drop after 0.1 s hold; while |bank| > 45 deg at t >= nextAlignAt, notch must NOT abort!
+    let sawSteepHold = false;
+    for (let i = 0; i < 65; i++) {
+      m.phase = "lost";
+      m.pos = { x: 100 * NM, y: 100 * NM, z: b1.pos.z };
+      step(w);
+      if (Math.abs(b1.bank) > 45 * DEG && w.t >= 1.05 && b1.steer.mode === "notch") sawSteepHold = true;
+    }
+    expect(sawSteepHold).toBe(true);
+
+    // Finish the turn until wings level back inside <= 45 deg: notch then cleans up to heading.
+    for (let i = 0; i < 1200 && b1.steer.mode === "notch"; i++) step(w);
+    expect(b1.steer.mode).toBe("heading");
+  });
+
+  it("round-trips held RWR contacts through snapshots and relay JSON packing", () => {
+    const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.world.controllers.clear();
+    const r1 = must(jetById(s.world, "R1"));
+    r1.pos = { x: 0, y: 30 * NM, z: r1.pos.z };
+    s.advance(0.02);
+    // Turn R1 away so B1's RWR contact becomes held.
+    r1.hdg = 0;
+    s.advance(0.5);
+
+    const cur = new SnapshotCursor();
+    const mirror = makeMirror(worldShape(s.world));
+    const json = snapshotToJson(buildSnapshot(s, ["blue", "red"], cur));
+    applySnapshot(mirror, snapshotFromNet(JSON.parse(json)));
+
+    const live = rwrContacts(s.world, must(jetById(s.world, "B1")));
+    const mirrored = rwrContacts(mirror, must(jetById(mirror, "B1")));
+    expect(live).toHaveLength(1);
+    expect(mirrored).toHaveLength(1);
+    expect(mirrored[0]).toMatchObject({
+      sourceId: live[0]?.sourceId,
+      kind: live[0]?.kind,
+      held: true,
+    });
+    expect(mirrored[0]?.bearing).toBeCloseTo(live[0]?.bearing ?? 0, 3);
+  });
+
+  it("applies Schmitt hysteresis on RWR bin borders and avoids chatter when fleeing cold", () => {
+    // Bin hysteresis around 20 deg and 30 deg bins (midpoint 25 deg, deadband 22.5..27.5 deg).
+    expect(quantizeRwrBearing(0, 27.4 * DEG, 10, 20 * DEG) / DEG).toBeCloseTo(20, 6);
+    expect(quantizeRwrBearing(0, 27.6 * DEG, 10, 20 * DEG) / DEG).toBeCloseTo(30, 6);
+    expect(quantizeRwrBearing(0, 23 * DEG, 10, 30 * DEG) / DEG).toBeCloseTo(30, 6);
+    expect(quantizeRwrBearing(0, 22.4 * DEG, 10, 30 * DEG) / DEG).toBeCloseTo(20, 6);
+
+    // Wraps seamlessly across +-180 deg.
+    expect(quantizeRwrBearing(0, 173 * DEG, 10, Math.PI) / DEG).toBeCloseTo(180, 6);
+    expect(quantizeRwrBearing(0, -173 * DEG, 10, Math.PI) / DEG).toBeCloseTo(180, 6);
+    expect(quantizeRwrBearing(0, 172 * DEG, 10, Math.PI) / DEG).toBeCloseTo(170, 6);
+
+    // Live flight: jet fleeing cold on a 175 deg bin border relative to an active missile.
+    const w = scenarioById("duel").build(P(), 25000, 1);
+    w.controllers.clear();
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos = { x: 0, y: 20 * NM, z: b1.pos.z };
+    expect(command(w, { type: "fire", jetId: "R1", targetId: "B1" })).toBeNull();
+    const m = must(w.missiles[0]);
+    b1.hdg = 5 * DEG;
+    b1.throttle = "ab";
+    m.phase = "tracking";
+    m.targetId = "B1";
+    m.pitbull = true;
+    m.pos = { x: b1.pos.x, y: b1.pos.y - 6 * NM, z: b1.pos.z };
+    m.vel = { x: 0, y: 800, z: 0 };
+    step(w);
+
+    command(w, {
+      type: "steer",
+      jetId: "B1",
+      steer: { mode: "relative", threatId: m.id, offsetDeg: 180, dir: 1, label: "cold" },
+    });
+    let prevCmd = desiredSteerHeading(w, b1);
+    let changes = 0;
+    for (let i = 0; i < 250; i++) {
+      m.phase = "tracking";
+      m.targetId = "B1";
+      m.tof = 5;
+      m.pos = { x: b1.pos.x, y: b1.pos.y - 6 * NM, z: b1.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+      const nextCmd = desiredSteerHeading(w, b1);
+      if (Math.abs(wrapPi(nextCmd - prevCmd)) > 1 * DEG) {
+        changes++;
+        prevCmd = nextCmd;
+      }
+    }
+    expect(changes).toBeLessThanOrEqual(2);
   });
 });

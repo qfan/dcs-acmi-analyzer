@@ -1,10 +1,10 @@
 /** Top-down canvas renderer for the game, in the style of the viewer's 2D map. */
 import i18n from "../../i18n/index.ts";
 import { niceStep, toScreen, type View } from "../../map/render.ts";
-import { desiredHeading, type Jet, mach, velocity, verticalSpeed } from "../sim/aircraft.ts";
+import { type Jet, mach, velocity, verticalSpeed } from "../sim/aircraft.ts";
 import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type Missile, missileMach } from "../sim/missile.ts";
-import { jetById, rwrContacts, steerThreatPos, type World } from "../sim/world.ts";
+import { desiredSteerHeading, jetById, rwrContacts, type World } from "../sim/world.ts";
 import type { SessionView } from "./view.ts";
 
 export const COLORS = {
@@ -445,7 +445,7 @@ export function drawScene(
   // Commanded heading of own jets: where they are turning to.
   for (const j of w.jets) {
     if (!j.alive || j.side !== s.side) continue;
-    const hdg = desiredHeading(j, steerThreatPos(w, j));
+    const hdg = desiredSteerHeading(w, j);
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     ctx.strokeStyle = "rgba(219,227,238,0.35)";
     ctx.setLineDash([3, 4]);
