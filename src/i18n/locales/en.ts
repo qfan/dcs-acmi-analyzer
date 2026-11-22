@@ -1331,6 +1331,7 @@ export const en = {
       flareBtn: "Flare ({{count}})",
       flareTitle: "Delete (visual only for now)",
       fox3Btn: "FOX 3{{target}}",
+      missilesLeft: "Missiles: {{n}}",
       missilesTitle: "Missiles",
       truthHiddenNote: "Truth (hidden with fog of war on):",
       fogMissilesNote: "Hostile missiles show only on your RWR once active.",

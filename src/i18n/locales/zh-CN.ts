@@ -1299,6 +1299,7 @@ export const zhCN = {
       flareBtn: "热诱弹 ({{count}})",
       flareTitle: "Delete（目前仅作视觉显示）",
       fox3Btn: "FOX 3{{target}}",
+      missilesLeft: "剩余导弹：{{n}}",
       missilesTitle: "导弹状态",
       truthHiddenNote: "真实态势（开启战争迷雾后隐藏）：",
       fogMissilesNote: "敌方导弹仅在主动开机后显示于您的 RWR。",

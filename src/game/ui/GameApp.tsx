@@ -366,7 +366,9 @@ export function GameApp() {
         const j = jetById(session.world, id);
         if (!j?.alive) continue;
         const c = make(j);
-        if (c) send({ t: "cmd", cmd: c });
+        if (!c) continue;
+        send({ t: "cmd", cmd: c });
+        session.markCommanded(id, performance.now());
       }
     },
     [session, send],
@@ -1232,6 +1234,7 @@ export function GameApp() {
                 <Stat
                   k={t("game.app.stats.heading")}
                   v={`${String(deg(p.hdg)).padStart(3, "0")}°`}
+                  flashSubFor={npcControlled ? undefined : p.id}
                   sub={
                     session.npc[p.id]?.line ??
                     (p.steer.mode === "relative" || p.steer.mode === "notch"
@@ -1626,6 +1629,64 @@ function ControlsDockSelect({
   );
 }
 
+type Maneuver = "crankL" | "hot" | "crankR" | "notchL" | "cold" | "notchR";
+
+/** The continuous maneuver the jet is flying. A plain heading order (or a lapsed maneuver) is none. */
+function activeManeuver(j: Jet): Maneuver | null {
+  const s = j.steer;
+  if (s.mode === "notch") return s.dir < 0 ? "notchL" : "notchR";
+  if (s.mode !== "relative") return null;
+  if (s.offsetDeg === 0) return "hot";
+  if (s.offsetDeg === 180) return "cold";
+  if (s.offsetDeg === CRANK_DEG) return s.dir < 0 ? "crankL" : "crankR";
+  return null;
+}
+
+/** Yellow overlay for a release button: plays when the count drops. Key it by jet so a switch resets it. */
+function ReleaseFlash({ count }: { count: number }) {
+  const prevRef = useRef(count);
+  const [flash, setFlash] = useState(0);
+
+  useEffect(() => {
+    if (count < prevRef.current) setFlash((n) => n + 1);
+    prevRef.current = count;
+  }, [count]);
+
+  if (flash === 0) return null;
+  return <span key={flash} className="g-release-flash" aria-hidden="true" />;
+}
+
+/** Launch button with the jet's remaining missiles; flashes yellow when one leaves the rail. */
+function FireButton({
+  jet,
+  target,
+  foxLocked,
+  label,
+  onFire,
+}: {
+  jet: Jet;
+  target: Jet | undefined;
+  foxLocked: boolean;
+  label: string;
+  onFire: () => void;
+}) {
+  const { t } = useTranslation();
+  const left = t("game.app.missilesLeft", { n: jet.missiles });
+  return (
+    <button
+      type="button"
+      className="g-fire"
+      disabled={!target?.alive || jet.missiles <= 0 || foxLocked}
+      onClick={onFire}
+      title={`${label} (F) · ${left}`}
+    >
+      <ReleaseFlash key={jet.id} count={jet.missiles} />
+      <span className="g-fire-label">{label}</span>
+      <span className="g-fire-count">{left}</span>
+    </button>
+  );
+}
+
 function FlightControls({
   jet,
   world,
@@ -1640,6 +1701,8 @@ function FlightControls({
 }: FlightControlsProps) {
   const { t } = useTranslation();
   const limits = altLimitsM(world.params.aircraft);
+  const maneuver = activeManeuver(jet);
+  const maneuverCls = (m: Maneuver) => (maneuver === m ? "on" : undefined);
   return (
     <div className="g-ctl-body">
       <div className="g-ctl-sliders">
@@ -1748,16 +1811,23 @@ function FlightControls({
       <div className="g-maneuvers">
         <button
           type="button"
+          className={maneuverCls("crankL")}
           onClick={() => steerRel(CRANK_DEG, -1, "crank left")}
           title={`${t("game.app.crankL")} (Q)`}
         >
           {t("game.app.crankL")}
         </button>
-        <button type="button" onClick={() => steerRel(0, 1, "hot")} title={`${t("game.app.hot")} (H)`}>
+        <button
+          type="button"
+          className={maneuverCls("hot")}
+          onClick={() => steerRel(0, 1, "hot")}
+          title={`${t("game.app.hot")} (H)`}
+        >
           {t("game.app.hot")}
         </button>
         <button
           type="button"
+          className={maneuverCls("crankR")}
           onClick={() => steerRel(CRANK_DEG, 1, "crank right")}
           title={`${t("game.app.crankR")} (E)`}
         >
@@ -1765,6 +1835,7 @@ function FlightControls({
         </button>
         <button
           type="button"
+          className={maneuverCls("notchL")}
           onClick={() => steerNotch(-1, "notch left")}
           title={`${t("game.app.notchL")} (A)`}
         >
@@ -1772,6 +1843,7 @@ function FlightControls({
         </button>
         <button
           type="button"
+          className={maneuverCls("cold")}
           onClick={() => steerRel(180, 1, "cold", true)}
           title={`${t("game.app.cold")} (C)`}
         >
@@ -1779,6 +1851,7 @@ function FlightControls({
         </button>
         <button
           type="button"
+          className={maneuverCls("notchR")}
           onClick={() => steerNotch(1, "notch right")}
           title={`${t("game.app.notchR")} (D)`}
         >
@@ -1786,29 +1859,31 @@ function FlightControls({
         </button>
         <button
           type="button"
+          className="g-release"
           onClick={() => issue((j) => ({ type: "chaff", jetId: j.id }))}
           title={`${t("game.app.chaffBtn", { count: jet.chaff })} — ${t("game.app.chaffTitle")}`}
         >
-          {t("game.app.chaffBtn", { count: jet.chaff })}
+          <ReleaseFlash key={jet.id} count={jet.chaff} />
+          <span className="g-release-text">{t("game.app.chaffBtn", { count: jet.chaff })}</span>
         </button>
         <span />
         <button
           type="button"
+          className="g-release"
           onClick={() => issue((j) => ({ type: "flare", jetId: j.id }))}
           title={`${t("game.app.flareBtn", { count: jet.flares })} — ${t("game.app.flareTitle")}`}
         >
-          {t("game.app.flareBtn", { count: jet.flares })}
+          <ReleaseFlash key={jet.id} count={jet.flares} />
+          <span className="g-release-text">{t("game.app.flareBtn", { count: jet.flares })}</span>
         </button>
       </div>
-      <button
-        type="button"
-        className="g-fire"
-        disabled={!target?.alive || jet.missiles <= 0 || foxLocked}
-        onClick={() => issue((j) => ({ type: "fire", jetId: j.id }))}
-        title={`${fox3Label} (F)`}
-      >
-        {fox3Label}
-      </button>
+      <FireButton
+        jet={jet}
+        target={target}
+        foxLocked={foxLocked}
+        label={fox3Label}
+        onFire={() => issue((j) => ({ type: "fire", jetId: j.id }))}
+      />
     </div>
   );
 }
@@ -1949,7 +2024,17 @@ function MapControlsOverlay({
   );
 }
 
-function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
+/** `flashSubFor`: the jet whose sub line should flash when it changes; omit for values that drift constantly. */
+function Stat({ k, v, sub, flashSubFor }: { k: string; v: string; sub?: string; flashSubFor?: string }) {
+  const prevRef = useRef({ flashSubFor, sub });
+  const [subFlash, setSubFlash] = useState(0);
+
+  useEffect(() => {
+    const prev = prevRef.current;
+    if (flashSubFor && prev.flashSubFor === flashSubFor && prev.sub !== sub) setSubFlash((n) => n + 1);
+    prevRef.current = { flashSubFor, sub };
+  }, [flashSubFor, sub]);
+
   return (
     <div className="g-stat">
       <span className="g-muted" title={k}>
@@ -1957,7 +2042,7 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
       </span>
       <b title={v}>{v}</b>
       {sub && (
-        <span className="g-muted" title={sub}>
+        <span key={subFlash} className={subFlash > 0 ? "g-muted g-stat-flash" : "g-muted"} title={sub}>
           {sub}
         </span>
       )}

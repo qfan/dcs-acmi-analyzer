@@ -1335,6 +1335,7 @@ export const fr = {
       flareBtn: "Leurres ({{count}})",
       flareTitle: "Suppr (visuel uniquement pour l'instant)",
       fox3Btn: "FOX 3{{target}}",
+      missilesLeft: "Missiles : {{n}}",
       missilesTitle: "Missiles",
       truthHiddenNote: "Vérité terrain (masquée si brouillard activé) :",
       fogMissilesNote: "Les missiles ennemis n'apparaissent que sur votre RWR une fois actifs.",

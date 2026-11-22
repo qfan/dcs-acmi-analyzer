@@ -330,6 +330,11 @@ input[type="text"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.g-maneuvers button.on {
+  background: var(--g-accent);
+  border-color: var(--g-accent);
+  color: var(--g-accent-text);
+}
 /* Flight-control rows: label on the left, controls pinned right so they never move. */
 .g-row.g-ctl {
   justify-content: space-between;
@@ -376,6 +381,41 @@ input[type="text"] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  position: relative;
+}
+.g-fire-label,
+.g-fire-count {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.g-maneuvers button.g-release {
+  position: relative;
+}
+.g-release-text {
+  position: relative;
+}
+.g-fire-count {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+.g-release-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: g-release-flash 0.75s ease-out;
+}
+@keyframes g-release-flash {
+  0% {
+    background: rgba(251, 191, 36, 0.85);
+  }
+  100% {
+    background: transparent;
+  }
 }
 .g-table {
   width: 100%;

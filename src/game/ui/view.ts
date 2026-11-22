@@ -15,6 +15,7 @@ import { type GameEvent, jetById, type World } from "../sim/world.ts";
 const TRAIL_EVERY_S = 1;
 const JET_TRAIL_S = 120;
 const ZONE_EVERY_MS = 700;
+const COMMAND_FLASH_MS = 900;
 
 export interface TrailPoint {
   x: number;
@@ -43,6 +44,8 @@ export class SessionView {
   zone: { jetId: string; targetId: string; zone: LaunchZone; at: number; simT: number } | null = null;
   readonly recorder: AcmiRecorder | null;
   private nextTrailAt = 0;
+  /** Wall-clock time of each jet's latest player order, so the map flash also runs while paused. */
+  private commandedAt = new Map<string, number>();
 
   constructor(meta: MatchMeta, first: Snapshot, fog: boolean) {
     this.meta = meta;
@@ -107,6 +110,23 @@ export class SessionView {
 
   ownsJet(id: string): boolean {
     return this.owned.has(id);
+  }
+
+  /** Records that the player just gave this jet an order. */
+  markCommanded(id: string, nowMs: number): void {
+    this.commandedAt.set(id, nowMs);
+  }
+
+  /** Strength of the jet's order flash: 1 when just ordered, fading to 0. */
+  commandFlash(id: string, nowMs: number): number {
+    const at = this.commandedAt.get(id);
+    if (at === undefined) return 0;
+    const p = (nowMs - at) / COMMAND_FLASH_MS;
+    if (p >= 1) {
+      this.commandedAt.delete(id);
+      return 0;
+    }
+    return 1 - Math.max(0, p) ** 2;
   }
 
   private recordTrails(): void {

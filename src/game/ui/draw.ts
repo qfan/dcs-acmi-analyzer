@@ -39,6 +39,7 @@ function label(
   y: number,
   color: string,
   align: CanvasTextAlign = "left",
+  commandFlash = 0,
 ) {
   ctx.textAlign = align;
   ctx.lineWidth = 3;
@@ -46,7 +47,13 @@ function label(
   ctx.strokeText(text, x, y);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
+  if (commandFlash > 0) {
+    ctx.fillStyle = commandFlashColor(commandFlash);
+    ctx.fillText(text, x, y);
+  }
 }
+
+const commandFlashColor = (strength: number) => `rgba(251,191,36,${strength})`;
 
 function drawGrid(ctx: CanvasRenderingContext2D, v: GameView) {
   if (v.w <= 0 || v.h <= 0 || !(v.scale > 0)) return;
@@ -174,7 +181,14 @@ function drawTrail(
   ctx.stroke();
 }
 
-function drawJet(ctx: CanvasRenderingContext2D, v: GameView, j: Jet, selected: boolean, targeted: boolean) {
+function drawJet(
+  ctx: CanvasRenderingContext2D,
+  v: GameView,
+  j: Jet,
+  selected: boolean,
+  targeted: boolean,
+  commandFlash: number,
+) {
   const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
   const col = j.alive ? sideCol(j.side) : COLORS.dead;
   if (!j.alive) {
@@ -199,6 +213,10 @@ function drawJet(ctx: CanvasRenderingContext2D, v: GameView, j: Jet, selected: b
   ctx.closePath();
   ctx.fillStyle = col;
   ctx.fill();
+  if (commandFlash > 0) {
+    ctx.fillStyle = commandFlashColor(commandFlash);
+    ctx.fill();
+  }
   ctx.strokeStyle = COLORS.halo;
   ctx.lineWidth = 1;
   ctx.stroke();
@@ -498,6 +516,7 @@ export function drawScene(
 
   for (const j of w.jets) if (j.alive && j.side === s.side) drawRwr(ctx, v, s, j);
 
+  const now = performance.now();
   const targets = new Set<string>();
   for (const id of s.selected) {
     const t = jetById(w, id)?.targetId;
@@ -509,13 +528,14 @@ export function drawScene(
       if (g) hits.push(g);
       continue;
     }
-    drawJet(ctx, v, j, s.selected.has(j.id), targets.has(j.id));
+    const commandFlash = j.alive ? s.commandFlash(j.id, now) : 0;
+    drawJet(ctx, v, j, s.selected.has(j.id), targets.has(j.id), commandFlash);
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     hits.push({ id: j.id, sx, sy });
     if (labels) {
       ctx.font = "11px system-ui, sans-serif";
       const col = j.alive ? sideCol(j.side) : COLORS.dead;
-      label(ctx, j.callsign, sx + 14, sy - 4, col);
+      label(ctx, j.callsign, sx + 14, sy - 4, col, "left", commandFlash);
       if (j.alive)
         label(
           ctx,
@@ -523,6 +543,8 @@ export function drawScene(
           sx + 14,
           sy + 9,
           `${col}cc`,
+          "left",
+          commandFlash,
         );
     }
   }
