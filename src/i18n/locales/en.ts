@@ -1281,6 +1281,14 @@ export const en = {
       labels: "Labels",
       radarSectors: "Radar sectors",
       sideView: "Side view",
+      compass: {
+        aria: "Map compass, {{deg}}° up",
+        dialTitle:
+          "Map orientation: {{deg}}° up. Drag to rotate, scroll to step, click to flip North/South up.",
+        rotateCcwTitle: "Rotate map counter-clockwise 45° (Shift 15° · [ key)",
+        rotateCwTitle: "Rotate map clockwise 45° (Shift 15° · ] key)",
+        resetTitle: "Click to flip between North-up (000°) and South-up (180°), or press N / Shift+N",
+      },
       inspectAiAria: "Inspect AI jet",
       inspectAi: "Inspect AI",
       noPlayerControl: "No player control",
@@ -1339,12 +1347,13 @@ export const en = {
         float: "Floating",
       },
       watchControlsP1:
-        "<0>Click</0> any visible jet to inspect its AI · <1>drag</1> to pan · <2>wheel</2> to zoom",
-      watchControlsP2: "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> follow",
+        "<0>Click</0> any visible jet to inspect its AI · <1>drag</1> to pan · <2>Alt+drag</2> / <3>middle-drag</3> to rotate · <4>wheel</4> to zoom",
+      watchControlsP2:
+        "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> follow · <4>[</4>/<5>]</5> rotate · <6>N</6> north",
       playerControlsP1:
-        "<0>Click</0> your jet to select (Shift adds) · <1>click</1> a bandit to target it · <2>right-click</2> map to set heading · <3>drag</3> to pan · <4>wheel</4> to zoom",
+        "<0>Click</0> your jet to select (Shift adds) · <1>click</1> a bandit to target it · <2>right-click</2> map to set heading · <3>drag</3> to pan · <4>Alt+drag</4> / <5>middle-drag</5> to rotate · <6>wheel</6> to zoom",
       playerControlsP2:
-        "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> fire · <4>H</4> hot · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> cold · <10>←</10>/<11>→</11> heading ±10° · <12>↑</12>/<13>↓</13> altitude ±1,000 ft (<14>Shift</14> or <15>PgUp</15>/<16>PgDn</16> ±5,000) · <17>L</17> level off · <18>T</18> throttle · <19>G</19> turn mode · <20>Insert</2> chaff · <21>Delete</2> flare · <22>V</2> follow",
+        "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> fire · <4>H</4> hot · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> cold · <10>←</10>/<11>→</11> heading ±10° · <12>↑</12>/<13>↓</13> altitude ±1,000 ft (<14>Shift</14> or <15>PgUp</15>/<16>PgDn</16> ±5,000) · <17>L</17> level off · <18>T</18> throttle · <19>G</19> turn mode · <20>Insert</2> chaff · <21>Delete</2> flare · <22>V</2> follow · <23>[</23>/<24>]</24> rotate · <25>N</25> north",
       helpEnergy:
         "Energy: a climb trades speed for height and a dive buys it back (Energy shows height plus speed as feet; Ps is how fast it grows). The turn mode also sets how steeply you climb: Hold Spd holds Mach and climbs only as fast as thrust allows, Normal up to {{normalDeg}}°, Max up to {{maxDeg}}°. Missiles fly much further from high and fast, and die quickly chasing you down into thick air. Hard deck {{minAlt}} ft.",
       helpMap:

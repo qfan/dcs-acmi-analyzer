@@ -1285,6 +1285,14 @@ export const fr = {
       labels: "Étiquettes",
       radarSectors: "Secteurs radar",
       sideView: "Vue latérale",
+      compass: {
+        aria: "Boussole de carte, {{deg}}° en haut",
+        dialTitle:
+          "Orientation de la carte : {{deg}}° en haut. Glisser pour pivoter, molette par pas, cliquer pour inverser Nord/Sud.",
+        rotateCcwTitle: "Pivoter la carte de 45° sens antihoraire (Maj 15° · touche [)",
+        rotateCwTitle: "Pivoter la carte de 45° sens horaire (Maj 15° · touche ])",
+        resetTitle: "Cliquer pour basculer Nord en haut (000°) / Sud en haut (180°), ou N / Maj+N",
+      },
       inspectAiAria: "Inspecter un avion IA",
       inspectAi: "Inspecter IA",
       noPlayerControl: "Aucun contrôle joueur",
@@ -1343,12 +1351,13 @@ export const fr = {
         float: "Flottant",
       },
       watchControlsP1:
-        "<0>Clic</0> sur un avion pour inspecter son IA · <1>glisser</1> pour déplacer · <2>molette</2> pour zoomer",
-      watchControlsP2: "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> suivre",
+        "<0>Clic</0> sur un avion pour inspecter son IA · <1>glisser</1> pour déplacer · <2>Alt+glisser</2> / <3>clic milieu</3> pour pivoter · <4>molette</4> pour zoomer",
+      watchControlsP2:
+        "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> suivre · <4>[</4>/<5>]</5> pivoter · <6>N</6> nord",
       playerControlsP1:
-        "<0>Clic</0> sur votre avion (Maj ajoute) · <1>clic</1> sur un ennemi pour le cibler · <2>clic droit</2> sur la carte pour fixer le cap · <3>glisser</3> pour déplacer · <4>molette</4> pour zoomer",
+        "<0>Clic</0> sur votre avion (Maj ajoute) · <1>clic</1> sur un ennemi pour le cibler · <2>clic droit</2> sur la carte pour fixer le cap · <3>glisser</3> pour déplacer · <4>Alt+glisser</4> / <5>clic milieu</5> pour pivoter · <6>molette</6> pour zoomer",
       playerControlsP2:
-        "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> tirer · <4>H</4> face · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> froid · <10>←</10>/<11>→</11> cap ±10° · <12>↑</12>/<13>↓</13> altitude ±1 000 ft (<14>Maj</14> ou <15>PgUp</15>/<16>PgDn</16> ±5 000) · <17>L</17> palier · <18>T</18> gaz · <19>G</19> mode virage · <20>Inser</2> chaff · <21>Suppr</2> leurre · <22>V</2> suivre",
+        "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> tirer · <4>H</4> face · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> froid · <10>←</10>/<11>→</11> cap ±10° · <12>↑</12>/<13>↓</13> altitude ±1 000 ft (<14>Maj</14> ou <15>PgUp</15>/<16>PgDn</16> ±5 000) · <17>L</17> palier · <18>T</18> gaz · <19>G</19> mode virage · <20>Inser</2> chaff · <21>Suppr</2> leurre · <22>V</2> suivre · <23>[</23>/<24>]</24> pivoter · <25>N</25> nord",
       helpEnergy:
         "Énergie : monter échange vitesse contre altitude, piquer la restitue (Énergie = hauteur + vitesse en pieds ; Ps = taux de gain). Le mode de virage règle la pente de montée (Maint. Vit. sans perte de Mach, Normal jusqu'à {{normalDeg}}°, Max jusqu'à {{maxDeg}}°). Plancher {{minAlt}} ft.",
       helpMap:

@@ -2,7 +2,6 @@ import type { TFunction } from "i18next";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { LanguageSelector } from "../../i18n/LanguageSelector.tsx";
-import { toWorld, type View } from "../../map/render.ts";
 import { saveLastFile } from "../../ui/lastFile.ts";
 import { SiteFooter } from "../../ui/SiteFooter.tsx";
 import { acmiFileName } from "../acmi.ts";
@@ -45,9 +44,20 @@ import {
   waitingOnMissiles,
 } from "../sim/world.ts";
 import { BGM_TRACKS, type BgmPlayer, createBgmPlayer } from "./bgm.ts";
+import {
+  type GameView,
+  initialMapRotation,
+  panView,
+  snapRotation,
+  stepRotation,
+  toggleNorthFlip,
+  toWorld,
+  zoomViewAt,
+} from "./camera.ts";
 import { drawScene, type Hit, sideCol } from "./draw.ts";
 import { createEngineClient, type EngineClient } from "./engineClient.ts";
 import { LobbyPanel, MultiplayerTab } from "./Lobby.tsx";
+import { MapCompass } from "./MapCompass.tsx";
 import { ParamEditor } from "./ParamEditor.tsx";
 import { SinglePlayerTab, StartDialog, type StartTab } from "./StartDialog.tsx";
 import {
@@ -177,7 +187,8 @@ export function GameApp() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const exportMenuRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<View>({ cx: 0, cy: 0, scale: 0.01, w: 800, h: 600 });
+  const viewRef = useRef<GameView>({ cx: 0, cy: 0, scale: 0.01, w: 800, h: 600, rot: 0 });
+  const [mapRot, setMapRot] = useState(0);
   const hitsRef = useRef<Hit[]>([]);
   const followRef = useRef(follow);
   followRef.current = follow;
@@ -188,6 +199,17 @@ export function GameApp() {
   const sideViewRef = useRef(sideView);
   sideViewRef.current = sideView;
   const foxLockedRef = useRef(false);
+
+  const setViewRot = useCallback((next: number) => {
+    const rot = wrap2Pi(next);
+    viewRef.current.rot = rot;
+    setMapRot(rot);
+  }, []);
+  const stepViewRot = useCallback(
+    (deltaDeg: number) => setViewRot(stepRotation(viewRef.current.rot, deltaDeg)),
+    [setViewRot],
+  );
+  const toggleViewNorth = useCallback(() => setViewRot(toggleNorthFlip(viewRef.current.rot)), [setViewRot]);
 
   const send = useCallback((m: Parameters<EngineClient["send"]>[0]) => engineRef.current?.send(m), []);
 
@@ -222,6 +244,7 @@ export function GameApp() {
           setShowStart(false);
           setEndSeen(false);
           fitView(viewRef.current, v);
+          setMapRot(viewRef.current.rot);
           return;
         }
         case "snap":
@@ -686,12 +709,28 @@ export function GameApp() {
       else if (k === "pageup" || k === "pagedown") stepAlt((k === "pageup" ? 1 : -1) * ALT_BIG_STEP_FT);
       else if (k === "l") levelOff();
       else if (k === "v") setFollow(true);
+      else if (k === "[" || k === "{" || k === "]" || k === "}")
+        stepViewRot((k === "[" || k === "{" ? 1 : -1) * (e.shiftKey ? 45 : 15));
+      else if (k === "n") setViewRot(e.shiftKey ? Math.PI : 0);
       else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [issue, steerRel, steerNotch, stepAlt, levelOff, togglePause, setScale, showParams, showStart, session]);
+  }, [
+    issue,
+    steerRel,
+    steerNotch,
+    stepAlt,
+    levelOff,
+    togglePause,
+    setScale,
+    setViewRot,
+    stepViewRot,
+    showParams,
+    showStart,
+    session,
+  ]);
 
   useEffect(() => {
     if (!flash) return;
@@ -715,8 +754,11 @@ export function GameApp() {
     };
   }, [showExport]);
 
-  // Mouse: left click selects / designates, left drag pans, right click sets heading, wheel zooms.
-  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  // Mouse: left click selects / designates, left drag pans, Alt+drag / middle-drag rotates, right click sets heading, wheel zooms (Shift+wheel rotates).
+  type CanvasDrag =
+    | { kind: "pan"; x: number; y: number; moved: boolean }
+    | { kind: "rotate"; startRot: number; startAngle: number; lastX: number; moved: boolean };
+  const drag = useRef<CanvasDrag | null>(null);
   const pickAt = (sx: number, sy: number): string | null => {
     let best: string | null = null;
     let bd = 16;
@@ -734,27 +776,57 @@ export function GameApp() {
     return r ? [e.clientX - r.left, e.clientY - r.top] : [0, 0];
   };
   const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      const v = viewRef.current;
+      const [sx, sy] = local(e);
+      drag.current = {
+        kind: "rotate",
+        startRot: v.rot,
+        startAngle: Math.atan2((sx ?? 0) - v.w / 2, -((sy ?? 0) - v.h / 2)),
+        lastX: e.clientX,
+        moved: false,
+      };
+      return;
+    }
     if (e.button !== 0) return;
-    drag.current = { x: e.clientX, y: e.clientY, moved: false };
+    drag.current = { kind: "pan", x: e.clientX, y: e.clientY, moved: false };
   };
   const onMouseMove = (e: React.MouseEvent) => {
     const d = drag.current;
     if (!d) return;
+    if (d.kind === "rotate") {
+      const v = viewRef.current;
+      const [sx, sy] = local(e);
+      const dxCenter = (sx ?? 0) - v.w / 2;
+      const dyCenter = (sy ?? 0) - v.h / 2;
+      const dx = e.clientX - d.lastX;
+      d.lastX = e.clientX;
+      if (Math.hypot(dxCenter, dyCenter) >= 24) {
+        const curAngle = Math.atan2(dxCenter, -dyCenter);
+        if (!d.moved && Math.abs(curAngle - d.startAngle) < 0.02) return;
+        d.moved = true;
+        setViewRot(snapRotation(wrap2Pi(d.startRot - (curAngle - d.startAngle)), e.shiftKey));
+      } else {
+        if (!d.moved && Math.abs(dx) < 2) return;
+        d.moved = true;
+        setViewRot(snapRotation(wrap2Pi(v.rot + dx * 0.01), e.shiftKey));
+      }
+      return;
+    }
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
     if (!d.moved && Math.hypot(dx, dy) < 4) return;
     d.moved = true;
     setFollow(false);
-    const v = viewRef.current;
-    v.cx -= dx / v.scale;
-    v.cy += dy / v.scale;
+    panView(viewRef.current, dx, dy);
     d.x = e.clientX;
     d.y = e.clientY;
   };
   const onMouseUp = (e: React.MouseEvent) => {
     const d = drag.current;
     drag.current = null;
-    if (!d || d.moved || !session || e.button !== 0) return;
+    if (d?.kind !== "pan" || d.moved || !session || e.button !== 0) return;
     const [sx, sy] = local(e);
     const id = pickAt(sx ?? 0, sy ?? 0);
     const j = jetById(session.world, id);
@@ -783,22 +855,18 @@ export function GameApp() {
     if (!c) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (e.shiftKey) {
+        const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+        if (delta !== 0) stepViewRot((delta > 0 ? 1 : -1) * 15);
+        return;
+      }
       const v = viewRef.current;
       const r = c.getBoundingClientRect();
-      const sx = e.clientX - r.left;
-      const sy = e.clientY - r.top;
-      const [wx, wy] = toWorld(v, sx, sy);
-      const k = Math.exp(-e.deltaY * 0.0015);
-      v.scale = Math.max(2e-4, Math.min(0.2, v.scale * k));
-      if (!followRef.current) {
-        const [wx2, wy2] = toWorld(v, sx, sy);
-        v.cx += wx - wx2;
-        v.cy += wy - wy2;
-      }
+      zoomViewAt(v, e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015), !followRef.current);
     };
     c.addEventListener("wheel", onWheel, { passive: false });
     return () => c.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [stepViewRot]);
 
   const w = session?.world;
   const p = session?.primary();
@@ -979,6 +1047,9 @@ export function GameApp() {
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
             onMouseUp={onMouseUp}
+            onAuxClick={(e) => {
+              if (e.button === 1) e.preventDefault();
+            }}
             onMouseLeave={() => {
               drag.current = null;
             }}
@@ -1017,6 +1088,14 @@ export function GameApp() {
               steerNotch={steerNotch}
               stepAlt={stepAlt}
               levelOff={levelOff}
+            />
+          )}
+          {session && (
+            <MapCompass
+              rot={mapRot}
+              onSetRot={setViewRot}
+              onStepRot={stepViewRot}
+              onToggleNorth={toggleViewNorth}
             />
           )}
           <div className="g-stage-tools">
@@ -2179,7 +2258,7 @@ function fightBox(s: SessionView) {
   return { x0, x1, y0, y1 };
 }
 
-function centerOnFight(v: View, s: SessionView) {
+function centerOnFight(v: GameView, s: SessionView) {
   const b = fightBox(s);
   if (!Number.isFinite(b.x0)) return;
   v.cx = (b.x0 + b.x1) / 2;
@@ -2229,13 +2308,21 @@ const HelpCard = memo(function HelpCard({
           <p>
             <Trans
               i18nKey="game.app.watchControlsP1"
-              components={[<b key="0" />, <b key="1" />, <b key="2" />]}
+              components={[<b key="0" />, <b key="1" />, <b key="2" />, <b key="3" />, <b key="4" />]}
             />
           </p>
           <p>
             <Trans
               i18nKey="game.app.watchControlsP2"
-              components={[<kbd key="0" />, <kbd key="1" />, <kbd key="2" />, <kbd key="3" />]}
+              components={[
+                <kbd key="0" />,
+                <kbd key="1" />,
+                <kbd key="2" />,
+                <kbd key="3" />,
+                <kbd key="4" />,
+                <kbd key="5" />,
+                <kbd key="6" />,
+              ]}
             />
           </p>
         </>
@@ -2244,7 +2331,15 @@ const HelpCard = memo(function HelpCard({
           <p>
             <Trans
               i18nKey="game.app.playerControlsP1"
-              components={[<b key="0" />, <b key="1" />, <b key="2" />, <b key="3" />, <b key="4" />]}
+              components={[
+                <b key="0" />,
+                <b key="1" />,
+                <b key="2" />,
+                <b key="3" />,
+                <b key="4" />,
+                <b key="5" />,
+                <b key="6" />,
+              ]}
             />
           </p>
           <p>
@@ -2274,6 +2369,9 @@ const HelpCard = memo(function HelpCard({
                 <kbd key="20" />,
                 <kbd key="21" />,
                 <kbd key="22" />,
+                <kbd key="23" />,
+                <kbd key="24" />,
+                <kbd key="25" />,
               ]}
             />
           </p>
@@ -2297,7 +2395,8 @@ const HelpCard = memo(function HelpCard({
   );
 });
 
-function fitView(v: View, s: SessionView) {
+function fitView(v: GameView, s: SessionView) {
+  v.rot = initialMapRotation(s.side);
   const b = fightBox(s);
   if (!Number.isFinite(b.x0)) return;
   const span = Math.max(b.x1 - b.x0, b.y1 - b.y0, 25 * NM) * 1.5;
