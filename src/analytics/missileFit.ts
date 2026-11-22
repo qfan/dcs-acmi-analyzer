@@ -114,11 +114,28 @@ export interface MissileModel {
   qualityNote: string | null;
 }
 
-const isaTemp = (h: number) => (h <= 11000 ? 288.15 - 0.0065 * h : 216.65);
-/** ISA air density (kg/m³). */
+const AIR_DENSITY_MAX_M = 30000;
+const AIR_DENSITY_STEP_M = 50;
+const AIR_DENSITY_INV_STEP = 1 / AIR_DENSITY_STEP_M;
+const AIR_DENSITY_COUNT = AIR_DENSITY_MAX_M / AIR_DENSITY_STEP_M;
+const AIR_DENSITY_LUT = new Float64Array(AIR_DENSITY_COUNT + 1);
+for (let i = 0; i <= AIR_DENSITY_COUNT; i++) {
+  const h = i * AIR_DENSITY_STEP_M;
+  AIR_DENSITY_LUT[i] =
+    h <= 11000
+      ? 1.225 * ((288.15 - 0.0065 * h) / 288.15) ** 4.2559
+      : 0.36392 * Math.exp(-(h - 11000) / 6341.6);
+}
+
+/** ISA air density (kg/m³), piecewise-linear 50 m lookup table over 0–30 km. */
 export function airDensity(altM: number): number {
-  const h = Math.max(0, Math.min(30000, altM));
-  return h <= 11000 ? 1.225 * (isaTemp(h) / 288.15) ** 4.2559 : 0.36392 * Math.exp(-(h - 11000) / 6341.6);
+  if (altM <= 0) return AIR_DENSITY_LUT[0] as number;
+  if (altM >= AIR_DENSITY_MAX_M) return AIR_DENSITY_LUT[AIR_DENSITY_COUNT] as number;
+  const scaled = altM * AIR_DENSITY_INV_STEP;
+  const i = scaled | 0;
+  if (i >= AIR_DENSITY_COUNT) return AIR_DENSITY_LUT[AIR_DENSITY_COUNT] as number;
+  const y0 = AIR_DENSITY_LUT[i] as number;
+  return y0 + ((AIR_DENSITY_LUT[i + 1] as number) - y0) * (scaled - i);
 }
 
 export function machBand(mach: number): number {

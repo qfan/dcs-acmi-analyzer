@@ -5,7 +5,7 @@
  */
 import type { Jet, Steer, Throttle } from "./aircraft.ts";
 import { len, sub } from "./vec.ts";
-import { launchZone } from "./wez.ts";
+import { launchRmaxNm } from "./wez.ts";
 import { type Command, type Controller, radarCanTrack, rwrContacts, type World } from "./world.ts";
 
 export interface BotConfig {
@@ -39,6 +39,8 @@ export const DEFAULT_BOT: BotConfig = {
 
 const ZONE_EVERY_S = 2;
 const CHAFF_EVERY_S = 2;
+const BOT_TICK_S = 0.1;
+const EMPTY_COMMANDS: Command[] = [];
 
 export class ScriptedBot implements Controller {
   readonly cfg: BotConfig;
@@ -47,12 +49,24 @@ export class ScriptedBot implements Controller {
   private firstShotAtMe: number | null = null;
   private beamed = false;
   private lastChaff = -1e9;
+  private nextTickAt = Number.NEGATIVE_INFINITY;
+  private lastMissiles: number | null = null;
 
   constructor(cfg: Partial<BotConfig> = {}) {
     this.cfg = { ...DEFAULT_BOT, ...cfg };
   }
 
   update(w: World, me: Jet): Command[] {
+    const due = w.t >= this.nextTickAt - 1e-9;
+    if (!due && this.lastMissiles === me.missiles) return EMPTY_COMMANDS;
+    if (this.nextTickAt === Number.NEGATIVE_INFINITY) {
+      this.nextTickAt = w.t + BOT_TICK_S;
+    } else if (due) {
+      const steps = Math.floor((w.t - this.nextTickAt + 1e-9) / BOT_TICK_S) + 1;
+      this.nextTickAt += steps * BOT_TICK_S;
+    }
+    this.lastMissiles = me.missiles;
+
     const out: Command[] = [];
     if (me.throttle !== this.cfg.throttle)
       out.push({ type: "throttle", jetId: me.id, throttle: this.cfg.throttle });
@@ -103,7 +117,7 @@ export class ScriptedBot implements Controller {
     } else if (c.fireFracRmax !== null && me.missiles > 0 && radarCanTrack(w, me, tgt)) {
       if (w.t - this.zoneAt >= ZONE_EVERY_S) {
         this.zoneAt = w.t;
-        this.rmaxNm = launchZone(w.params.missile, me, tgt).rmaxNm;
+        this.rmaxNm = launchRmaxNm(w.params.missile, me, tgt, 90, this.rmaxNm > 0 ? this.rmaxNm : undefined);
       }
       const rangeNm = len(sub(tgt.pos, me.pos)) / 1852;
       if (this.rmaxNm > 0 && rangeNm <= c.fireFracRmax * this.rmaxNm)

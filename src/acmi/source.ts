@@ -9,7 +9,7 @@
 
 export const BVR_TRAINER_NAME = "BVR Trainer";
 /** Version of the game's recording format and sim model, written into every exported .acmi. */
-export const BVR_TRAINER_VERSION = "1.0.0";
+export const BVR_TRAINER_VERSION = "1.1.0";
 /** `DataSource` / `DataRecorder` value the game writes. */
 export const BVR_TRAINER_SOURCE = `${BVR_TRAINER_NAME} ${BVR_TRAINER_VERSION}`;
 

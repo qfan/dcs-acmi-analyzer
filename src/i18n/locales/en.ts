@@ -1078,26 +1078,26 @@ export const en = {
     scenarios: {
       duel: {
         title: "Head-on duel",
-        summary: "1v1 from 60 nm against the NPC. Pick its skill, or let the NPC fly your jet too and watch.",
+        summary: "1v1 from 70 nm against the NPC. Pick its skill, or let the NPC fly your jet too and watch.",
         lesson:
           "The NPC flies BVR doctrine from its own radar and RWR only: it commits, shoots inside a fraction of its Rmax, cranks to support its missile, pumps after pitbull (Normal and Hard), and turns cold when an active missile shows on its RWR. It has the same picture you would have with fog of war on.",
       },
       "2v1": {
         title: "Two-ship vs one",
-        summary: "2v1 from 60 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
+        summary: "2v1 from 70 nm. You fly both blue jets against one bandit, or watch NPC vs NPC.",
         lesson:
           "Two ships against one let you bracket the bandit: split your wingmen to force it to defend one side while the other presses in. Click a jet to select it, Shift+click to add the other, and give orders to both at once.",
       },
       "2v2": {
         title: "Two-ship vs two-ship",
-        summary: "2v2 from 60 nm. You fly both blue jets (select one or both), or watch NPC vs NPC.",
+        summary: "2v2 from 70 nm. You fly both blue jets (select one or both), or watch NPC vs NPC.",
         lesson:
           "Each side shares its radar picture. The NPCs sort targets (each wingman takes a different bandit when it can) and crank to opposite sides. Click a jet to select it, Shift+click to add the other, and give orders to both at once.",
       },
       "4v2": {
         title: "Four-ship (2x2) vs two-ship",
         summary:
-          "4v2 from 60 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
+          "4v2 from 70 nm. Blue has two 2-ship elements (5 nm abreast, second group 20 nm in trail) vs 2 bandits (5 nm abreast).",
         lesson:
           "Lead with the front two-ship to engage and force the bandits defensive while the trailing two-ship 20 nm behind presses the advantage or covers their pump. Click or Shift+click jets to task elements separately.",
       },
@@ -1122,7 +1122,7 @@ export const en = {
       },
       support: {
         title: "Support your shot",
-        summary: "A target drone flies at you and turns 30° ten seconds after you shoot. Best at 35,000 ft.",
+        summary: "A target drone flies at you and turns 40° ten seconds after you shoot. Best at 35,000 ft.",
         lesson:
           "Until pitbull your missile only knows where the target is while your radar still tracks it. At 35,000 ft, shoot from about 30 nm. Keep the drone inside your radar gimbal (crank, don't turn cold) and the missile follows its turn. Turn cold right after the shot and the missile flies to where the drone would have been, and its seeker finds empty sky. From 20 nm it hardly matters: pitbull comes before the error grows.",
       },
@@ -1281,6 +1281,14 @@ export const en = {
       labels: "Labels",
       radarSectors: "Radar sectors",
       sideView: "Side view",
+      compass: {
+        aria: "Map compass, {{deg}}° up",
+        dialTitle:
+          "Map orientation: {{deg}}° up. Drag to rotate, scroll to step, click to flip North/South up.",
+        rotateCcwTitle: "Rotate map counter-clockwise 45° (Shift 15° · [ key)",
+        rotateCwTitle: "Rotate map clockwise 45° (Shift 15° · ] key)",
+        resetTitle: "Click to flip between North-up (000°) and South-up (180°), or press N / Shift+N",
+      },
       inspectAiAria: "Inspect AI jet",
       inspectAi: "Inspect AI",
       noPlayerControl: "No player control",
@@ -1323,19 +1331,30 @@ export const en = {
       flareBtn: "Flare ({{count}})",
       flareTitle: "Delete (visual only for now)",
       fox3Btn: "FOX 3{{target}}",
+      missilesLeft: "Missiles: {{n}}",
       missilesTitle: "Missiles",
       truthHiddenNote: "Truth (hidden with fog of war on):",
       fogMissilesNote: "Hostile missiles show only on your RWR once active.",
       eventsTitle: "Events",
       watchControlsTitle: "Watch Controls",
       controlsTitle: "Controls",
+      controlsDockAria: "Controls position",
+      controlsDragHint: "Drag to move",
+      controlsDock: {
+        right: "Right panel",
+        bottom: "Bottom bar",
+        topLeft: "Top-left",
+        bottomLeft: "Bottom-left",
+        float: "Floating",
+      },
       watchControlsP1:
-        "<0>Click</0> any visible jet to inspect its AI · <1>drag</1> to pan · <2>wheel</2> to zoom",
-      watchControlsP2: "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> follow",
+        "<0>Click</0> any visible jet to inspect its AI · <1>drag</1> to pan · <2>Alt+drag</2> / <3>middle-drag</3> to rotate · <4>wheel</4> to zoom",
+      watchControlsP2:
+        "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> follow · <4>[</4>/<5>]</5> rotate · <6>N</6> north",
       playerControlsP1:
-        "<0>Click</0> your jet to select (Shift adds) · <1>click</1> a bandit to target it · <2>right-click</2> map to set heading · <3>drag</3> to pan · <4>wheel</4> to zoom",
+        "<0>Click</0> your jet to select (Shift adds) · <1>click</1> a bandit to target it · <2>right-click</2> map to set heading · <3>drag</3> to pan · <4>Alt+drag</4> / <5>middle-drag</5> to rotate · <6>wheel</6> to zoom",
       playerControlsP2:
-        "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> fire · <4>H</4> hot · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> cold · <10>←</10>/<11>→</11> heading ±10° · <12>↑</12>/<13>↓</13> altitude ±1,000 ft (<14>Shift</14> or <15>PgUp</15>/<16>PgDn</16> ±5,000) · <17>L</17> level off · <18>T</18> throttle · <19>G</19> turn mode · <20>Insert</2> chaff · <21>Delete</2> flare · <22>V</2> follow",
+        "<0>Space</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> fire · <4>H</4> hot · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> cold · <10>←</10>/<11>→</11> heading ±10° · <12>↑</12>/<13>↓</13> altitude ±1,000 ft (<14>Shift</14> or <15>PgUp</15>/<16>PgDn</16> ±5,000) · <17>L</17> level off · <18>T</18> throttle · <19>G</19> turn mode · <20>Insert</2> chaff · <21>Delete</2> flare · <22>V</2> follow · <23>[</23>/<24>]</24> rotate · <25>N</25> north",
       helpEnergy:
         "Energy: a climb trades speed for height and a dive buys it back (Energy shows height plus speed as feet; Ps is how fast it grows). The turn mode also sets how steeply you climb: Hold Spd holds Mach and climbs only as fast as thrust allows, Normal up to {{normalDeg}}°, Max up to {{maxDeg}}°. Missiles fly much further from high and fast, and die quickly chasing you down into thick air. Hard deck {{minAlt}} ft.",
       helpMap:

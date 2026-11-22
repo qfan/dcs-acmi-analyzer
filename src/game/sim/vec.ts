@@ -10,7 +10,7 @@ export const add = (a: V3, b: V3): V3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z +
 export const sub = (a: V3, b: V3): V3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 export const scale = (a: V3, k: number): V3 => ({ x: a.x * k, y: a.y * k, z: a.z * k });
 export const dot = (a: V3, b: V3): number => a.x * b.x + a.y * b.y + a.z * b.z;
-export const len = (a: V3): number => Math.hypot(a.x, a.y, a.z);
+export const len = (a: V3): number => Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
 export const norm = (a: V3): V3 => {
   const l = len(a);
   return l > 1e-9 ? scale(a, 1 / l) : v3(0, 1, 0);
@@ -19,10 +19,11 @@ export const norm = (a: V3): V3 => {
 export const perp = (a: V3, u: V3): V3 => sub(a, scale(u, dot(a, u)));
 /** Angle between two vectors (rad). */
 export function angleBetween(a: V3, b: V3): number {
-  const la = len(a);
-  const lb = len(b);
-  if (la < 1e-9 || lb < 1e-9) return 0;
-  return Math.acos(Math.max(-1, Math.min(1, dot(a, b) / (la * lb))));
+  const la2 = a.x * a.x + a.y * a.y + a.z * a.z;
+  const lb2 = b.x * b.x + b.y * b.y + b.z * b.z;
+  if (la2 < 1e-18 || lb2 < 1e-18) return 0;
+  const d = a.x * b.x + a.y * b.y + a.z * b.z;
+  return Math.acos(Math.max(-1, Math.min(1, d / Math.sqrt(la2 * lb2))));
 }
 
 /** Unit vector for a compass heading (rad, clockwise from north) and flight-path angle (rad). */
@@ -52,15 +53,50 @@ export function wrap2Pi(a: number): number {
   return r < 0 ? r + 2 * Math.PI : r;
 }
 
+/** Zero-allocation closest approach distance between two linearly moving points over one step. */
+export function segmentClosestDist(
+  a0x: number,
+  a0y: number,
+  a0z: number,
+  a1x: number,
+  a1y: number,
+  a1z: number,
+  b0x: number,
+  b0y: number,
+  b0z: number,
+  b1x: number,
+  b1y: number,
+  b1z: number,
+): number {
+  const r0x = b0x - a0x;
+  const r0y = b0y - a0y;
+  const r0z = b0z - a0z;
+  const drx = b1x - a1x - r0x;
+  const dry = b1y - a1y - r0y;
+  const drz = b1z - a1z - r0z;
+  const dd = drx * drx + dry * dry + drz * drz;
+  const f = dd > 1e-12 ? Math.max(0, Math.min(1, -(r0x * drx + r0y * dry + r0z * drz) / dd)) : 1;
+  const cx = r0x + drx * f;
+  const cy = r0y + dry * f;
+  const cz = r0z + drz * f;
+  return Math.sqrt(cx * cx + cy * cy + cz * cz);
+}
+
 /**
  * Closest approach between two points moving linearly over one step: a from a0 to a1, b from b0 to
  * b1. Returns the distance and the fraction of the step (0..1) at which it happens.
  */
 export function segmentClosest(a0: V3, a1: V3, b0: V3, b1: V3): { d: number; f: number } {
-  const r0 = sub(b0, a0);
-  const r1 = sub(b1, a1);
-  const dr = sub(r1, r0);
-  const dd = dot(dr, dr);
-  const f = dd > 1e-12 ? Math.max(0, Math.min(1, -dot(r0, dr) / dd)) : 1;
-  return { d: len(add(r0, scale(dr, f))), f };
+  const r0x = b0.x - a0.x;
+  const r0y = b0.y - a0.y;
+  const r0z = b0.z - a0.z;
+  const drx = b1.x - a1.x - r0x;
+  const dry = b1.y - a1.y - r0y;
+  const drz = b1.z - a1.z - r0z;
+  const dd = drx * drx + dry * dry + drz * drz;
+  const f = dd > 1e-12 ? Math.max(0, Math.min(1, -(r0x * drx + r0y * dry + r0z * drz) / dd)) : 1;
+  const cx = r0x + drx * f;
+  const cy = r0y + dry * f;
+  const cz = r0z + drz * f;
+  return { d: Math.sqrt(cx * cx + cy * cy + cz * cz), f };
 }

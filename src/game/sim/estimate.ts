@@ -9,7 +9,7 @@
  * the estimate is simply wrong — as in the jet.
  */
 import { NM } from "./atmosphere.ts";
-import { type Missile, stepMissile, type TargetTruth } from "./missile.ts";
+import { cloneMissile, type Missile, stepMissileFast, type TargetTruth } from "./missile.ts";
 import type { MissileParams } from "./params.ts";
 import { add, scale } from "./vec.ts";
 
@@ -54,7 +54,7 @@ export function startTimer(m: Missile, t: number): MissileTimer {
     shooterId: m.shooterId,
     targetId: m.targetId,
     launchT: t - m.tof,
-    ghost: structuredClone(m),
+    ghost: cloneMissile(m),
     pitbullAt: null,
     impactAt: null,
     firstImpactAt: null,
@@ -72,7 +72,30 @@ export function stepTimer(
   dt: number,
 ): void {
   const g = timer.ghost;
-  if (!g.end && dt > 0) stepMissile(p, g, known, datalink, dt, PREDICT_FUZE_M);
+  if (!g.end && dt > 0) {
+    stepMissileFast(
+      p,
+      g,
+      known.pos.x,
+      known.pos.y,
+      known.pos.z,
+      known.vel.x,
+      known.vel.y,
+      known.vel.z,
+      known.alive,
+      datalink,
+      dt,
+      PREDICT_FUZE_M,
+      undefined,
+      null,
+    );
+  }
+  if (g.end || g.phase === "lost") {
+    timer.pitbullAt = g.pitbull ? (timer.pitbullAt ?? t) : null;
+    timer.impactAt = g.end === "hit" ? (timer.impactAt ?? t) : null;
+    if (timer.firstImpactAt === null && timer.impactAt !== null) timer.firstImpactAt = timer.impactAt;
+    return;
+  }
   if (t - timer.predictedAt < PREDICT_EVERY_S) return;
   timer.predictedAt = t;
   const pred = predict(p, g, known, datalink, t);
@@ -88,16 +111,40 @@ function predict(
   datalink: boolean,
   t: number,
 ): { pitbullAt: number | null; impactAt: number | null } {
-  if (ghost.end) return { pitbullAt: null, impactAt: null };
-  const m = structuredClone(ghost);
-  let tgt = { ...known, pos: { ...known.pos } };
+  if (ghost.end || ghost.phase === "lost") return { pitbullAt: null, impactAt: null };
+  const m = cloneMissile(ghost);
+  let tx = known.pos.x;
+  let ty = known.pos.y;
+  let tz = known.pos.z;
+  const tvx = known.vel.x;
+  const tvy = known.vel.y;
+  const tvz = known.vel.z;
+  const alive = known.alive;
   let pitbullAt: number | null = null;
   const tEnd = p.maxTofS;
   for (let k = 0; m.tof < tEnd && k < 4000; k++) {
-    tgt = { ...tgt, pos: add(tgt.pos, scale(tgt.vel, PREDICT_DT)) };
-    const ev = stepMissile(p, m, tgt, datalink, PREDICT_DT, PREDICT_FUZE_M);
+    tx += tvx * PREDICT_DT;
+    ty += tvy * PREDICT_DT;
+    tz += tvz * PREDICT_DT;
+    const wasPitbull = m.pitbull;
+    stepMissileFast(
+      p,
+      m,
+      tx,
+      ty,
+      tz,
+      tvx,
+      tvy,
+      tvz,
+      alive,
+      datalink,
+      PREDICT_DT,
+      PREDICT_FUZE_M,
+      undefined,
+      null,
+    );
     const now = t + (k + 1) * PREDICT_DT;
-    if (ev.includes("pitbull")) pitbullAt = now;
+    if (!wasPitbull && m.pitbull) pitbullAt = now;
     if (m.end === "hit") return { pitbullAt, impactAt: now };
     if (m.end || m.phase === "lost") break;
   }

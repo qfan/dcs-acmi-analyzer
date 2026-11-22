@@ -76,12 +76,12 @@ describe("analytics: BVR Trainer recordings stay out of DCS data", async () => {
   it("the game writes its version into the header", () => {
     expect(text).toContain(`\n0,DataSource=BVR Trainer ${BVR_TRAINER_VERSION}\n`);
     expect(text).toContain(`\n0,DataRecorder=BVR Trainer ${BVR_TRAINER_VERSION}\n`);
-    expect(BVR_TRAINER_VERSION).toBe("1.0.0");
+    expect(BVR_TRAINER_VERSION).toBe("1.1.0");
   });
 
   it("tags the file and its shots, with no DCS version", () => {
     expect(game.meta?.source).toBe("bvr-trainer");
-    expect(game.meta?.sourceVersion).toBe("1.0.0");
+    expect(game.meta?.sourceVersion).toBe("1.1.0");
     expect(game.meta?.dcsVersion).toBeNull();
     expect(game.meta?.dcsPatch).toBeNull();
     expect(game.engagements.length).toBeGreaterThan(0);
@@ -108,17 +108,17 @@ describe("analytics: BVR Trainer recordings stay out of DCS data", async () => {
     const res = runAnalyticsQuery([dcs, game], q);
     expect(res.gameExcludedFileIds.size).toBe(0);
     expect(res.engagements.some((e) => e.fileId === "game")).toBe(true);
-    expect(res.facets.dcsPatches).toContain("BVR Trainer 1.0.0");
+    expect(res.facets.dcsPatches).toContain("BVR Trainer 1.1.0");
 
     const { cohorts } = compareCohorts(res.engagements, res.tacticsById, "dcsPatch");
-    const gameCohort = cohorts.find((c) => c.cohortKey === "BVR Trainer 1.0.0");
-    expect(gameCohort?.label).toBe("BVR Trainer 1.0.0");
+    const gameCohort = cohorts.find((c) => c.cohortKey === "BVR Trainer 1.1.0");
+    expect(gameCohort?.label).toBe("BVR Trainer 1.1.0");
     expect(gameCohort?.fileCount).toBe(1);
     for (const c of cohorts) {
       if (c !== gameCohort) expect(c.label.startsWith("DCS ") || c.label.startsWith("Unknown")).toBe(true);
     }
 
-    const onlyGame = runAnalyticsQuery([dcs, game], { ...q, dcsPatches: ["BVR Trainer 1.0.0"] });
+    const onlyGame = runAnalyticsQuery([dcs, game], { ...q, dcsPatches: ["BVR Trainer 1.1.0"] });
     expect(onlyGame.engagements.length).toBeGreaterThan(0);
     expect(onlyGame.engagements.every((e) => e.fileId === "game")).toBe(true);
   });

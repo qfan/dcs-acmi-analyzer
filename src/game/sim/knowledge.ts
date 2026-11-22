@@ -46,6 +46,7 @@ const MISSILE_INTERNAL = new Set<GameEvent["type"]>([
   "pitbull",
   "acquired",
   "seeker-lost",
+  "seeker-notched",
   "seeker-chaffed",
   "miss",
   "spent",
@@ -108,23 +109,43 @@ export class SideKnowledge {
    * against the side's own track of the target. The real missile is only read once, at launch.
    */
   updateTimers(w: World, dt: number): void {
-    const newlyAdded = new Set<string>();
-    for (const m of w.missiles)
+    if (w.missiles.length === 0 && this.timers.size === 0) return;
+    let newlyAdded: Set<string> | null = null;
+    for (const m of w.missiles) {
       if (m.side === this.side && !this.timers.has(m.id)) {
         this.timers.set(m.id, startTimer(m, w.t));
+        if (!newlyAdded) newlyAdded = new Set();
         newlyAdded.add(m.id);
       }
+    }
     for (const tm of this.timers.values()) {
       const shooter = jetById(w, tm.shooterId);
       const target = jetById(w, tm.targetId);
       const datalink = !!shooter && !!target && radarCanTrack(w, shooter, target);
       const track = this.lastTrack.get(tm.targetId);
       const known = datalink && target ? truthOf(target) : track ? trackAt(track, w.t) : null;
-      const stepDt = newlyAdded.has(tm.missileId) ? 0 : dt;
+      const stepDt = newlyAdded?.has(tm.missileId) ? 0 : dt;
       if (known) stepTimer(w.params.missile, tm, known, datalink, w.t, stepDt);
     }
-    if (w.infinite) {
-      for (const [id, tm] of this.timers) if (!timerActive(w, tm)) this.timers.delete(id);
+    if (w.infinite && this.timers.size > 0) {
+      let liveMissiles: Set<string> | null = null;
+      for (const [id, tm] of this.timers) {
+        if (!timerActive(w, tm)) {
+          this.timers.delete(id);
+          continue;
+        }
+        if (!jetById(w, tm.targetId)) {
+          if (w.missiles.length === 0) {
+            this.timers.delete(id);
+            continue;
+          }
+          if (!liveMissiles) {
+            liveMissiles = new Set();
+            for (const m of w.missiles) if (!m.end) liveMissiles.add(m.id);
+          }
+          if (!liveMissiles.has(tm.missileId)) this.timers.delete(id);
+        }
+      }
     }
   }
 

@@ -17,7 +17,7 @@ import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import { type Rng, randNormal } from "../sim/rng.ts";
 import { angleBetween, bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
-import { headOnRmaxNm, launchZone } from "../sim/wez.ts";
+import { headOnRmaxNm, inOpportunityZone, launchBounds } from "../sim/wez.ts";
 import {
   type Command,
   type Controller,
@@ -42,6 +42,8 @@ export interface AiSkill {
   pumpS: number;
   /** Keeps defending this long (s) after the missile leaves the RWR. */
   defendHoldS: number;
+  /** Probability [0, 1] of defending an active missile with a notch instead of turning cold. */
+  notchChance: number;
   /** Fires a posture shot near head-on Rmax when carrying plenty of missiles (even if the enemy cranks). */
   postureShot: boolean;
   /** Takes high-Pk opportunity shots at other TWS-tracked enemies in lethal range. */
@@ -70,6 +72,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: false,
     pumpS: 0,
     defendHoldS: 3,
+    notchChance: 0.05,
     postureShot: false,
     opportunityShot: false,
     commitAltFt: null,
@@ -83,6 +86,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 15,
     defendHoldS: 6,
+    notchChance: 0.05,
     postureShot: false,
     opportunityShot: true,
     commitAltFt: null,
@@ -96,6 +100,7 @@ export const AI_SKILLS: Record<AiSkillId, AiSkill> = {
     pumpAfterPitbull: true,
     pumpS: 20,
     defendHoldS: 8,
+    notchChance: 0.05,
     postureShot: true,
     opportunityShot: true,
     commitAltFt: null,
@@ -113,14 +118,25 @@ export const skillChoiceLabel = (c: AiSkillChoice): string =>
 const SHOT_CLOSER_PER_MISSILE = 0.35;
 /** How often (s) the NPC re-estimates its Rmax against its target (the flyouts cost a few ms). */
 const ZONE_EVERY_S = 2;
+/** Probability that an eligible posture shot is taken (fire-and-forget). */
+const POSTURE_CHANCE = 0.3;
 /** Minimum missiles remaining to keep firing posture shots regardless of initial load. */
 const POSTURE_MISSILES_MIN = 8;
 /** Only fire a posture shot when the target is not already cold/running away (aspect <= 95 deg). */
 const POSTURE_MAX_ASPECT_RAD = 95 * DEG;
 /** Treat an enemy still facing within crank angles (<= 70 deg) as head-on-capable so cranks don't lock out follow-ups. */
 const CRANK_ASPECT_RAD = 70 * DEG;
-/** Fraction of Rne..Rmax span for the final missile so engagements resolve cleanly inside WEZ. */
-const LAST_MISSILE_FRAC = 0.03;
+/** Uniform random range of final-missile Rne..Rmax fraction so endgames vary instead of mirroring. */
+const LAST_MISSILE_FRAC_MIN = 0.03;
+const LAST_MISSILE_FRAC_MAX = 0.2;
+/** Max off-boresight angle for primary shots outside Rne / pitbull range. */
+const PRIMARY_FIRE_MAX_OFF_RAD = 25 * DEG;
+/** Hysteresis Mach thresholds for switching non-emergency turns to speed-preserving "sustain". */
+const CONSERVE_ENTER_MACH = 0.82;
+const CONSERVE_EXIT_MACH = 0.9;
+/** Subsonic/transonic hysteresis for speed-preserving "sustain" cranks in SUPPORT; supersonic jets crank in MIL/normal instead. */
+const SUPPORT_SUSTAIN_ENTER_MACH = 0.92;
+const SUPPORT_SUSTAIN_EXIT_MACH = 0.96;
 /** Fraction of Rne..Rmax span within which a secondary TWS target qualifies for an opportunity shot. */
 const OPP_SHOT_FRAC = 0.45;
 /** Deconfliction distance penalty per closer/peer friendly targeting the same enemy (m). */
@@ -140,7 +156,8 @@ const STEER_EPS = 2 * DEG;
 const OFFSET_DECISION_RAD = 12 * DEG;
 /** Intermediate cold-turn offset (< 180°) while rotating past beam so head-on breaks actually go left or right. */
 const COLD_COMMIT_OFFSET_DEG = 160;
-const COLD_PAST_BEAM_RAD = 120 * DEG;
+/** Sits between the 110° and 120° RWR bins so float rounding at 120° cannot toggle cold offsetDeg. */
+const COLD_PAST_BEAM_RAD = 115 * DEG;
 /** Brief hold (s) after leaving an unlocked missile's illumination cone (e.g. a missile chasing another jet). */
 const UNLOCKED_ILLUM_HOLD_S = 0.5;
 /** Altitude orders closer than this (m) to the current one are not re-issued. */
@@ -162,6 +179,30 @@ function sampleScale(rng: Rng, sigma: number, cap = 2): number {
   return 1 + sigma * randNormal(rng, cap);
 }
 
+/** Decoupled AI update period (s): tactical decisions run at 10 Hz instead of the 50 Hz physics step. */
+export const AI_TICK_S = 0.1;
+const AI_TICK_SLOTS = 5;
+const EMPTY_COMMANDS: Command[] = [];
+
+function fnv1a(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** Deterministic phase offset in [0, 0.9 * periodS) without consuming w.rng(). */
+function phaseOffsetS(key: string, periodS: number): number {
+  return (fnv1a(key) / 4294967296) * periodS * 0.9;
+}
+
+/** Staggers bots evenly across the 5 × 0.02 s physics steps inside each 10 Hz AI tick window. */
+function tickSlotS(key: string): number {
+  return (fnv1a(key) % AI_TICK_SLOTS) * (AI_TICK_S / AI_TICK_SLOTS);
+}
+
 export type AiState = "commit" | "support" | "pump" | "defend" | "egress";
 
 export interface NpcStatus {
@@ -180,15 +221,26 @@ export class DoctrineBot implements Controller {
   private readonly rwrFirstSeen = new Map<string, number>();
   private readonly rwrReactionS = new Map<string, number>();
   private readonly pumpedFor = new Set<string>();
+  private readonly postureMissileIds = new Set<string>();
+  private pendingPostureTarget: string | null = null;
+  private postureRolledForMissiles: number | null = null;
+  private postureAllowed = false;
+  private lastMissileFrac = LAST_MISSILE_FRAC_MIN;
+  private conservingEnergy = false;
+  private supportSustain = false;
   private pumpUntil = Number.NEGATIVE_INFINITY;
   private defendUntil = Number.NEGATIVE_INFINITY;
   private defendFrom: string | null = null;
   private defendDir: 1 | -1 | null = null;
   private defendHoldS = 0;
   private defendLocked = false;
+  private defendTactic: "cold" | "notch" = "cold";
+  private defendLastBearing: number | null = null;
   private pumpDir: 1 | -1 | null = null;
   private egressDir: 1 | -1 | null = null;
   private lastT: number | null = null;
+  private nextTickAt = Number.NEGATIVE_INFINITY;
+  private lastMissiles: number | null = null;
   private zoneAt = Number.NEGATIVE_INFINITY;
   private zoneFor: string | null = null;
   private rmaxNm = 0;
@@ -214,7 +266,24 @@ export class DoctrineBot implements Controller {
     this.preferredCrankDir = preferredCrankDir;
   }
 
+  private shouldSkipTick(w: World, me: Jet): boolean {
+    if (this.lastT === null) return false;
+    if (w.t >= this.nextTickAt - 1e-9) return false;
+    if (this.lastMissiles !== me.missiles) return false;
+    if (me.targetId !== null && !jetById(w, me.targetId)?.alive) return false;
+    const rwr = w.rwr.get(me.id);
+    if (rwr) {
+      for (const c of rwr) {
+        if (c.kind === "missile" && !this.rwrFirstSeen.has(c.sourceId)) return false;
+      }
+    }
+    return true;
+  }
+
   update(w: World, me: Jet): Command[] {
+    if (this.shouldSkipTick(w, me)) return EMPTY_COMMANDS;
+    const firstTick = this.lastT === null;
+    const due = !firstTick && w.t >= this.nextTickAt - 1e-9;
     const before = this.state;
     if (this.startAltM === null) this.startAltM = me.pos.z;
     let out = this.decide(w, me);
@@ -227,6 +296,14 @@ export class DoctrineBot implements Controller {
     if ((this.state === "commit" || this.state === "support") && target - me.pos.z > ALT_EPS_M) {
       out = out.filter((c) => c.type !== "effort");
       if (me.effort !== "sustain") out.push({ type: "effort", jetId: me.id, effort: "sustain" });
+    }
+    this.lastMissiles = me.missiles;
+    if (firstTick) {
+      const slot = tickSlotS(me.id);
+      this.nextTickAt = w.t + (slot > 0 ? slot : AI_TICK_S);
+    } else if (due) {
+      const steps = Math.floor((w.t - this.nextTickAt + 1e-9) / AI_TICK_S) + 1;
+      this.nextTickAt += steps * AI_TICK_S;
     }
     return out;
   }
@@ -268,10 +345,18 @@ export class DoctrineBot implements Controller {
       this.shotScale = clamp(sampleScale(w.rng, 0.075), 0.85, 1.15);
       this.postureScale = clamp(sampleScale(w.rng, 0.03), 0.94, 1.06);
       this.reactionScale = clamp(sampleScale(w.rng, 0.12), 0.76, 1.24);
+      this.lastMissileFrac =
+        LAST_MISSILE_FRAC_MIN + w.rng() * (LAST_MISSILE_FRAC_MAX - LAST_MISSILE_FRAC_MIN);
     }
     this.lastT = w.t;
     this.updateTracks(w, me);
     this.updateTimers(w, me, dt);
+    this.pendingPostureTarget = null;
+    const curMach = mach(me);
+    if (curMach < CONSERVE_ENTER_MACH) this.conservingEnergy = true;
+    else if (curMach > CONSERVE_EXIT_MACH) this.conservingEnergy = false;
+    if (curMach < SUPPORT_SUSTAIN_ENTER_MACH) this.supportSustain = true;
+    else if (curMach > SUPPORT_SUSTAIN_EXIT_MACH) this.supportSustain = false;
 
     const out: Command[] = [];
     const s = this.skill;
@@ -279,11 +364,17 @@ export class DoctrineBot implements Controller {
 
     // RWR: keep defending for as long as any active missile remains on RWR (after a capped normal reaction delay).
     const missiles = rwrContacts(w, me).filter((c) => c.kind === "missile");
-    const liveMissileIds = new Set(w.missiles.filter((m) => !m.end).map((m) => m.id));
-    for (const id of this.rwrFirstSeen.keys()) {
-      if (!liveMissileIds.has(id)) {
-        this.rwrFirstSeen.delete(id);
-        this.rwrReactionS.delete(id);
+    if (this.rwrFirstSeen.size > 0) {
+      let liveMissileIds: Set<string> | null = null;
+      if (w.missiles.length > 0) {
+        liveMissileIds = new Set<string>();
+        for (const m of w.missiles) if (!m.end) liveMissileIds.add(m.id);
+      }
+      for (const id of this.rwrFirstSeen.keys()) {
+        if (!liveMissileIds?.has(id)) {
+          this.rwrFirstSeen.delete(id);
+          this.rwrReactionS.delete(id);
+        }
       }
     }
     for (const c of missiles) {
@@ -306,10 +397,12 @@ export class DoctrineBot implements Controller {
         this.defendDir = this.chooseSide(w, me, threat.bearing);
         this.defendHoldS = s.defendHoldS * clamp(sampleScale(w.rng, 0.1), 0.8, 1.2);
         this.defendLocked = threat.lock;
+        this.defendTactic = w.rng() < s.notchChance ? "notch" : "cold";
       } else if (threat.lock) {
         this.defendLocked = true;
       }
       this.defendFrom = threat.sourceId;
+      this.defendLastBearing = threat.bearing;
       const holdS = this.defendLocked ? this.defendHoldS : Math.min(this.defendHoldS, UNLOCKED_ILLUM_HOLD_S);
       this.defendUntil = t + holdS;
     }
@@ -321,27 +414,58 @@ export class DoctrineBot implements Controller {
       this.state = "defend";
       out.push(...this.fly(me, "ab", "max"));
       const rwrThreat = missiles.find((c) => c.sourceId === this.defendFrom);
-      if (rwrThreat) {
+      const dir = this.defendDir ?? 1;
+      if (this.defendTactic === "notch") {
+        if (rwrThreat) {
+          this.actionDetail = `Notching active missile (${rwrThreat.lock ? "locked" : "searching"})`;
+          if (me.steer.mode !== "notch" || me.steer.threatId !== this.defendFrom || me.steer.dir !== dir) {
+            out.push({
+              type: "steer",
+              jetId: me.id,
+              steer: {
+                mode: "notch",
+                threatId: this.defendFrom,
+                dir,
+                label: "notching",
+                hdg: wrap2Pi(rwrThreat.bearing + dir * 90 * DEG),
+                nextAlignAt: 0,
+              },
+            });
+          }
+        } else {
+          this.actionDetail = `Holding notch evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
+          if (me.steer.mode !== "notch" && this.defendLastBearing !== null) {
+            out.push(...this.setHeading(me, wrap2Pi(this.defendLastBearing + dir * 90 * DEG)));
+          }
+        }
+      } else if (rwrThreat) {
         const offsetDeg = this.coldOffsetDeg(me, rwrThreat.bearing);
         this.actionDetail = `Turning cold from active missile (${rwrThreat.lock ? "locked" : "searching"})`;
         // Cold from the missile: the RWR gives its bearing, which is all a heading needs.
-        out.push(
-          ...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, this.defendDir ?? 1, "defending"),
-        );
+        out.push(...this.steerRelativeMissile(me, this.defendFrom, offsetDeg, dir, "defending"));
       } else {
         this.actionDetail = `Holding cold evasion (${Math.max(0, Math.ceil(this.defendUntil - t))} s left)`;
-        out.push(...this.setHeading(me, me.hdg));
+        const brg = this.defendLastBearing;
+        const holdHdg = brg !== null ? wrap2Pi(brg + dir * this.coldOffsetDeg(me, brg) * DEG) : me.hdg;
+        out.push(...this.setHeading(me, holdHdg));
       }
       return out;
     }
     this.defendFrom = null;
     this.defendDir = null;
     this.defendLocked = false;
+    this.defendTactic = "cold";
+    this.defendLastBearing = null;
 
-    // Pump once per missile after it went active (if this skill does), then re-commit.
+    // Pump once per supported missile after it went active (posture shots are fire-and-forget).
     if (s.pumpAfterPitbull)
       for (const tm of myInFlight)
-        if (tm.pitbullAt !== null && t >= tm.pitbullAt && !this.pumpedFor.has(tm.missileId)) {
+        if (
+          !this.postureMissileIds.has(tm.missileId) &&
+          tm.pitbullAt !== null &&
+          t >= tm.pitbullAt &&
+          !this.pumpedFor.has(tm.missileId)
+        ) {
           this.pumpedFor.add(tm.missileId);
           const pumpDur = s.pumpS * clamp(sampleScale(w.rng, 0.1), 0.8, 1.2);
           this.pumpUntil = Math.max(this.pumpUntil, t + pumpDur);
@@ -351,7 +475,7 @@ export class DoctrineBot implements Controller {
       if (this.state !== "pump") this.pumpDir = brg === null ? 1 : this.chooseSide(w, me, brg);
       this.state = "pump";
       this.actionDetail = `Pumping cold after pitbull (${Math.max(0, Math.ceil(this.pumpUntil - t))} s left)`;
-      out.push(...this.fly(me, "ab", "normal"));
+      out.push(...this.flyCruise(me, "ab"));
       const offsetDeg = brg === null ? 180 : this.coldOffsetDeg(me, brg);
       out.push(...this.steerVsTrack(me, target, offsetDeg, this.pumpDir ?? 1));
       return out;
@@ -363,7 +487,7 @@ export class DoctrineBot implements Controller {
       if (this.state !== "egress") this.egressDir = brg === null ? 1 : this.chooseSide(w, me, brg);
       this.state = "egress";
       this.actionDetail = "Out of missiles — leaving cold";
-      out.push(...this.fly(me, "mil", "normal"));
+      out.push(...this.flyCruise(me, "mil"));
       if (target) {
         const offsetDeg = brg === null ? 180 : this.coldOffsetDeg(me, brg);
         out.push(...this.steerVsTrack(me, target, offsetDeg, this.egressDir ?? 1));
@@ -372,16 +496,18 @@ export class DoctrineBot implements Controller {
     }
     this.egressDir = null;
 
-    out.push(...this.fly(me, "mil", "normal"));
     if (!target) {
       this.state = "commit";
       this.actionDetail = "Searching — no radar track";
+      out.push(...this.flyCruise(me, "mil"));
       return out; // nothing known: hold heading until something shows up
     }
-    if (me.targetId !== target) out.push({ type: "target", jetId: me.id, targetId: target });
 
     const supporting = myInFlight.filter(
-      (tm) => tm.targetId === target && (tm.pitbullAt === null || t < tm.pitbullAt),
+      (tm) =>
+        !this.postureMissileIds.has(tm.missileId) &&
+        tm.targetId === target &&
+        (tm.pitbullAt === null || t < tm.pitbullAt),
     );
     if (supporting.length > 0) {
       if (this.state !== "support" || this.supportTarget !== target) {
@@ -393,6 +519,8 @@ export class DoctrineBot implements Controller {
       }
       this.state = "support";
       this.actionDetail = `Cranking ${s.crankDeg}° ${this.crankDir > 0 ? "R" : "L"} — supporting ${supporting[0]?.missileId ?? "missile"} to pitbull`;
+      out.push(...this.flyCruise(me, "mil", true));
+      if (me.targetId !== target) out.push({ type: "target", jetId: me.id, targetId: target });
       this.tryOpportunityShot(w, me, target, myInFlight, out);
       out.push(...this.steerVsTrack(me, target, s.crankDeg, this.crankDir));
       return out;
@@ -400,37 +528,72 @@ export class DoctrineBot implements Controller {
     this.supportTarget = null;
 
     this.state = "commit";
-    out.splice(0, out.length, ...this.fly(me, s.pumpAfterPitbull ? "ab" : "mil", "normal"));
+    out.push(...this.flyCruise(me, s.pumpAfterPitbull ? "ab" : "mil"));
     if (me.targetId !== target) out.push({ type: "target", jetId: me.id, targetId: target });
     out.push(...this.steerVsTrack(me, target, 0, 1));
     const enemy = jetById(w, target);
-    // Don't hold fire for 120 s on an already-pitbull missile whose onboard TTI predicts a miss.
+    // Don't hold fire for 120 s on an already-pitbull missile (or a fire-and-forget posture shot).
     const onTarget = myInFlight.some(
-      (tm) => tm.targetId === target && (!tm.ghost.pitbull || tm.impactAt !== null),
+      (tm) =>
+        !this.postureMissileIds.has(tm.missileId) &&
+        tm.targetId === target &&
+        (!tm.ghost.pitbull || tm.impactAt !== null),
     );
     let firedPrimary = false;
     if (enemy && me.missiles > 0 && !onTarget && radarCanTrack(w, me, enemy)) {
-      if (this.zoneFor !== target || t - this.zoneAt >= ZONE_EVERY_S) {
-        this.zoneAt = t;
+      const sameTarget = this.zoneFor === target;
+      if (!sameTarget || t - this.zoneAt >= ZONE_EVERY_S) {
+        this.zoneAt = sameTarget ? t : t - phaseOffsetS(me.id, ZONE_EVERY_S);
         this.zoneFor = target;
-        const zone = launchZone(w.params.missile, me, enemy);
+        const zone = launchBounds(
+          w.params.missile,
+          me,
+          enemy,
+          90,
+          sameTarget ? { rmaxNm: this.rmaxNm, rneNm: this.rneNm } : undefined,
+        );
         this.rmaxNm = zone.rmaxNm;
         this.rneNm = zone.rneNm;
-        this.headOnRmaxNm = this.skill.postureShot ? headOnRmaxNm(w.params.missile, me, enemy) : 0;
+        if (this.skill.postureShot) {
+          const aspect = angleBetween(velocity(enemy), sub(me.pos, enemy.pos));
+          if (aspect > 135 * DEG || (aspect > 105 * DEG && !this.postureEligibleAmmo(me))) {
+            this.headOnRmaxNm = 0;
+          } else if (aspect < 2 * DEG && Math.abs(enemy.gamma) < 2 * DEG) {
+            this.headOnRmaxNm = this.rmaxNm;
+          } else {
+            this.headOnRmaxNm = headOnRmaxNm(
+              w.params.missile,
+              me,
+              enemy,
+              90,
+              sameTarget && this.headOnRmaxNm > 0 ? this.headOnRmaxNm : this.rmaxNm,
+            );
+          }
+        } else {
+          this.headOnRmaxNm = 0;
+        }
       }
       const rangeNm = len(sub(enemy.pos, me.pos)) / NM;
       const normalRange = this.rmaxNm > 0 ? this.shotRangeNm(me, enemy) : 0;
-      const postureActive = this.headOnRmaxNm > 0 && this.canPostureShot(me, enemy);
+      const postureActive = this.headOnRmaxNm > 0 && this.canPostureShot(w, me, enemy, myInFlight);
       const postureRange = postureActive ? this.headOnRmaxNm * this.postureScale : 0;
       const fireRangeNm = Math.max(normalRange, postureRange);
-      const usingPosture = postureActive && postureRange > normalRange;
-      if (fireRangeNm > 0 && rangeNm <= fireRangeNm) {
-        if (usingPosture) this.postureShotsFired++;
+      const usingPosture = postureActive && postureRange > normalRange && rangeNm > normalRange;
+      const offNoseRad = angleBetween(velocity(me), sub(enemy.pos, me.pos));
+      const emergencyClose = rangeNm <= Math.max(this.rneNm, w.params.missile.pitbullRangeNm);
+      const aligned = emergencyClose || offNoseRad <= PRIMARY_FIRE_MAX_OFF_RAD;
+      if (fireRangeNm > 0 && rangeNm <= fireRangeNm && aligned) {
+        if (usingPosture) {
+          this.postureShotsFired++;
+          this.pendingPostureTarget = target;
+        }
         this.actionDetail = usingPosture
-          ? `Firing posture shot at ${rangeNm.toFixed(1)} nm`
+          ? `Firing fire-and-forget posture shot at ${rangeNm.toFixed(1)} nm`
           : `Firing at ${rangeNm.toFixed(1)} nm`;
         out.push({ type: "fire", jetId: me.id, targetId: target });
         firedPrimary = true;
+      } else if (fireRangeNm > 0 && rangeNm <= fireRangeNm) {
+        this.actionDetail = `Aligning nose for shot (${Math.round(offNoseRad / DEG)}° off)`;
       } else if (fireRangeNm > 0) {
         this.actionDetail = usingPosture
           ? `Closing to posture-shot range (${fireRangeNm.toFixed(1)} nm)`
@@ -459,24 +622,35 @@ export class DoctrineBot implements Controller {
     return { skill: this.skill.label, state: this.state, detail: this.actionDetail };
   }
 
-  private canPostureShot(me: Jet, enemy: Jet): boolean {
+  private postureEligibleAmmo(me: Jet): boolean {
     if (!this.skill.postureShot || me.missiles <= 1) return false;
     const initial = this.initialMissiles ?? me.missiles;
-    if (me.missiles < POSTURE_MISSILES_MIN && me.missiles < initial) return false;
+    return me.missiles >= POSTURE_MISSILES_MIN || me.missiles >= initial;
+  }
+
+  private canPostureShot(w: World, me: Jet, enemy: Jet, myInFlight: MissileTimer[]): boolean {
+    if (!this.postureEligibleAmmo(me)) return false;
+    if (myInFlight.some((tm) => this.postureMissileIds.has(tm.missileId) && tm.targetId === enemy.id))
+      return false;
+    if (this.postureRolledForMissiles !== me.missiles) {
+      this.postureRolledForMissiles = me.missiles;
+      this.postureAllowed = w.rng() < POSTURE_CHANCE;
+    }
+    if (!this.postureAllowed) return false;
     // Only posture-shot enemies that are hot/cranking/beaming, not already running away cold.
     return angleBetween(velocity(enemy), sub(me.pos, enemy.pos)) <= POSTURE_MAX_ASPECT_RAD;
   }
 
   /**
    * Range to shoot at: between Rne and Rmax, and closer with every non-posture missile used.
-   * Opening posture shots don't prematurely shrink the combat timeline; the final missile holds
-   * until near Rne so fights resolve cleanly instead of stalemating.
+   * Opening posture shots don't prematurely shrink the combat timeline; the final missile picks
+   * a uniform random fraction in [LAST_MISSILE_FRAC_MIN, LAST_MISSILE_FRAC_MAX].
    */
   private shotRangeNm(me: Jet, enemy: Jet): number {
     const totalUsed = Math.max(0, (this.initialMissiles ?? me.missiles) - me.missiles);
     const combatUsed = Math.max(0, totalUsed - this.postureShotsFired);
     let frac = Math.min(1, this.skill.shotFrac * this.shotScale) * SHOT_CLOSER_PER_MISSILE ** combatUsed;
-    if (me.missiles === 1) frac = Math.min(frac, LAST_MISSILE_FRAC);
+    if (me.missiles === 1) frac = Math.min(frac, this.lastMissileFrac);
     const aspect = angleBetween(velocity(enemy), sub(me.pos, enemy.pos));
     // Cranking keeps the enemy inside our threat envelope; don't let their temporary crank lock out follow-ups.
     const rmax =
@@ -519,20 +693,33 @@ export class DoctrineBot implements Controller {
   }
 
   private updateTimers(w: World, me: Jet, dt: number): void {
-    const newlyAdded = new Set<string>();
-    const liveIds = new Set<string>();
+    if (w.missiles.length === 0 && this.timers.size === 0) return;
+    let newlyAdded: Set<string> | null = null;
     for (const m of w.missiles) {
-      if (m.end) continue;
-      liveIds.add(m.id);
-      if (m.shooterId === me.id && !this.timers.has(m.id)) {
+      if (!m.end && m.shooterId === me.id && !this.timers.has(m.id)) {
         this.timers.set(m.id, startTimer(m, w.t));
+        if (!newlyAdded) newlyAdded = new Set();
         newlyAdded.add(m.id);
+        if (this.pendingPostureTarget === m.targetId) {
+          this.postureMissileIds.add(m.id);
+          this.pendingPostureTarget = null;
+        }
       }
     }
+    if (this.timers.size === 0) return;
+    if (w.missiles.length === 0) {
+      this.timers.clear();
+      this.pumpedFor.clear();
+      this.postureMissileIds.clear();
+      return;
+    }
+    const liveIds = new Set<string>();
+    for (const m of w.missiles) if (!m.end) liveIds.add(m.id);
     for (const id of this.timers.keys()) {
       if (!liveIds.has(id)) {
         this.timers.delete(id);
         this.pumpedFor.delete(id);
+        this.postureMissileIds.delete(id);
       }
     }
     for (const tm of this.timers.values()) {
@@ -545,8 +732,8 @@ export class DoctrineBot implements Controller {
           : tr
             ? trackAt(tr, w.t)
             : null;
-      const stepDt = newlyAdded.has(tm.missileId) ? 0 : dt;
-      if (known && (stepDt > 0 || newlyAdded.has(tm.missileId)))
+      const stepDt = newlyAdded?.has(tm.missileId) ? 0 : dt;
+      if (known && (stepDt > 0 || newlyAdded?.has(tm.missileId)))
         stepTimer(w.params.missile, tm, known, datalink, w.t, stepDt);
     }
   }
@@ -585,8 +772,19 @@ export class DoctrineBot implements Controller {
 
       let cached = this.oppZones.get(other.id);
       if (!cached || t - cached.at >= ZONE_EVERY_S) {
-        const zone = launchZone(w.params.missile, me, other);
-        cached = { at: t, rmaxNm: zone.rmaxNm, rneNm: zone.rneNm };
+        const res = inOpportunityZone(
+          w.params.missile,
+          me,
+          other,
+          OPP_SHOT_FRAC,
+          90,
+          cached && cached.rmaxNm > 0 ? { rmaxNm: cached.rmaxNm, rneNm: cached.rneNm } : undefined,
+        );
+        cached = {
+          at: cached ? t : t - phaseOffsetS(`${me.id}>${other.id}`, ZONE_EVERY_S),
+          rmaxNm: res.rmaxNm,
+          rneNm: res.rneNm,
+        };
         this.oppZones.set(other.id, cached);
       }
       if (cached.rmaxNm <= 0) continue;
@@ -616,7 +814,11 @@ export class DoctrineBot implements Controller {
     );
     const gimbalRad = w.params.radar.gimbalDeg * DEG;
     const prePitbullTargets = new Set(
-      myInFlight.filter((tm) => tm.pitbullAt === null || w.t < tm.pitbullAt).map((tm) => tm.targetId),
+      myInFlight
+        .filter(
+          (tm) => !this.postureMissileIds.has(tm.missileId) && (tm.pitbullAt === null || w.t < tm.pitbullAt),
+        )
+        .map((tm) => tm.targetId),
     );
     let best: string | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
@@ -643,6 +845,13 @@ export class DoctrineBot implements Controller {
       }
     }
     return best;
+  }
+
+  private flyCruise(me: Jet, baseThrottle: Jet["throttle"], preferSustain = false): Command[] {
+    const effort: Jet["effort"] =
+      this.conservingEnergy || (preferSustain && this.supportSustain) ? "sustain" : "normal";
+    const needAb = baseThrottle === "ab" || this.conservingEnergy;
+    return this.fly(me, needAb ? "ab" : baseThrottle, effort);
   }
 
   private fly(me: Jet, throttle: Jet["throttle"], effort: Jet["effort"]): Command[] {

@@ -1078,26 +1078,26 @@ export const fr = {
     scenarios: {
       duel: {
         title: "Duel face à face",
-        summary: "1v1 à 60 nm contre l'IA. Choisissez son niveau, ou laissez l'IA piloter aussi votre avion.",
+        summary: "1v1 à 70 nm contre l'IA. Choisissez son niveau, ou laissez l'IA piloter aussi votre avion.",
         lesson:
           "L'IA applique la doctrine BVR uniquement avec son propre radar et RWR : elle engage, tire sous une fraction du Rmax, crank pour soutenir son missile, pompe après pitbull (Normal et Difficile), et vire froid dès qu'un missile actif apparaît sur son RWR.",
       },
       "2v1": {
         title: "Patrouille (2) contre 1",
-        summary: "2v1 à 60 nm. Vous pilotez les deux appareils bleus contre un ennemi, ou observez IA vs IA.",
+        summary: "2v1 à 70 nm. Vous pilotez les deux appareils bleus contre un ennemi, ou observez IA vs IA.",
         lesson:
           "Deux contre un permet d'encercler l'ennemi (bracket) : séparez vos ailiers pour le forcer à défendre d'un côté pendant que l'autre pousse. Clic pour sélectionner, Maj+clic pour ajouter l'autre avion.",
       },
       "2v2": {
         title: "Patrouille (2) contre 2",
-        summary: "2v2 à 60 nm. Vous pilotez les deux bleus (un ou deux sélectionnés), ou observez IA vs IA.",
+        summary: "2v2 à 70 nm. Vous pilotez les deux bleus (un ou deux sélectionnés), ou observez IA vs IA.",
         lesson:
           "Chaque camp partage sa situation radar. Les IA répartissent les cibles et crank de part et d'autre. Clic pour sélectionner un avion, Maj+clic pour ajouter l'autre et donner des ordres aux deux.",
       },
       "4v2": {
         title: "Dispositif 4 (2×2) contre 2",
         summary:
-          "4v2 à 60 nm. Les bleus ont deux patrouilles de 2 (5 nm en ligne, 2e groupe 20 nm derrière) contre 2 ennemis.",
+          "4v2 à 70 nm. Les bleus ont deux patrouilles de 2 (5 nm en ligne, 2e groupe 20 nm derrière) contre 2 ennemis.",
         lesson:
           "Engagez avec la patrouille de tête pour forcer l'ennemi en défense pendant que la seconde patrouille 20 nm derrière exploite l'avantage ou couvre son repli.",
       },
@@ -1123,7 +1123,7 @@ export const fr = {
       support: {
         title: "Soutenir son tir",
         summary:
-          "Un drone cible vole vers vous et vire de 30° dix secondes après votre tir. Idéal à 35 000 ft.",
+          "Un drone cible vole vers vous et vire de 40° dix secondes après votre tir. Idéal à 35 000 ft.",
         lesson:
           "Avant le pitbull, votre missile ne connaît la position cible que tant que votre radar la suit. À 35 000 ft, tirez vers 30 nm et gardez le drone dans le cône radar (crank, ne virez pas froid) pour que le missile suive son virage.",
       },
@@ -1285,6 +1285,14 @@ export const fr = {
       labels: "Étiquettes",
       radarSectors: "Secteurs radar",
       sideView: "Vue latérale",
+      compass: {
+        aria: "Boussole de carte, {{deg}}° en haut",
+        dialTitle:
+          "Orientation de la carte : {{deg}}° en haut. Glisser pour pivoter, molette par pas, cliquer pour inverser Nord/Sud.",
+        rotateCcwTitle: "Pivoter la carte de 45° sens antihoraire (Maj 15° · touche [)",
+        rotateCwTitle: "Pivoter la carte de 45° sens horaire (Maj 15° · touche ])",
+        resetTitle: "Cliquer pour basculer Nord en haut (000°) / Sud en haut (180°), ou N / Maj+N",
+      },
       inspectAiAria: "Inspecter un avion IA",
       inspectAi: "Inspecter IA",
       noPlayerControl: "Aucun contrôle joueur",
@@ -1327,19 +1335,30 @@ export const fr = {
       flareBtn: "Leurres ({{count}})",
       flareTitle: "Suppr (visuel uniquement pour l'instant)",
       fox3Btn: "FOX 3{{target}}",
+      missilesLeft: "Missiles : {{n}}",
       missilesTitle: "Missiles",
       truthHiddenNote: "Vérité terrain (masquée si brouillard activé) :",
       fogMissilesNote: "Les missiles ennemis n'apparaissent que sur votre RWR une fois actifs.",
       eventsTitle: "Événements",
       watchControlsTitle: "Contrôles spectateur",
       controlsTitle: "Contrôles",
+      controlsDockAria: "Position des commandes",
+      controlsDragHint: "Glisser pour déplacer",
+      controlsDock: {
+        right: "Panneau droit",
+        bottom: "Barre inférieure",
+        topLeft: "Haut gauche",
+        bottomLeft: "Bas gauche",
+        float: "Flottant",
+      },
       watchControlsP1:
-        "<0>Clic</0> sur un avion pour inspecter son IA · <1>glisser</1> pour déplacer · <2>molette</2> pour zoomer",
-      watchControlsP2: "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> suivre",
+        "<0>Clic</0> sur un avion pour inspecter son IA · <1>glisser</1> pour déplacer · <2>Alt+glisser</2> / <3>clic milieu</3> pour pivoter · <4>molette</4> pour zoomer",
+      watchControlsP2:
+        "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>V</3> suivre · <4>[</4>/<5>]</5> pivoter · <6>N</6> nord",
       playerControlsP1:
-        "<0>Clic</0> sur votre avion (Maj ajoute) · <1>clic</1> sur un ennemi pour le cibler · <2>clic droit</2> sur la carte pour fixer le cap · <3>glisser</3> pour déplacer · <4>molette</4> pour zoomer",
+        "<0>Clic</0> sur votre avion (Maj ajoute) · <1>clic</1> sur un ennemi pour le cibler · <2>clic droit</2> sur la carte pour fixer le cap · <3>glisser</3> pour déplacer · <4>Alt+glisser</4> / <5>clic milieu</5> pour pivoter · <6>molette</6> pour zoomer",
       playerControlsP2:
-        "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> tirer · <4>H</4> face · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> froid · <10>←</10>/<11>→</11> cap ±10° · <12>↑</12>/<13>↓</13> altitude ±1 000 ft (<14>Maj</14> ou <15>PgUp</15>/<16>PgDn</16> ±5 000) · <17>L</17> palier · <18>T</18> gaz · <19>G</19> mode virage · <20>Inser</2> chaff · <21>Suppr</2> leurre · <22>V</2> suivre",
+        "<0>Espace</0> pause · <1>1</1>–<2>5</2> 1×–16× · <3>F</3> tirer · <4>H</4> face · <5>Q</5>/<6>E</6> crank · <7>A</7>/<8>D</8> notch · <9>C</9> froid · <10>←</10>/<11>→</11> cap ±10° · <12>↑</12>/<13>↓</13> altitude ±1 000 ft (<14>Maj</14> ou <15>PgUp</15>/<16>PgDn</16> ±5 000) · <17>L</17> palier · <18>T</18> gaz · <19>G</19> mode virage · <20>Inser</2> chaff · <21>Suppr</2> leurre · <22>V</2> suivre · <23>[</23>/<24>]</24> pivoter · <25>N</25> nord",
       helpEnergy:
         "Énergie : monter échange vitesse contre altitude, piquer la restitue (Énergie = hauteur + vitesse en pieds ; Ps = taux de gain). Le mode de virage règle la pente de montée (Maint. Vit. sans perte de Mach, Normal jusqu'à {{normalDeg}}°, Max jusqu'à {{maxDeg}}°). Plancher {{minAlt}} ft.",
       helpMap:

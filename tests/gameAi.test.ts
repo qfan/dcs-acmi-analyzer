@@ -1,17 +1,25 @@
 // Whole NPC fights take a few seconds each, hence the longer timeouts below.
 import { describe, expect, it } from "vitest";
-import { AI_SKILLS, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
+import { AI_SKILLS, AI_TICK_S, type AiSkillId, DoctrineBot } from "../src/game/ai/doctrine.ts";
 import { DEFAULT_AUTOPAUSE, GameSession } from "../src/game/engine/session.ts";
-import { applySnapshot, buildSnapshot, makeMirror, SnapshotCursor, worldShape } from "../src/game/engine/snapshot.ts";
-import { makeJet } from "../src/game/sim/aircraft.ts";
-import { NM } from "../src/game/sim/atmosphere.ts";
+import {
+  applySnapshot,
+  buildSnapshot,
+  makeMirror,
+  SnapshotCursor,
+  worldShape,
+} from "../src/game/engine/snapshot.ts";
+import { mach, makeJet } from "../src/game/sim/aircraft.ts";
+import { DEG, NM } from "../src/game/sim/atmosphere.ts";
 import { cloneParams, DEFAULT_PARAMS } from "../src/game/sim/params.ts";
 import { makeRng, randNormal } from "../src/game/sim/rng.ts";
 import { DEFAULT_OPTIONS, scenarioById } from "../src/game/sim/scenarios.ts";
 import { bearing, wrapPi } from "../src/game/sim/vec.ts";
+import { launchZone } from "../src/game/sim/wez.ts";
 import {
   awaitingCall,
   command,
+  desiredSteerHeading,
   jetById,
   step,
   type World,
@@ -113,7 +121,7 @@ describe("game: NPC knows only what its side can see", () => {
 
     // Missile continues chasing R1 far outside R2's illumination cone.
     const leftConeAt = w.t;
-    while (w.t < leftConeAt + 1.0) {
+    while (w.t < leftConeAt + w.params.radar.rwrHoldS + 1.0) {
       m.phase = "tracking";
       m.targetId = "R1";
       m.tof = 5;
@@ -122,7 +130,7 @@ describe("game: NPC knows only what its side can see", () => {
       step(w);
     }
     expect(m.end).toBeNull();
-    // Should exit defend promptly (< 1 s) instead of holding hard defendHoldS (~8 s) until the missile ends.
+    // Should exit defend promptly after RWR hold expires (< 1 s after rwrHoldS) instead of holding hard defendHoldS (~8 s).
     expect(npcOf(w, "R2").state).not.toBe("defend");
   });
 
@@ -163,6 +171,88 @@ describe("game: NPC knows only what its side can see", () => {
     step(w);
     expect(b1.targetId).not.toBe(first);
     expect(jetById(w, b1.targetId)?.alive).toBe(true);
+  });
+
+  it("decouples tactical AI to 10 Hz staggered ticks while waking immediately on launch, kill, and new RWR missiles", () => {
+    // 1. Staggered 10 Hz target acquisition across jets in 6v6.
+    const w6 = scenarioById("6v6").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    step(w6); // initial AI tick at t = 0 while opposing sides are 120 nm apart (out of 80 nm detect range)
+    expect(w6.jets.every((j) => j.targetId === null)).toBe(true);
+
+    // Move Red jets into detection range (65 nm, outside Rmax) and advance across one AI_TICK_S window (5 physics steps).
+    for (const r of w6.jets) {
+      if (r.side === "red") r.pos.y -= 55 * NM;
+    }
+    const acquireSteps = new Set<number>();
+    const prevNull = new Set(w6.jets.map((j) => j.id));
+    const subSteps = Math.round(AI_TICK_S / 0.02);
+    for (let k = 0; k < subSteps; k++) {
+      step(w6);
+      for (const j of w6.jets) {
+        if (prevNull.has(j.id) && j.targetId !== null) {
+          prevNull.delete(j.id);
+          acquireSteps.add(k);
+        }
+      }
+    }
+    expect(prevNull.size).toBe(0); // all 12 jets updated within one AI_TICK_S window
+    expect(acquireSteps.size).toBeGreaterThan(1); // staggered across multiple 0.02 s physics steps
+
+    // 2. Skips 4 intermediate 50 Hz steps between 10 Hz ticks, then updates cleanly on the 5th step.
+    const wWait = scenarioById("duel").build(P(), 25000, 1, { redSkill: "normal", blueAi: null });
+    const bWait = must(jetById(wWait, "B1"));
+    const rWait = must(jetById(wWait, "R1"));
+    const botWait = new DoctrineBot(AI_SKILLS.normal);
+    wWait.controllers.set("B1", botWait);
+    rWait.pos.y = 120 * NM; // outside detection range -> stays in "Searching"
+    bWait.targetId = null;
+    step(wWait);
+    expect(bWait.targetId).toBeNull();
+
+    // Advance until botWait hits a scheduled 10 Hz tick (resets throttle back to "mil").
+    bWait.throttle = "idle";
+    for (let i = 0; i < subSteps + 2 && bWait.throttle === "idle"; i++) step(wWait);
+    expect(bWait.throttle).toBe("mil");
+
+    // Bring R1 inside detection range immediately after that tick: next 4 steps (0.08 s) must skip.
+    rWait.pos.y = 40 * NM;
+    for (let k = 0; k < subSteps - 1; k++) {
+      expect(botWait.update(wWait, bWait)).toEqual([]);
+      step(wWait);
+      expect(bWait.targetId).toBeNull();
+    }
+    // 5th physics step reaches +AI_TICK_S: bot wakes up on schedule and acquires R1.
+    step(wWait);
+    expect(bWait.targetId).toBe("R1");
+
+    // 3. Immediate wakeups bypass the 10 Hz sleep on: (a) launch transition, (b) target death, (c) new RWR missile.
+    const wWake = scenarioById("duel").build(P(), 25000, 1, { redSkill: "hard", blueAi: null });
+    wWake.controllers.delete("R1");
+    const b1 = must(jetById(wWake, "B1"));
+    const r1 = must(jetById(wWake, "R1"));
+    const bot = new DoctrineBot({ ...AI_SKILLS.hard, reactionS: 0, postureShot: false });
+    wWake.controllers.set("B1", bot);
+    r1.pos.y = 20 * NM;
+
+    for (let i = 0; i < subSteps + 2 && wWake.missiles.length === 0; i++) step(wWake);
+    expect(wWake.missiles).toHaveLength(1);
+    expect(bot.state).toBe("commit");
+    step(wWake); // immediately wakes on the very next 0.02 s step when me.missiles changes
+    expect(bot.state).toBe("support");
+
+    // (b) Immediate wakeup on target death (drops from support to Searching on a single 0.02 s step).
+    r1.alive = false;
+    step(wWake);
+    expect(bot.state).toBe("commit");
+    expect(bot.status().detail).toBe("Searching — no radar track");
+
+    // (c) Immediate wakeup on unseen active missile appearing on RWR.
+    wWake.rwr.set("B1", [
+      { sourceId: "M99", kind: "missile", bearing: 0, lock: true, lastSeenAt: wWake.t, held: false },
+    ]);
+    const cmdsOnRwr = bot.update(wWake, b1);
+    expect(cmdsOnRwr.length).toBeGreaterThan(0);
+    expect(bot.state).toBe("defend");
   });
 });
 
@@ -207,8 +297,8 @@ describe("game: NPC vs NPC", () => {
     expect(must(jetById(human, "B2")).pos).toMatchObject({ x: 2.5 * NM, y: 0 });
     expect(must(jetById(human, "B3")).pos).toMatchObject({ x: -2.5 * NM, y: -20 * NM });
     expect(must(jetById(human, "B4")).pos).toMatchObject({ x: 2.5 * NM, y: -20 * NM });
-    expect(must(jetById(human, "R1")).pos).toMatchObject({ x: -2.5 * NM, y: 60 * NM });
-    expect(must(jetById(human, "R2")).pos).toMatchObject({ x: 2.5 * NM, y: 60 * NM });
+    expect(must(jetById(human, "R1")).pos).toMatchObject({ x: -2.5 * NM, y: 70 * NM });
+    expect(must(jetById(human, "R2")).pos).toMatchObject({ x: 2.5 * NM, y: 70 * NM });
     expect(must(jetById(human, "B1")).targetId).toBe("R1");
     expect(must(jetById(human, "B2")).targetId).toBe("R2");
     expect(must(jetById(human, "B3")).targetId).toBe("R1");
@@ -226,37 +316,51 @@ describe("game: NPC vs NPC", () => {
     }
   }, 60_000);
 
-  it("Hard NPC employs posture shots only when abundant (full load or >=8) and target is not cold", () => {
-    const setup = (skill: AiSkillId, missiles: number, redHdgDeg: number) => {
+  it("Hard NPC employs fire-and-forget posture shots ~30% of the time when abundant and target is not cold", () => {
+    const setup = (skill: AiSkillId, missiles: number, redHdgDeg: number, seed = 1, rangeNm = 40) => {
       const p = P();
       p.aircraft.missiles = missiles;
-      const w = scenarioById("duel").build(p, 25000, 1, { redSkill: skill, blueAi: skill });
+      const w = scenarioById("duel").build(p, 25000, seed, { redSkill: skill, blueAi: skill });
       w.controllers.delete("R1");
       const r1 = must(jetById(w, "R1"));
-      r1.pos.y = 40 * NM;
+      r1.pos.y = rangeNm * NM;
       r1.hdg = (redHdgDeg * Math.PI) / 180;
       command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
       return w;
     };
 
-    // Normal does not posture-shot a 50°-cranking enemy at 40 nm (collapsed Rmax ~18 nm).
-    const wNorm = setup("normal", 4, 130);
-    step(wNorm);
-    expect(wNorm.missiles).toHaveLength(0);
+    // Normal, 1-missile Hard, and Hard vs cold enemy never posture-shot across seeds.
+    for (let seed = 1; seed <= 10; seed++) {
+      const wNorm = setup("normal", 4, 130, seed);
+      step(wNorm);
+      expect(wNorm.missiles).toHaveLength(0);
 
-    // Hard with last missile (1) does not posture-shot, nor against a cold enemy (hdg 0°).
-    const wLast = setup("hard", 1, 130);
-    step(wLast);
-    expect(wLast.missiles).toHaveLength(0);
+      const wLast = setup("hard", 1, 130, seed);
+      step(wLast);
+      expect(wLast.missiles).toHaveLength(0);
 
-    const wCold = setup("hard", 4, 0);
-    step(wCold);
-    expect(wCold.missiles).toHaveLength(0);
+      const wCold = setup("hard", 4, 0, seed);
+      step(wCold);
+      expect(wCold.missiles).toHaveLength(0);
+    }
 
-    // Hard with full 4 missiles posture-shots shot #1 vs cranking enemy, then saves shot #2 (3 left).
-    const wFull = setup("hard", 4, 130);
-    step(wFull);
-    expect(wFull.missiles).toHaveLength(1);
+    // Full-load Hard posture-shots ~30% of the time, stays in commit (fire-and-forget), and stops below full load.
+    let postureCount = 0;
+    let firedWorld: World | null = null;
+    for (let seed = 1; seed <= 120; seed++) {
+      const w = setup("hard", 4, 130, seed);
+      step(w);
+      if (w.missiles.length === 1) {
+        postureCount++;
+        if (!firedWorld) firedWorld = w;
+      }
+    }
+    expect(postureCount).toBeGreaterThanOrEqual(20);
+    expect(postureCount).toBeLessThanOrEqual(52);
+
+    const wFull = must(firedWorld);
+    step(wFull); // stays in commit instead of cranking into support for a posture shot
+    expect(npcOf(wFull, "B1").state).toBe("commit");
     const b1 = must(jetById(wFull, "B1"));
     const r1 = must(jetById(wFull, "R1"));
     const cooldown = (
@@ -264,7 +368,7 @@ describe("game: NPC vs NPC", () => {
       b: { pos: { x: number; y: number; z: number } },
       r: { pos: { y: number } },
     ) => {
-      r.pos.y = b.pos.y + 68 * NM; // stay inside radar track range while holding outside WEZ during pump cooldown
+      r.pos.y = b.pos.y + 68 * NM; // stay inside radar track range while holding outside WEZ
       for (let i = 0; i < 900; i++) step(w);
     };
 
@@ -275,48 +379,69 @@ describe("game: NPC vs NPC", () => {
     for (let i = 0; i < 50; i++) step(wFull); // refresh zone cache (> ZONE_EVERY_S)
     expect(wFull.missiles).toHaveLength(1); // still 1: does not posture-shot with 3/4 left
 
-    // Hard carrying >= 8 missiles keeps posture-shotting down to 8, then conserves from 7.
-    const wHeavy = setup("hard", 9, 130);
-    step(wHeavy);
-    expect(must(jetById(wHeavy, "B1")).missiles).toBe(8);
-    const hb = must(jetById(wHeavy, "B1"));
-    const hr = must(jetById(wHeavy, "R1"));
-    must(wHeavy.missiles[0]).end = "spent";
-    cooldown(wHeavy, hb, hr);
+    // Hard carrying >= 8 missiles can posture-shot down to 8, then stops once below 8.
+    let wHeavy: World | null = null;
+    for (let seed = 1; seed <= 60; seed++) {
+      const w = setup("hard", 9, 130, seed, 45);
+      step(w);
+      if (w.missiles.length !== 1) continue;
+      const hb = must(jetById(w, "B1"));
+      const hr = must(jetById(w, "R1"));
+      must(w.missiles[0]).end = "spent";
+      cooldown(w, hb, hr);
+      hr.pos = { x: hb.pos.x, y: hb.pos.y + 45 * NM, z: hb.pos.z };
+      hb.hdg = 0;
+      for (let i = 0; i < 50; i++) step(w);
+      if (hb.missiles === 7) {
+        wHeavy = w;
+        break;
+      }
+    }
+    expect(wHeavy).not.toBeNull();
+    const hw = must(wHeavy);
+    const hb = must(jetById(hw, "B1"));
+    const hr = must(jetById(hw, "R1"));
+    must(hw.missiles[1]).end = "spent";
+    cooldown(hw, hb, hr);
     hr.pos = { x: hb.pos.x, y: hb.pos.y + 45 * NM, z: hb.pos.z };
     hb.hdg = 0;
-    for (let i = 0; i < 50; i++) step(wHeavy);
-    expect(hb.missiles).toBe(7); // fired posture shot #2 while 8 were onboard
-    must(wHeavy.missiles[1]).end = "spent";
-    cooldown(wHeavy, hb, hr);
-    hr.pos = { x: hb.pos.x, y: hb.pos.y + 45 * NM, z: hb.pos.z };
-    hb.hdg = 0;
-    for (let i = 0; i < 50; i++) step(wHeavy);
+    for (let i = 0; i < 50; i++) step(hw);
     expect(hb.missiles).toBe(7); // stops posture-shooting once below 8
-  });
+  }, 30_000);
 
   it("Hard NPC fires follow-up round inside WEZ even if opponent cranks after posture round", () => {
-    const p = P();
-    const w = scenarioById("duel").build(p, 25000, 1, { redSkill: "hard", blueAi: "hard" });
-    w.controllers.delete("R1");
+    let wPosture: World | null = null;
+    for (let seed = 1; seed <= 30; seed++) {
+      const p = P();
+      const w = scenarioById("duel").build(p, 25000, seed, { redSkill: "hard", blueAi: "hard" });
+      w.controllers.delete("R1");
+      const r1 = must(jetById(w, "R1"));
+      r1.pos.y = 45 * NM;
+      r1.hdg = (130 * Math.PI) / 180;
+      command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
+      step(w);
+      if (w.missiles.length === 1) {
+        wPosture = w;
+        break;
+      }
+    }
+    const w = must(wPosture);
     const b1 = must(jetById(w, "B1"));
     const r1 = must(jetById(w, "R1"));
-    r1.pos.y = 45 * NM;
-    r1.hdg = (130 * Math.PI) / 180;
-    command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
     step(w);
-    expect(w.missiles).toHaveLength(1); // posture shot #1
+    expect(npcOf(w, "B1").state).toBe("commit"); // posture shot stays commit (fire-and-forget)
 
     must(w.missiles[0]).end = "spent";
     r1.pos.y = b1.pos.y + 68 * NM;
     for (let i = 0; i < 900; i++) step(w);
-    // Re-stage round 2 with cranking opponent at 28 nm: well within WEZ, should shoot promptly.
+    // Re-stage round 2 with cranking opponent at 28 nm: well within WEZ, should shoot promptly and support.
     r1.pos = { x: b1.pos.x, y: b1.pos.y + 28 * NM, z: b1.pos.z };
     r1.hdg = (130 * Math.PI) / 180;
     command(w, { type: "steer", jetId: "R1", steer: { mode: "heading", hdg: r1.hdg } });
     b1.hdg = 0;
     for (let i = 0; i < 50; i++) step(w);
     expect(w.missiles).toHaveLength(2);
+    expect(npcOf(w, "B1").state).toBe("support");
   });
 
   it("both Hard NPCs fire on the opening merge instead of getting crank-locked out", () => {
@@ -324,7 +449,7 @@ describe("game: NPC vs NPC", () => {
       const w = scenarioById("duel").build(P(), 25000, seed, { redSkill: "hard", blueAi: "hard" });
       let bShot = false;
       let rShot = false;
-      for (let i = 0; i < 2000 && !w.outcome; i++) {
+      for (let i = 0; i < 5000 && !w.outcome; i++) {
         step(w);
         for (const m of w.missiles) {
           if (m.shooterId === "B1") bShot = true;
@@ -341,10 +466,10 @@ describe("game: NPC vs NPC", () => {
     const bot = npcOf(w, "B1");
     expect(bot.status()).toMatchObject({ skill: "Hard", state: "commit" });
     step(w);
-    expect(bot.status().detail).toMatch(/Closing to posture-shot range/);
+    expect(bot.status().detail).toMatch(/Closing to (posture-)?shot range/);
 
-    // Advance until B1 fires its posture shot and enters cranking support.
-    for (let i = 0; i < 2000 && bot.state === "commit"; i++) step(w);
+    // Advance until B1 fires a supported combat shot and enters cranking support.
+    for (let i = 0; i < 5000 && bot.state === "commit"; i++) step(w);
     expect(bot.state).toBe("support");
     const sup = bot.status();
     expect(sup.state).toBe("support");
@@ -544,6 +669,26 @@ describe("game: 6v6 infinite demo mode", () => {
     applySnapshot(mirror, buildSnapshot(session, ["blue"], cur));
     expect(mirror.missiles).toHaveLength(0);
   });
+
+  it("prunes onboard SideKnowledge missile timers once target and real missile are gone in infinite mode", () => {
+    const p = P();
+    const session = new GameSession("infinite", 25000, p, DEFAULT_AUTOPAUSE, 7, DEFAULT_OPTIONS);
+    const w = session.world;
+    w.controllers.clear();
+    const r1 = must(jetById(w, "R1"));
+    r1.pos.y = 40 * NM;
+    command(w, { type: "target", jetId: "B1", targetId: "R1" });
+    command(w, { type: "fire", jetId: "B1", targetId: "R1" });
+    session.advance(0.02);
+    expect(session.knowledge.blue.timers.has("M1")).toBe(true);
+
+    r1.alive = false;
+    must(w.missiles[0]).end = "spent";
+    session.advance(0.02);
+    expect(jetById(w, "R1")).toBeUndefined();
+    expect(w.missiles).toHaveLength(0);
+    expect(session.knowledge.blue.timers.has("M1")).toBe(false);
+  });
 });
 
 describe("game: target sorting and opportunity shots in line-abreast & trailing formations", () => {
@@ -652,5 +797,263 @@ describe("game: target sorting and opportunity shots in line-abreast & trailing 
     expect(b1.targetId).toBe("R1");
     expect(npcOf(w, "B1").state).toBe("support");
     expect(AI_SKILLS.hard.opportunityShot).toBe(true);
+  });
+});
+
+describe("game: NPC missile-change adaptations", () => {
+  it("conserves speed at 35,000 ft during support cranks and commit reversals instead of stalling", () => {
+    const w = scenarioById("duel").build(P(), 35000, 1, { redSkill: "normal", blueAi: "normal" });
+    w.controllers.delete("R1");
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos.y = 32 * NM;
+
+    // Wait for B1 to shoot and crank in SUPPORT for 25 s at 35,000 ft.
+    for (let i = 0; i < 200 && w.missiles.length === 0; i++) step(w);
+    step(w);
+    expect(npcOf(w, "B1").state).toBe("support");
+    let minSupportMach = mach(b1);
+    for (let i = 0; i < 1250; i++) {
+      // keep R1 ahead outside pitbull so B1 stays in support crank
+      r1.pos = { x: b1.pos.x, y: b1.pos.y + 30 * NM, z: b1.pos.z };
+      step(w);
+      minSupportMach = Math.min(minSupportMach, mach(b1));
+    }
+    expect(minSupportMach).toBeGreaterThan(0.75);
+
+    // Stage a 180° reversal in COMMIT from M0.85 at 35,000 ft (like exiting a pump).
+    const wRev = scenarioById("duel").build(P(), 35000, 1, { redSkill: "normal", blueAi: "normal" });
+    wRev.controllers.delete("R1");
+    const bRev = must(jetById(wRev, "B1"));
+    const rRev = must(jetById(wRev, "R1"));
+    rRev.pos.y = 65 * NM;
+    bRev.hdg = Math.PI;
+    bRev.speed = 0.85 * (bRev.speed / mach(bRev));
+    let minRevMach = mach(bRev);
+    for (let i = 0; i < 2000; i++) {
+      step(wRev);
+      minRevMach = Math.min(minRevMach, mach(bRev));
+    }
+    expect(minRevMach).toBeGreaterThan(0.72);
+    expect(mach(bRev)).toBeGreaterThan(0.8);
+  });
+
+  it("aligns nose within 25° before firing primary shots outside Rne, while firing immediately inside Rne", () => {
+    const w = scenarioById("duel").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    w.controllers.delete("R1");
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos = { x: 0, y: 30 * NM, z: b1.pos.z };
+    b1.hdg = 50 * DEG;
+
+    step(w);
+    expect(w.missiles).toHaveLength(0);
+    expect(npcOf(w, "B1").status().detail).toMatch(/Aligning nose for shot/);
+
+    let launchOffDeg = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 400 && w.missiles.length === 0; i++) {
+      step(w);
+      if (w.missiles.length > 0) {
+        const brg = bearing(b1.pos, r1.pos);
+        launchOffDeg = Math.abs(wrapPi(brg - b1.hdg)) / DEG;
+      }
+    }
+    expect(w.missiles).toHaveLength(1);
+    expect(launchOffDeg).toBeLessThanOrEqual(26);
+
+    // Inside Rne / pitbull range (8 nm), fires immediately even at 50° off-boresight.
+    const wClose = scenarioById("duel").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    wClose.controllers.delete("R1");
+    const bClose = must(jetById(wClose, "B1"));
+    const rClose = must(jetById(wClose, "R1"));
+    rClose.pos = { x: 0, y: 8 * NM, z: bClose.pos.z };
+    bClose.hdg = 50 * DEG;
+    step(wClose);
+    expect(wClose.missiles).toHaveLength(1);
+  });
+
+  it("varies final-missile launch range uniformly across seeds instead of mirroring at fixed Rne", () => {
+    const rangesNm: number[] = [];
+    let refRne = 0;
+    let refRmax = 0;
+    for (let seed = 1; seed <= 15; seed++) {
+      const w = scenarioById("duel").build(P(), 25000, seed, { redSkill: "normal", blueAi: "normal" });
+      w.controllers.delete("R1");
+      const b1 = must(jetById(w, "B1"));
+      const r1 = must(jetById(w, "R1"));
+      b1.missiles = 1;
+      r1.pos.y = 22 * NM;
+      if (seed === 1) {
+        const z = launchZone(w.params.missile, b1, r1);
+        refRne = z.rneNm;
+        refRmax = z.rmaxNm;
+      }
+      for (let i = 0; i < 2000 && w.missiles.length === 0; i++) step(w);
+      if (w.missiles.length === 1) {
+        rangesNm.push(Math.hypot(r1.pos.x - b1.pos.x, r1.pos.y - b1.pos.y) / NM);
+      }
+    }
+    expect(rangesNm).toHaveLength(15);
+    const minR = Math.min(...rangesNm);
+    const maxR = Math.max(...rangesNm);
+    expect(maxR - minR).toBeGreaterThan(3);
+    expect(minR).toBeGreaterThanOrEqual(refRne - 1);
+    expect(maxR).toBeLessThanOrEqual(refRne + 0.25 * (refRmax - refRne) + 1);
+  }, 30_000);
+
+  it("cranks supersonic SUPPORT shots in MIL/normal instead of locking AB/sustain at 1 g", () => {
+    const w = scenarioById("duel").build(P(), 25000, 1, { redSkill: "normal", blueAi: "normal" });
+    w.controllers.delete("R1");
+    const b1 = must(jetById(w, "B1"));
+    const r1 = must(jetById(w, "R1"));
+    r1.pos.y = 32 * NM;
+    b1.speed = 1.35 * (b1.speed / mach(b1));
+
+    for (let i = 0; i < 200 && w.missiles.length === 0; i++) step(w);
+    step(w); // transition to SUPPORT on the step after launch
+    expect(w.missiles).toHaveLength(1);
+    expect(npcOf(w, "B1").state).toBe("support");
+    expect(b1.throttle).toBe("mil");
+    expect(b1.effort).toBe("normal");
+
+    let peakMach = mach(b1);
+    for (let i = 0; i < 600; i++) {
+      // Keep R1 well ahead outside pitbull so B1 stays in SUPPORT throughout the 12 s crank.
+      r1.pos = { x: 0, y: b1.pos.y + 30 * NM, z: b1.pos.z };
+      step(w);
+      peakMach = Math.max(peakMach, mach(b1));
+    }
+    const crankOffDeg = Math.abs(wrapPi(b1.hdg)) / DEG;
+    expect(npcOf(w, "B1").state).toBe("support");
+    expect(b1.throttle).toBe("mil");
+    expect(b1.effort).toBe("normal");
+    expect(crankOffDeg).toBeGreaterThanOrEqual(35);
+    expect(peakMach).toBeLessThanOrEqual(1.36);
+    expect(mach(b1)).toBeLessThan(1.25);
+  });
+});
+
+describe("game: NPC notch defense and bank-blind cold turn completion", () => {
+  it("uses notch steer mode when notchChance = 1 and tries notch ~5% of the time with default skill", () => {
+    // Forced notch (notchChance = 1)
+    const wForced = scenarioById("duel").build(P(), 25000, 1, { redSkill: "hard", blueAi: null });
+    const bot = new DoctrineBot({ ...AI_SKILLS.hard, notchChance: 1 });
+    wForced.controllers.set("R1", bot);
+    const rForced = must(jetById(wForced, "R1"));
+    rForced.pos.y = 15 * NM;
+    rForced.missiles = 0;
+    expect(command(wForced, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    for (let i = 0; i < 2000 && bot.state !== "defend"; i++) step(wForced);
+    expect(bot.state).toBe("defend");
+    expect(rForced.steer.mode).toBe("notch");
+    expect(bot.status().detail).toMatch(/Notching active missile/);
+
+    // Statistical check across 200 seeds with default 5% notchChance (Hard skill).
+    let notchPicks = 0;
+    const n = 200;
+    for (let seed = 1; seed <= n; seed++) {
+      const w = scenarioById("duel").build(P(), 25000, seed, { redSkill: "hard", blueAi: null });
+      const red = must(jetById(w, "R1"));
+      red.pos.y = 15 * NM;
+      red.missiles = 0;
+      command(w, { type: "fire", jetId: "B1", targetId: "R1" });
+      for (let i = 0; i < 1500 && npcOf(w, "R1").state !== "defend" && !w.outcome; i++) step(w);
+      if (npcOf(w, "R1").state === "defend" && red.steer.mode === "notch") notchPicks++;
+    }
+    expect(notchPicks).toBeGreaterThanOrEqual(2);
+    expect(notchPicks).toBeLessThanOrEqual(25);
+  }, 30_000);
+
+  it("completes a cold turn to ~180 deg even when steep bank masks RWR past rwrHoldS", () => {
+    const p = P();
+    p.radar.rwrHoldS = 0.2;
+    const w = scenarioById("duel").build(p, 25000, 2, { redSkill: "hard", blueAi: null });
+    const coldBot = new DoctrineBot({ ...AI_SKILLS.hard, notchChance: 0, postureShot: false });
+    w.controllers.set("R1", coldBot);
+    const red = must(jetById(w, "R1"));
+    red.pos.y = 50 * NM;
+    expect(command(w, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    const m = must(w.missiles[0]);
+
+    for (let i = 0; i < 300 && coldBot.state !== "defend"; i++) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+    }
+    expect(coldBot.state).toBe("defend");
+
+    // Keep M1 active 6 nm due south of R1 while R1 turns through beam with steep >45 deg bank
+    // (long enough for the 0.2 s RWR hold to expire mid-turn). R1 must still complete ~180 deg turn.
+    let sawBankBlindDrop = false;
+    for (let i = 0; i < 1000; i++) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+      if (Math.abs(red.bank) > 45 * DEG && red.steer.mode === "heading") sawBankBlindDrop = true;
+    }
+    expect(sawBankBlindDrop).toBe(true);
+    expect(Math.abs(wrapPi(red.hdg - 0))).toBeLessThan(0.25);
+  });
+
+  it("holds steady cold offsetDeg and commanded heading when an active Fox-3 sits in the 120 deg bin or on bin borders", () => {
+    const w = scenarioById("duel").build(P(), 25000, 2, { redSkill: "hard", blueAi: null });
+    const coldBot = new DoctrineBot({ ...AI_SKILLS.hard, notchChance: 0, postureShot: false });
+    w.controllers.set("R1", coldBot);
+    const red = must(jetById(w, "R1"));
+    red.pos.y = 50 * NM;
+    expect(command(w, { type: "fire", jetId: "B1", targetId: "R1" })).toBeNull();
+    const m = must(w.missiles[0]);
+
+    // Keep M1 in the 120 deg RWR bin relative to R1 while R1 enters defend and maneuvers.
+    const placeRel = (relDeg: number) => {
+      const brg = red.hdg + relDeg * DEG;
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x + Math.sin(brg) * 6 * NM, y: red.pos.y + Math.cos(brg) * 6 * NM, z: red.pos.z };
+      m.vel = { x: -Math.sin(brg) * 800, y: -Math.cos(brg) * 800, z: 0 };
+    };
+    for (let i = 0; i < 300 && coldBot.state !== "defend"; i++) {
+      placeRel(120);
+      step(w);
+    }
+    expect(coldBot.state).toBe("defend");
+
+    const offsets = new Set<number>();
+    for (let i = 0; i < 100; i++) {
+      placeRel(120);
+      step(w);
+      if (red.steer.mode === "relative") offsets.add(red.steer.offsetDeg);
+    }
+    // 120 deg bin is cleanly past the 115 deg threshold, so offsetDeg stays 180 (no 160/180 toggle).
+    expect([...offsets]).toEqual([180]);
+
+    // Now let R1 flee cold against M1 fixed due south starting on the 175 deg bin border.
+    red.hdg = 5 * DEG;
+    m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+    m.vel = { x: 0, y: 800, z: 0 };
+    step(w);
+    let prevCmd = desiredSteerHeading(w, red);
+    let cmdFlips = 0;
+    for (let i = 0; i < 150; i++) {
+      m.phase = "tracking";
+      m.targetId = red.id;
+      m.tof = 5;
+      m.pos = { x: red.pos.x, y: red.pos.y - 6 * NM, z: red.pos.z };
+      m.vel = { x: 0, y: 800, z: 0 };
+      step(w);
+      const nextCmd = desiredSteerHeading(w, red);
+      if (Math.abs(wrapPi(nextCmd - prevCmd)) > 1 * DEG) {
+        cmdFlips++;
+        prevCmd = nextCmd;
+      }
+    }
+    expect(cmdFlips).toBeLessThanOrEqual(2);
   });
 });

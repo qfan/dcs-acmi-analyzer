@@ -19,6 +19,8 @@ import {
   type GameEvent,
   makeWorld,
   type Outcome,
+  type RwrContact,
+  rwrContacts,
   type World,
 } from "../sim/world.ts";
 import type { GameSession } from "./session.ts";
@@ -48,6 +50,7 @@ export interface Snapshot {
   decoys: Decoy[];
   radarTrack: string[];
   radarBreak: [string, number][];
+  rwr: [string, RwrContact[]][];
   outcome: Outcome | null;
   callAt: number | null;
   paused: boolean;
@@ -115,6 +118,11 @@ export function buildSnapshot(s: GameSession, sides: Side[], cur: SnapshotCursor
   cur.decoySeq = w.decoySeq;
   const know: Partial<Record<Side, KnowView>> = {};
   for (const side of sides) know[side] = knowView(w, s.knowledge[side]);
+  const sideSet = new Set(sides);
+  const rwr: [string, RwrContact[]][] = [];
+  for (const j of w.jets) {
+    if (j.alive && sideSet.has(j.side)) rwr.push([j.id, rwrContacts(w, j).map((c) => ({ ...c }))]);
+  }
   const npc: Record<string, NpcView> = {};
   for (const [id, c] of w.controllers)
     if (c instanceof DoctrineBot)
@@ -128,7 +136,8 @@ export function buildSnapshot(s: GameSession, sides: Side[], cur: SnapshotCursor
     eventsFrom: from,
     decoys,
     radarTrack: [...w.radarTrack].filter(([, v]) => v).map(([k]) => k),
-    radarBreak: [...w.radarBreak],
+    radarBreak: w.radarBreak.size === 0 ? [] : [...w.radarBreak].filter(([, until]) => until > w.t),
+    rwr,
     outcome: w.outcome,
     callAt: w.callAt,
     paused: s.paused,
@@ -208,6 +217,7 @@ export function applySnapshot(w: World, snap: Snapshot): GameEvent[] {
   }
   w.radarTrack = new Map(snap.radarTrack.map((id) => [id, true]));
   w.radarBreak = new Map(snap.radarBreak);
+  w.rwr = new Map(snap.rwr ?? []);
   w.outcome = snap.outcome;
   w.callAt = snap.callAt;
   return snap.eventsFrom <= next ? fresh : [];
@@ -363,6 +373,27 @@ const unpackDecoy = ([seq, kind, jetId, side, t0, px, py, pz, vx, vy, vz]: NetDe
   rolled: true,
 });
 
+/** An RWR contact on the wire: sourceId, kind (0 radar, 1 missile), bearing, lock (0/1), lastSeenAt, held (0/1). */
+type NetRwrContact = [string, 0 | 1, number, 0 | 1, number, 0 | 1];
+
+const packRwr = (c: RwrContact): NetRwrContact => [
+  c.sourceId,
+  c.kind === "radar" ? 0 : 1,
+  r4(c.bearing),
+  c.lock ? 1 : 0,
+  r4(c.lastSeenAt),
+  c.held ? 1 : 0,
+];
+
+const unpackRwr = ([sourceId, kind, bearing, lock, lastSeenAt, held]: NetRwrContact): RwrContact => ({
+  sourceId,
+  kind: kind === 0 ? "radar" : "missile",
+  bearing,
+  lock: lock === 1,
+  lastSeenAt,
+  held: held === 1,
+});
+
 /** A smaller snapshot for when the full one is too big: no NPC panels, no track extrapolation. */
 export function slimSnapshot(snap: Snapshot): Snapshot {
   const know: Snapshot["know"] = {};
@@ -376,8 +407,9 @@ export function snapshotToJson(snap: Snapshot): string {
   const know: Record<string, unknown> = {};
   for (const [side, k] of Object.entries(snap.know) as [Side, KnowView][])
     know[side] = { ...k, timers: k.timers.map(packTimer) };
+  const rwr = snap.rwr.map(([id, list]) => [id, list.map(packRwr)] as const);
   return JSON.stringify(
-    { ...snap, missiles: snap.missiles.map(packMissile), decoys: snap.decoys.map(packDecoy), know },
+    { ...snap, missiles: snap.missiles.map(packMissile), decoys: snap.decoys.map(packDecoy), rwr, know },
     round,
   );
 }
@@ -387,6 +419,10 @@ export function snapshotFromNet(raw: unknown): Snapshot {
   const snap = raw as Snapshot;
   snap.missiles = (snap.missiles as unknown as NetMissile[]).map(unpackMissile);
   snap.decoys = (snap.decoys as unknown as NetDecoy[]).map(unpackDecoy);
+  snap.rwr = ((snap.rwr as unknown as [string, NetRwrContact[]][] | undefined) ?? []).map(([id, list]) => [
+    id,
+    list.map(unpackRwr),
+  ]);
   for (const k of Object.values(snap.know) as KnowView[])
     k.timers = (k.timers as unknown as NetTimer[]).map(unpackTimer);
   return snap;

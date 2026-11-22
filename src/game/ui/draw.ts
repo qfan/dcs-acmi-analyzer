@@ -1,10 +1,11 @@
 /** Top-down canvas renderer for the game, in the style of the viewer's 2D map. */
 import i18n from "../../i18n/index.ts";
-import { niceStep, toScreen, type View } from "../../map/render.ts";
-import { desiredHeading, type Jet, mach, velocity, verticalSpeed } from "../sim/aircraft.ts";
+import { niceStep } from "../../map/render.ts";
+import { type Jet, mach, velocity, verticalSpeed } from "../sim/aircraft.ts";
 import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type Missile, missileMach } from "../sim/missile.ts";
-import { jetById, rwrContacts, steerThreatPos, type World } from "../sim/world.ts";
+import { desiredSteerHeading, jetById, rwrContacts, type World } from "../sim/world.ts";
+import { type GameView, screenHeading, toScreen, toWorld } from "./camera.ts";
 import type { SessionView } from "./view.ts";
 
 export const COLORS = {
@@ -38,6 +39,7 @@ function label(
   y: number,
   color: string,
   align: CanvasTextAlign = "left",
+  commandFlash = 0,
 ) {
   ctx.textAlign = align;
   ctx.lineWidth = 3;
@@ -45,26 +47,52 @@ function label(
   ctx.strokeText(text, x, y);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
+  if (commandFlash > 0) {
+    ctx.fillStyle = commandFlashColor(commandFlash);
+    ctx.fillText(text, x, y);
+  }
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, v: View) {
+const commandFlashColor = (strength: number) => `rgba(251,191,36,${strength})`;
+
+function drawGrid(ctx: CanvasRenderingContext2D, v: GameView) {
+  if (v.w <= 0 || v.h <= 0 || !(v.scale > 0)) return;
   const stepM = niceStep(110 / v.scale / NM) * NM;
-  const x0 = v.cx - v.w / 2 / v.scale;
-  const x1 = v.cx + v.w / 2 / v.scale;
-  const y0 = v.cy - v.h / 2 / v.scale;
-  const y1 = v.cy + v.h / 2 / v.scale;
+  const corners = [toWorld(v, 0, 0), toWorld(v, v.w, 0), toWorld(v, v.w, v.h), toWorld(v, 0, v.h)];
+  let x0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
+  for (const [wx, wy] of corners) {
+    if (wx < x0) x0 = wx;
+    if (wx > x1) x1 = wx;
+    if (wy < y0) y0 = wy;
+    if (wy > y1) y1 = wy;
+  }
+  const axisAligned = Math.abs(Math.sin(2 * v.rot)) < 1e-6;
+  const snap = (p: number) => Math.round(p) + 0.5;
   ctx.strokeStyle = COLORS.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = Math.ceil(x0 / stepM) * stepM; x <= x1; x += stepM) {
-    const [sx] = toScreen(v, x, 0);
-    ctx.moveTo(Math.round(sx) + 0.5, 0);
-    ctx.lineTo(Math.round(sx) + 0.5, v.h);
+    let [sx0, sy0] = toScreen(v, x, y0);
+    let [sx1, sy1] = toScreen(v, x, y1);
+    if (axisAligned) {
+      if (Math.abs(sx0 - sx1) < 1e-3) sx0 = sx1 = snap(sx0);
+      else sy0 = sy1 = snap(sy0);
+    }
+    ctx.moveTo(sx0, sy0);
+    ctx.lineTo(sx1, sy1);
   }
   for (let y = Math.ceil(y0 / stepM) * stepM; y <= y1; y += stepM) {
-    const [, sy] = toScreen(v, 0, y);
-    ctx.moveTo(0, Math.round(sy) + 0.5);
-    ctx.lineTo(v.w, Math.round(sy) + 0.5);
+    let [sx0, sy0] = toScreen(v, x0, y);
+    let [sx1, sy1] = toScreen(v, x1, y);
+    if (axisAligned) {
+      if (Math.abs(sy0 - sy1) < 1e-3) sy0 = sy1 = snap(sy0);
+      else sx0 = sx1 = snap(sx0);
+    }
+    ctx.moveTo(sx0, sy0);
+    ctx.lineTo(sx1, sy1);
   }
   ctx.stroke();
   // Scale bar
@@ -84,12 +112,12 @@ function drawGrid(ctx: CanvasRenderingContext2D, v: View) {
 }
 
 /** Radar coverage: shaded ± gimbal out to the TWS lock range, dashed out to detection range. */
-function drawRadar(ctx: CanvasRenderingContext2D, v: View, w: World, j: Jet, strong: boolean) {
+function drawRadar(ctx: CanvasRenderingContext2D, v: GameView, w: World, j: Jet, strong: boolean) {
   const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
   const r = w.params.radar.rangeNm * NM * v.scale;
   const g = w.params.radar.gimbalDeg * DEG;
-  // Canvas angles: 0 = +x (east), clockwise positive (y down). Heading 0 = north = −π/2.
-  const a = j.hdg - Math.PI / 2;
+  // Canvas angles: 0 = +x (east), clockwise positive (y down). Screen up = −π/2.
+  const a = screenHeading(j.hdg, v.rot) - Math.PI / 2;
   ctx.beginPath();
   ctx.moveTo(sx, sy);
   ctx.arc(sx, sy, r, a - g, a + g);
@@ -120,29 +148,47 @@ function drawRadar(ctx: CanvasRenderingContext2D, v: View, w: World, j: Jet, str
 
 function drawTrail(
   ctx: CanvasRenderingContext2D,
-  v: View,
+  v: GameView,
   pts: { x: number; y: number }[],
   head: { x: number; y: number } | null,
   color: string,
   width: number,
 ) {
   if (pts.length === 0) return;
-  ctx.beginPath();
-  pts.forEach((p, i) => {
-    const [sx, sy] = toScreen(v, p.x, p.y);
-    if (i === 0) ctx.moveTo(sx, sy);
+  const hw = v.w / 2;
+  const hh = v.h / 2;
+  const { cx, cy, scale } = v;
+  const c = Math.cos(v.rot);
+  const s = Math.sin(v.rot);
+  const moveOrLine = (px: number, py: number, move: boolean) => {
+    const dx = px - cx;
+    const dy = py - cy;
+    const sx = hw + (dx * c - dy * s) * scale;
+    const sy = hh - (dx * s + dy * c) * scale;
+    if (move) ctx.moveTo(sx, sy);
     else ctx.lineTo(sx, sy);
-  });
-  if (head) {
-    const [sx, sy] = toScreen(v, head.x, head.y);
-    ctx.lineTo(sx, sy);
+  };
+  ctx.beginPath();
+  const p0 = pts[0] as { x: number; y: number };
+  moveOrLine(p0.x, p0.y, true);
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i] as { x: number; y: number };
+    moveOrLine(p.x, p.y, false);
   }
+  if (head) moveOrLine(head.x, head.y, false);
   ctx.strokeStyle = color;
   ctx.lineWidth = width;
   ctx.stroke();
 }
 
-function drawJet(ctx: CanvasRenderingContext2D, v: View, j: Jet, selected: boolean, targeted: boolean) {
+function drawJet(
+  ctx: CanvasRenderingContext2D,
+  v: GameView,
+  j: Jet,
+  selected: boolean,
+  targeted: boolean,
+  commandFlash: number,
+) {
   const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
   const col = j.alive ? sideCol(j.side) : COLORS.dead;
   if (!j.alive) {
@@ -158,7 +204,7 @@ function drawJet(ctx: CanvasRenderingContext2D, v: View, j: Jet, selected: boole
   }
   ctx.save();
   ctx.translate(sx, sy);
-  ctx.rotate(j.hdg);
+  ctx.rotate(screenHeading(j.hdg, v.rot));
   ctx.beginPath();
   ctx.moveTo(0, -11);
   ctx.lineTo(7, 8);
@@ -167,6 +213,10 @@ function drawJet(ctx: CanvasRenderingContext2D, v: View, j: Jet, selected: boole
   ctx.closePath();
   ctx.fillStyle = col;
   ctx.fill();
+  if (commandFlash > 0) {
+    ctx.fillStyle = commandFlashColor(commandFlash);
+    ctx.fill();
+  }
   ctx.strokeStyle = COLORS.halo;
   ctx.lineWidth = 1;
   ctx.stroke();
@@ -197,7 +247,7 @@ function drawJet(ctx: CanvasRenderingContext2D, v: View, j: Jet, selected: boole
   }
 }
 
-function drawMissile(ctx: CanvasRenderingContext2D, v: View, w: World, m: Missile, labels: boolean) {
+function drawMissile(ctx: CanvasRenderingContext2D, v: GameView, w: World, m: Missile, labels: boolean) {
   const [sx, sy] = toScreen(v, m.pos.x, m.pos.y);
   const col = sideCol(m.side);
   const tgt = jetById(w, m.targetId);
@@ -261,7 +311,7 @@ function drawMissile(ctx: CanvasRenderingContext2D, v: View, w: World, m: Missil
 }
 
 /** Released chaff (grey specks) and flares (orange), fading out. */
-function drawDecoys(ctx: CanvasRenderingContext2D, v: View, s: SessionView) {
+function drawDecoys(ctx: CanvasRenderingContext2D, v: GameView, s: SessionView) {
   const w = s.world;
   for (const d of w.decoys) {
     if (!s.sees(d.jetId)) continue;
@@ -294,7 +344,7 @@ const RWR_R = 26;
  * when it is locked on you. With fog of war on, missile ticks also get a strobe line, since the
  * missile itself is hidden.
  */
-function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: SessionView, j: Jet) {
+function drawRwr(ctx: CanvasRenderingContext2D, v: GameView, s: SessionView, j: Jet) {
   const contacts = rwrContacts(s.world, j);
   const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
   ctx.strokeStyle = contacts.length > 0 ? "rgba(219,227,238,0.35)" : "rgba(219,227,238,0.12)";
@@ -304,8 +354,9 @@ function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: SessionView, j: Jet)
   ctx.stroke();
   const blink = Math.floor(performance.now() / 250) % 2 === 0;
   for (const c of contacts) {
-    const ux = Math.sin(c.bearing);
-    const uy = -Math.cos(c.bearing);
+    const b = screenHeading(c.bearing, v.rot);
+    const ux = Math.sin(b);
+    const uy = -Math.cos(b);
     if (c.kind === "radar") {
       ctx.strokeStyle = COLORS.rwrRadar;
       ctx.lineWidth = 3;
@@ -339,7 +390,7 @@ function drawRwr(ctx: CanvasRenderingContext2D, v: View, s: SessionView, j: Jet)
 /** Last position where your side saw a hidden enemy (fog of war). */
 function drawGhost(
   ctx: CanvasRenderingContext2D,
-  v: View,
+  v: GameView,
   s: SessionView,
   j: Jet,
   labels: boolean,
@@ -349,7 +400,7 @@ function drawGhost(
   const [sx, sy] = toScreen(v, g.x, g.y);
   ctx.save();
   ctx.translate(sx, sy);
-  ctx.rotate(g.hdg);
+  ctx.rotate(screenHeading(g.hdg, v.rot));
   ctx.beginPath();
   ctx.moveTo(0, -11);
   ctx.lineTo(7, 8);
@@ -372,7 +423,7 @@ function drawGhost(
 
 export function drawScene(
   ctx: CanvasRenderingContext2D,
-  v: View,
+  v: GameView,
   s: SessionView,
   labels: boolean,
   radarSectors = true,
@@ -418,6 +469,10 @@ export function drawScene(
     const dist = Math.hypot(tgtPos.x - p.pos.x, tgtPos.y - p.pos.y);
     const ux = dist > 1 ? (tgtPos.x - p.pos.x) / dist : 0;
     const uy = dist > 1 ? (tgtPos.y - p.pos.y) / dist : 1;
+    const c = Math.cos(v.rot);
+    const sn = Math.sin(v.rot);
+    const sdx = ux * c - uy * sn;
+    const sdy = -(ux * sn + uy * c);
     const z = s.zone?.jetId === p.id && s.zone.targetId === tgt.id ? s.zone.zone : null;
     if (z) {
       for (const [nm, col, name] of [
@@ -426,8 +481,8 @@ export function drawScene(
       ] as const) {
         if (nm <= 0) continue;
         const [tx, ty] = toScreen(v, p.pos.x + ux * nm * NM, p.pos.y + uy * nm * NM);
-        const nx = -uy * 7;
-        const ny = -ux * 7;
+        const nx = sdy * 7;
+        const ny = -sdx * 7;
         ctx.strokeStyle = col;
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -445,13 +500,14 @@ export function drawScene(
   // Commanded heading of own jets: where they are turning to.
   for (const j of w.jets) {
     if (!j.alive || j.side !== s.side) continue;
-    const hdg = desiredHeading(j, steerThreatPos(w, j));
+    const hdg = desiredSteerHeading(w, j);
+    const sh = screenHeading(hdg, v.rot);
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     ctx.strokeStyle = "rgba(219,227,238,0.35)";
     ctx.setLineDash([3, 4]);
     ctx.beginPath();
     ctx.moveTo(sx, sy);
-    ctx.lineTo(sx + Math.sin(hdg) * 60, sy - Math.cos(hdg) * 60);
+    ctx.lineTo(sx + Math.sin(sh) * 60, sy - Math.cos(sh) * 60);
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -460,6 +516,7 @@ export function drawScene(
 
   for (const j of w.jets) if (j.alive && j.side === s.side) drawRwr(ctx, v, s, j);
 
+  const now = performance.now();
   const targets = new Set<string>();
   for (const id of s.selected) {
     const t = jetById(w, id)?.targetId;
@@ -471,13 +528,14 @@ export function drawScene(
       if (g) hits.push(g);
       continue;
     }
-    drawJet(ctx, v, j, s.selected.has(j.id), targets.has(j.id));
+    const commandFlash = j.alive ? s.commandFlash(j.id, now) : 0;
+    drawJet(ctx, v, j, s.selected.has(j.id), targets.has(j.id), commandFlash);
     const [sx, sy] = toScreen(v, j.pos.x, j.pos.y);
     hits.push({ id: j.id, sx, sy });
     if (labels) {
       ctx.font = "11px system-ui, sans-serif";
       const col = j.alive ? sideCol(j.side) : COLORS.dead;
-      label(ctx, j.callsign, sx + 14, sy - 4, col);
+      label(ctx, j.callsign, sx + 14, sy - 4, col, "left", commandFlash);
       if (j.alive)
         label(
           ctx,
@@ -485,6 +543,8 @@ export function drawScene(
           sx + 14,
           sy + 9,
           `${col}cc`,
+          "left",
+          commandFlash,
         );
     }
   }
@@ -511,7 +571,7 @@ const SIDE_H = 150;
  * to its target (or south → north when nothing is targeted). Shows what fog of war allows: your
  * jets, detected or last-seen bandits, and missiles only when fog is off.
  */
-function drawSideView(ctx: CanvasRenderingContext2D, v: View, s: SessionView) {
+function drawSideView(ctx: CanvasRenderingContext2D, v: GameView, s: SessionView) {
   const w = s.world;
   const pw = Math.min(SIDE_W, v.w * 0.45);
   const ph = SIDE_H;
