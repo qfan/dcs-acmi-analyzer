@@ -22,7 +22,7 @@ import { launchMissile, missileMach, stepMissile } from "../src/game/sim/missile
 import { cloneParams, DEFAULT_PARAMS, type GameParams, mergeParams } from "../src/game/sim/params.ts";
 import { scenarioById } from "../src/game/sim/scenarios.ts";
 import { add, scale, wrap2Pi, wrapPi } from "../src/game/sim/vec.ts";
-import { launchZone } from "../src/game/sim/wez.ts";
+import { inOpportunityZone, launchBounds, launchRmaxNm, launchZone } from "../src/game/sim/wez.ts";
 import {
   command,
   desiredSteerHeading,
@@ -991,5 +991,48 @@ describe("game: RWR elevation cone, signal hold, 10-deg binning, and periodic au
       }
     }
     expect(changes).toBeLessThanOrEqual(2);
+  });
+
+  it("launchBounds, launchRmaxNm, warm-started launchZone, and inOpportunityZone match cold launchZone", () => {
+    const p = P();
+    for (const altFt of [5000, 25000, 35000]) {
+      for (const sMach of [0.9, 1.2]) {
+        for (const tHdg of [0, 120, 180, 230]) {
+          for (const rangeNm of [5, 22, 35, 50]) {
+            const shooter = jetAt(p, altFt, sMach, "blue", 0, 0);
+            const target = jetAt(p, altFt, 0.9, "red", rangeNm * NM, tHdg);
+            const cold = launchZone(p.missile, shooter, target);
+            const bounds = launchBounds(p.missile, shooter, target);
+            const rmaxOnly = launchRmaxNm(p.missile, shooter, target);
+            const warm = launchZone(p.missile, shooter, target, 90, {
+              rmaxNm: cold.rmaxNm + 1.0,
+              rneNm: cold.rneNm - 1.0,
+            });
+            const opp = inOpportunityZone(p.missile, shooter, target, 0.45);
+            const goodCold = cold.rneNm + 0.45 * Math.max(0, cold.rmaxNm - cold.rneNm);
+            expect(bounds.rmaxNm).toBe(cold.rmaxNm);
+            expect(bounds.rneNm).toBe(cold.rneNm);
+            expect(rmaxOnly).toBe(cold.rmaxNm);
+            expect(Math.abs(warm.rmaxNm - cold.rmaxNm)).toBeLessThanOrEqual(0.2);
+            expect(Math.abs(warm.rneNm - cold.rneNm)).toBeLessThanOrEqual(0.2);
+            expect(opp.inZone).toBe(cold.rmaxNm > 0 && cold.rangeNm <= goodCold);
+          }
+        }
+      }
+    }
+  });
+
+  it("prunes expired radarBreak entries on step and omits expired ones from snapshots", () => {
+    const s = new GameSession("duel", 25000, P(), DEFAULT_AUTOPAUSE, 1);
+    s.world.controllers.clear();
+    s.world.radarBreak.set("B1>R1", s.world.t + 0.4);
+    s.world.radarBreak.set("R1>B1", s.world.t - 0.1);
+    const snap0 = buildSnapshot(s, ["blue"], new SnapshotCursor());
+    expect(snap0.radarBreak).toEqual([["B1>R1", s.world.t + 0.4]]);
+
+    for (let i = 0; i < 3; i++) s.advance(0.2);
+    expect(s.world.radarBreak.size).toBe(0);
+    const snap1 = buildSnapshot(s, ["blue"], new SnapshotCursor());
+    expect(snap1.radarBreak).toEqual([]);
   });
 });

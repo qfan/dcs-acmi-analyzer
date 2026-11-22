@@ -587,6 +587,26 @@ describe("game: 6v6 infinite demo mode", () => {
     applySnapshot(mirror, buildSnapshot(session, ["blue"], cur));
     expect(mirror.missiles).toHaveLength(0);
   });
+
+  it("prunes onboard SideKnowledge missile timers once target and real missile are gone in infinite mode", () => {
+    const p = P();
+    const session = new GameSession("infinite", 25000, p, DEFAULT_AUTOPAUSE, 7, DEFAULT_OPTIONS);
+    const w = session.world;
+    w.controllers.clear();
+    const r1 = must(jetById(w, "R1"));
+    r1.pos.y = 40 * NM;
+    command(w, { type: "target", jetId: "B1", targetId: "R1" });
+    command(w, { type: "fire", jetId: "B1", targetId: "R1" });
+    session.advance(0.02);
+    expect(session.knowledge.blue.timers.has("M1")).toBe(true);
+
+    r1.alive = false;
+    must(w.missiles[0]).end = "spent";
+    session.advance(0.02);
+    expect(jetById(w, "R1")).toBeUndefined();
+    expect(w.missiles).toHaveLength(0);
+    expect(session.knowledge.blue.timers.has("M1")).toBe(false);
+  });
 });
 
 describe("game: target sorting and opportunity shots in line-abreast & trailing formations", () => {

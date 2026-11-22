@@ -136,7 +136,7 @@ export function buildSnapshot(s: GameSession, sides: Side[], cur: SnapshotCursor
     eventsFrom: from,
     decoys,
     radarTrack: [...w.radarTrack].filter(([, v]) => v).map(([k]) => k),
-    radarBreak: [...w.radarBreak],
+    radarBreak: w.radarBreak.size === 0 ? [] : [...w.radarBreak].filter(([, until]) => until > w.t),
     rwr,
     outcome: w.outcome,
     callAt: w.callAt,

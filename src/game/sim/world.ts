@@ -13,11 +13,18 @@ import {
   velocity,
 } from "./aircraft.ts";
 import { DEG, NM } from "./atmosphere.ts";
-import { chanceInStep, notchEffect } from "./countermeasures.ts";
-import { launchMissile, type Missile, type MissileEvent, stepMissile, type TargetTruth } from "./missile.ts";
+import { chanceInStep, notchEffectRaw } from "./countermeasures.ts";
+import {
+  launchMissile,
+  type Missile,
+  type MissileEvent,
+  type SeekerEcm,
+  stepMissileFast,
+  type TargetTruth,
+} from "./missile.ts";
 import type { GameParams } from "./params.ts";
 import { makeRng, type Rng } from "./rng.ts";
-import { add, angleBetween, bearing, headingVec, len, scale, sub, type V3, wrap2Pi, wrapPi } from "./vec.ts";
+import { add, bearing, len, scale, sub, type V3, wrap2Pi, wrapPi } from "./vec.ts";
 
 export const SIM_DT = 0.02;
 /** Maximum distance (nm) a jet may travel from its initial position before counting as a loss. */
@@ -169,10 +176,16 @@ export const jetById = (w: World | null | undefined, id: string | null | undefin
 /** True when `shooter`'s radar cone covers `pos` out to `rangeNm`. */
 export function radarCoversPos(w: World, shooter: Jet, pos: V3, rangeNm: number): boolean {
   if (!shooter.alive) return false;
-  const los = sub(pos, shooter.pos);
-  if (len(los) > rangeNm * NM) return false;
+  const dx = pos.x - shooter.pos.x;
+  const dy = pos.y - shooter.pos.y;
+  const dz = pos.z - shooter.pos.z;
+  const d2 = dx * dx + dy * dy + dz * dz;
+  const maxR = rangeNm * NM;
+  if (d2 > maxR * maxR) return false;
+  if (d2 < 1e-18 || w.params.radar.gimbalDeg >= 180) return true;
   // The antenna is stabilised to the horizon: climbing or diving does not tilt the scan.
-  return angleBetween(los, headingVec(shooter.hdg, 0)) <= w.params.radar.gimbalDeg * DEG;
+  const cosGimbal = Math.cos(w.params.radar.gimbalDeg * DEG);
+  return (dx * Math.sin(shooter.hdg) + dy * Math.cos(shooter.hdg)) / Math.sqrt(d2) >= cosGimbal;
 }
 
 function radarCovers(w: World, shooter: Jet, target: Jet, rangeNm: number): boolean {
@@ -191,9 +204,29 @@ const FULL_NOTCH_RADAR_FLOOR_S = 0.4;
 
 /** True while a notch or chaff break keeps `shooter`'s radar off `target`. */
 export function radarBroken(w: World, shooter: Jet, target: Jet): boolean {
+  if (w.radarBreak.size > 0) {
+    const until = w.radarBreak.get(`${shooter.id}>${target.id}`);
+    if (until !== undefined && w.t < until) return true;
+  }
+  const cm = w.params.countermeasures;
+  if (cm.notchMaxKt <= 0) return false;
+  const dz = shooter.pos.z - target.pos.z;
+  if (cm.notchLookDownDeg <= 0 ? dz < -1 : dz <= 0) return false;
+  const cosG = Math.cos(target.gamma);
+  const spd = target.speed;
   return (
-    w.t < (w.radarBreak.get(`${shooter.id}>${target.id}`) ?? Number.NEGATIVE_INFINITY) ||
-    notchEffect(shooter.pos, truthOf(target), w.params.countermeasures) >= 1
+    notchEffectRaw(
+      shooter.pos.x,
+      shooter.pos.y,
+      shooter.pos.z,
+      target.pos.x,
+      target.pos.y,
+      target.pos.z,
+      Math.sin(target.hdg) * cosG * spd,
+      Math.cos(target.hdg) * cosG * spd,
+      Math.sin(target.gamma) * spd,
+      cm,
+    ) >= 1
   );
 }
 
@@ -212,20 +245,41 @@ export function radarCanTrack(w: World, shooter: Jet, target: Jet): boolean {
  * a scaled per-second break chance; a fresh chaff bundle has a chance to pull each scanning radar.
  */
 function updateRadarBreaks(w: World, dt: number, freshChaff: Map<string, Decoy>): void {
+  if (w.radarBreak.size > 0) {
+    for (const [key, until] of w.radarBreak) {
+      if (until <= w.t) w.radarBreak.delete(key);
+    }
+  }
   const cm = w.params.countermeasures;
+  const hasChaff = freshChaff.size > 0;
   for (const radar of w.jets) {
     if (!radar.alive) continue;
     for (const tgt of w.jets) {
       if (tgt.side === radar.side || !tgt.alive || !radarScans(w, radar, tgt)) continue;
+      const cosG = Math.cos(tgt.gamma);
+      const spd = tgt.speed;
+      const eff = notchEffectRaw(
+        radar.pos.x,
+        radar.pos.y,
+        radar.pos.z,
+        tgt.pos.x,
+        tgt.pos.y,
+        tgt.pos.z,
+        Math.sin(tgt.hdg) * cosG * spd,
+        Math.cos(tgt.hdg) * cosG * spd,
+        Math.sin(tgt.gamma) * spd,
+        cm,
+      );
+      const chaffed = hasChaff && freshChaff.has(tgt.id);
+      if (eff <= 0 && !chaffed) continue;
       const key = `${radar.id}>${tgt.id}`;
       const until = w.radarBreak.get(key) ?? Number.NEGATIVE_INFINITY;
-      const eff = notchEffect(radar.pos, truthOf(tgt), cm);
       if (eff >= 1) {
         w.radarBreak.set(key, Math.max(until, w.t + Math.min(FULL_NOTCH_RADAR_FLOOR_S, cm.notchReacquireS)));
       } else if (eff > 0 && w.t >= until && w.rng() < chanceInStep(cm.radarNotchPerS * eff, dt)) {
         w.radarBreak.set(key, w.t + cm.notchReacquireS);
       }
-      if (freshChaff.has(tgt.id) && w.rng() < cm.chaffPullChance)
+      if (chaffed && w.rng() < cm.chaffPullChance)
         w.radarBreak.set(key, Math.max(w.radarBreak.get(key) ?? 0, w.t + cm.chaffPullS));
     }
   }
@@ -253,9 +307,11 @@ export interface RwrContact {
 
 /** True when `emitterPos` sits inside the jet's 3D vertical RWR receive cone (`-downDeg`..`+upDeg`). */
 export function rwrInElevation(jet: Jet, emitterPos: V3, upDeg: number, downDeg: number): boolean {
-  const los = sub(emitterPos, jet.pos);
-  const l = len(los);
-  if (l < 1e-6) return true;
+  const dx = emitterPos.x - jet.pos.x;
+  const dy = emitterPos.y - jet.pos.y;
+  const dz = emitterPos.z - jet.pos.z;
+  const l2 = dx * dx + dy * dy + dz * dz;
+  if (l2 < 1e-12) return true;
   const sinH = Math.sin(jet.hdg);
   const cosH = Math.cos(jet.hdg);
   const sinG = Math.sin(jet.gamma);
@@ -266,7 +322,7 @@ export function rwrInElevation(jet: Jet, emitterPos: V3, upDeg: number, downDeg:
   const ux = sinB * cosH - cosB * sinH * sinG;
   const uy = -sinB * sinH - cosB * cosH * sinG;
   const uz = cosB * cosG;
-  const sinElev = Math.max(-1, Math.min(1, (los.x * ux + los.y * uy + los.z * uz) / l));
+  const sinElev = Math.max(-1, Math.min(1, (dx * ux + dy * uy + dz * uz) / Math.sqrt(l2)));
   const elevDeg = Math.asin(sinElev) / DEG;
   return elevDeg <= upDeg && elevDeg >= -downDeg;
 }
@@ -306,36 +362,79 @@ function computeRawRwr(
   if (!j.alive) return [];
   const rp = w.params.radar;
   const out: RwrContact[] = [];
-  const binBearing = (key: string, emitterPos: V3): number => {
-    const trueBrg = bearing(j.pos, emitterPos);
+  const sinH = Math.sin(j.hdg);
+  const cosH = Math.cos(j.hdg);
+  const sinG = Math.sin(j.gamma);
+  const cosG = Math.cos(j.gamma);
+  const sinB = Math.sin(j.bank);
+  const cosB = Math.cos(j.bank);
+  const ux = sinB * cosH - cosB * sinH * sinG;
+  const uy = -sinB * sinH - cosB * cosH * sinG;
+  const uz = cosB * cosG;
+  const sinUp = rp.rwrUpDeg >= 90 ? 1 : rp.rwrUpDeg < -90 ? -2 : Math.sin(rp.rwrUpDeg * DEG);
+  const negSinDown = rp.rwrDownDeg >= 90 ? -1 : rp.rwrDownDeg < -90 ? 2 : -Math.sin(rp.rwrDownDeg * DEG);
+
+  const binBearing = (kindPrefix: string, id: string, ex: number, ey: number): number => {
+    const h = Math.atan2(ex - j.pos.x, ey - j.pos.y);
+    const trueBrg = h < 0 ? h + 2 * Math.PI : h;
     if (rp.rwrBinDeg <= 0) return wrap2Pi(trueBrg);
+    const key = `${kindPrefix}:${id}`;
     const qRel = quantizeRwrRel(wrapPi(trueBrg - j.hdg), rp.rwrBinDeg, prevRel?.get(key));
     nextRel?.set(key, qRel);
     return wrap2Pi(j.hdg + qRel);
   };
+
   for (const e of w.jets) {
     if (e.side === j.side || !e.alive || !radarScans(w, e, j)) continue;
-    if (!rwrInElevation(j, e.pos, rp.rwrUpDeg, rp.rwrDownDeg)) continue;
+    const dx = e.pos.x - j.pos.x;
+    const dy = e.pos.y - j.pos.y;
+    const dz = e.pos.z - j.pos.z;
+    const l2 = dx * dx + dy * dy + dz * dz;
+    if (l2 >= 1e-12) {
+      const sinElev = Math.max(-1, Math.min(1, (dx * ux + dy * uy + dz * uz) / Math.sqrt(l2)));
+      if (sinElev > sinUp || sinElev < negSinDown) continue;
+    } else if (0 > sinUp || 0 < negSinDown) {
+      continue;
+    }
     out.push({
       sourceId: e.id,
       kind: "radar",
-      bearing: binBearing(`radar:${e.id}`, e.pos),
+      bearing: binBearing("radar", e.id, e.pos.x, e.pos.y),
       lock: false,
       lastSeenAt: w.t,
       held: false,
     });
   }
   const mp = w.params.missile;
+  const seekerR = mp.seekerRangeNm * NM;
+  const seekerR2 = seekerR * seekerR;
+  const cosGimbal = mp.seekerGimbalDeg >= 180 ? -1 : Math.cos(mp.seekerGimbalDeg * DEG);
   for (const m of w.missiles) {
     if (m.end || m.side === j.side) continue;
     if (m.phase !== "search" && m.phase !== "tracking") continue;
-    const los = sub(j.pos, m.pos);
-    if (len(los) > mp.seekerRangeNm * NM || angleBetween(los, m.vel) > mp.seekerGimbalDeg * DEG) continue;
-    if (!rwrInElevation(j, m.pos, rp.rwrUpDeg, rp.rwrDownDeg)) continue;
+    const dx = j.pos.x - m.pos.x;
+    const dy = j.pos.y - m.pos.y;
+    const dz = j.pos.z - m.pos.z;
+    const l2 = dx * dx + dy * dy + dz * dz;
+    if (l2 > seekerR2) continue;
+    if (l2 >= 1e-18) {
+      const mvx = m.vel.x;
+      const mvy = m.vel.y;
+      const mvz = m.vel.z;
+      const mv2 = mvx * mvx + mvy * mvy + mvz * mvz;
+      if (mv2 >= 1e-18 && (dx * mvx + dy * mvy + dz * mvz) / Math.sqrt(l2 * mv2) < cosGimbal) continue;
+    }
+    if (l2 >= 1e-12) {
+      // Elevation uses LOS from jet to missile = -(dx, dy, dz).
+      const sinElev = Math.max(-1, Math.min(1, -(dx * ux + dy * uy + dz * uz) / Math.sqrt(l2)));
+      if (sinElev > sinUp || sinElev < negSinDown) continue;
+    } else if (0 > sinUp || 0 < negSinDown) {
+      continue;
+    }
     out.push({
       sourceId: m.id,
       kind: "missile",
-      bearing: binBearing(`missile:${m.id}`, m.pos),
+      bearing: binBearing("missile", m.id, m.pos.x, m.pos.y),
       lock: m.phase === "tracking" && m.targetId === j.id,
       lastSeenAt: w.t,
       held: false,
@@ -345,28 +444,38 @@ function computeRawRwr(
 }
 
 function updateRwr(w: World): void {
-  const holdS = Math.max(0, w.params.radar.rwrHoldS);
+  const rp = w.params.radar;
+  const holdS = Math.max(0, rp.rwrHoldS);
+  const useBins = rp.rwrBinDeg > 0;
   for (const j of w.jets) {
     if (!j.alive) {
       w.rwr.delete(j.id);
       w.rwrRel.delete(j.id);
       continue;
     }
-    const nextRel = new Map<string, number>();
+    const nextRel = useBins ? new Map<string, number>() : undefined;
     const raw = computeRawRwr(w, j, w.rwrRel.get(j.id), nextRel);
-    w.rwrRel.set(j.id, nextRel);
+    if (nextRel && nextRel.size > 0) w.rwrRel.set(j.id, nextRel);
+    else w.rwrRel.delete(j.id);
     const prev = w.rwr.get(j.id);
     if (!prev || prev.length === 0) {
       w.rwr.set(j.id, raw);
       continue;
     }
-    const seen = new Set(raw.map((c) => `${c.kind}:${c.sourceId}`));
-    const next = [...raw];
+    const liveLen = raw.length;
     for (const old of prev) {
-      if (seen.has(`${old.kind}:${old.sourceId}`)) continue;
-      if (w.t - old.lastSeenAt <= holdS) next.push({ ...old, held: true });
+      if (w.t - old.lastSeenAt > holdS) continue;
+      let found = false;
+      for (let i = 0; i < liveLen; i++) {
+        const r = raw[i] as RwrContact;
+        if (r.kind === old.kind && r.sourceId === old.sourceId) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) raw.push({ ...old, held: true });
     }
-    w.rwr.set(j.id, next);
+    w.rwr.set(j.id, raw);
   }
 }
 
@@ -617,6 +726,8 @@ export function step(w: World, dt = SIM_DT): void {
     w.radarTrack.set(j.id, now);
   }
 
+  const evs: MissileEvent[] = [];
+  const ecm: SeekerEcm = { rng: w.rng, cm: w.params.countermeasures, chaff: null };
   for (const m of w.missiles) {
     if (m.end) continue;
     const tgt = jetById(w, m.targetId);
@@ -626,11 +737,26 @@ export function step(w: World, dt = SIM_DT): void {
       continue;
     }
     const datalink = !!shooter && radarCanTrack(w, shooter, tgt);
-    const evs = stepMissile(w.params.missile, m, truthOf(tgt), datalink, dt, w.params.missile.fuzeRadiusM, {
-      rng: w.rng,
-      cm: w.params.countermeasures,
-      chaff: freshChaff.get(tgt.id) ?? null,
-    });
+    const cosG = Math.cos(tgt.gamma);
+    const spd = tgt.speed;
+    ecm.chaff = freshChaff.get(tgt.id) ?? null;
+    evs.length = 0;
+    stepMissileFast(
+      w.params.missile,
+      m,
+      tgt.pos.x,
+      tgt.pos.y,
+      tgt.pos.z,
+      Math.sin(tgt.hdg) * cosG * spd,
+      Math.cos(tgt.hdg) * cosG * spd,
+      Math.sin(tgt.gamma) * spd,
+      tgt.alive,
+      datalink,
+      dt,
+      w.params.missile.fuzeRadiusM,
+      ecm,
+      evs,
+    );
     const who = `${shooter?.callsign ?? m.shooterCallsign ?? "?"} ${m.id}`;
     for (const e of evs) {
       if (e === "fuzed") {

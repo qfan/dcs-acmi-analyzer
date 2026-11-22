@@ -191,6 +191,7 @@ export class Engine {
     this.stopSession();
     const s = new GameSession(m.scenarioId, m.altFt, m.params, DEFAULT_AUTOPAUSE, m.seed, m.options, {
       record: false,
+      sides: [PLAYER_SIDE],
     });
     s.fog = m.fog;
     this.mode = "sp";
@@ -245,7 +246,7 @@ export class Engine {
     if (!s) return;
     const dt = (now - this.lastTick) / 1000;
     this.lastTick = now;
-    s.advance(dt);
+    s.advance(dt, 32);
     if (this.mode === "host") this.hostAfterAdvance();
     const state = `${s.paused}|${s.pauseReason}|${s.timeScale}`;
     if (

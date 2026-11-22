@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { LanguageSelector } from "../../i18n/LanguageSelector.tsx";
 import { toWorld, type View } from "../../map/render.ts";
@@ -37,6 +37,7 @@ import { wrap2Pi } from "../sim/vec.ts";
 import {
   awaitingCall,
   type Command,
+  type GameEvent,
   jetById,
   type Outcome,
   rwrContacts,
@@ -174,6 +175,7 @@ export function GameApp() {
   const engineRef = useRef<EngineClient | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View>({ cx: 0, cy: 0, scale: 0.01, w: 800, h: 600 });
   const hitsRef = useRef<Hit[]>([]);
@@ -558,6 +560,22 @@ export function GameApp() {
     if (sessionRef.current?.multiplayer) clearView();
   };
 
+  // Track canvas CSS size via ResizeObserver instead of reading clientWidth/clientHeight every rAF frame.
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    canvasSizeRef.current = { w: c.clientWidth, h: c.clientHeight };
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect) {
+        canvasSizeRef.current = { w: Math.round(rect.width), h: Math.round(rect.height) };
+      }
+    });
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, []);
+
   // Main loop: refresh the launch zone and draw. The fight itself runs in the engine worker.
   useEffect(() => {
     if (!session) {
@@ -575,8 +593,12 @@ export function GameApp() {
         const ctx = c.getContext("2d");
         const v = viewRef.current;
         const dpr = window.devicePixelRatio || 1;
-        const w = c.clientWidth;
-        const h = c.clientHeight;
+        let { w, h } = canvasSizeRef.current;
+        if (w <= 0 || h <= 0) {
+          w = c.clientWidth;
+          h = c.clientHeight;
+          canvasSizeRef.current = { w, h };
+        }
         if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
           c.width = Math.round(w * dpr);
           c.height = Math.round(h * dpr);
@@ -1199,108 +1221,25 @@ export function GameApp() {
             <section className="g-card">
               <h3>{t("game.app.eventsTitle")}</h3>
               <ol className="g-log">
-                {w.events
-                  .map((e, i) => ({ e, seq: w.eventOffset + i }))
-                  .filter(
-                    ({ e }) =>
-                      e.type !== "radar-gained" &&
-                      e.type !== "radar-lost" &&
-                      e.type !== "chaff" &&
-                      e.type !== "flare" &&
-                      (!session || session.showsEvent(e)),
-                  )
-                  .slice(-14)
-                  .reverse()
-                  .map(({ e, seq }) => (
-                    <li key={seq}>
-                      <span className="g-muted">{fmtTime(e.t)}</span>{" "}
-                      <span style={{ color: sideCol(e.side) }}>{e.text}</span>
-                    </li>
-                  ))}
+                {recentLogEvents(w, session).map(({ e, seq }) => (
+                  <li key={seq}>
+                    <span className="g-muted">{fmtTime(e.t)}</span>{" "}
+                    <span style={{ color: sideCol(e.side) }}>{e.text}</span>
+                  </li>
+                ))}
               </ol>
             </section>
           )}
 
-          <section className="g-card g-help">
-            <h3>{session?.watch ? t("game.app.watchControlsTitle") : t("game.app.controlsTitle")}</h3>
-            {session?.watch ? (
-              <>
-                <p>
-                  <Trans
-                    i18nKey="game.app.watchControlsP1"
-                    components={[<b key="0" />, <b key="1" />, <b key="2" />]}
-                  />
-                </p>
-                <p>
-                  <Trans
-                    i18nKey="game.app.watchControlsP2"
-                    components={[<kbd key="0" />, <kbd key="1" />, <kbd key="2" />, <kbd key="3" />]}
-                  />
-                </p>
-              </>
-            ) : (
-              <>
-                <p>
-                  <Trans
-                    i18nKey="game.app.playerControlsP1"
-                    components={[<b key="0" />, <b key="1" />, <b key="2" />, <b key="3" />, <b key="4" />]}
-                  />
-                </p>
-                <p>
-                  <Trans
-                    i18nKey="game.app.playerControlsP2"
-                    components={[
-                      <kbd key="0" />,
-                      <kbd key="1" />,
-                      <kbd key="2" />,
-                      <kbd key="3" />,
-                      <kbd key="4" />,
-                      <kbd key="5" />,
-                      <kbd key="6" />,
-                      <kbd key="7" />,
-                      <kbd key="8" />,
-                      <kbd key="9" />,
-                      <kbd key="10" />,
-                      <kbd key="11" />,
-                      <kbd key="12" />,
-                      <kbd key="13" />,
-                      <kbd key="14" />,
-                      <kbd key="15" />,
-                      <kbd key="16" />,
-                      <kbd key="17" />,
-                      <kbd key="18" />,
-                      <kbd key="19" />,
-                      <kbd key="20" />,
-                      <kbd key="21" />,
-                      <kbd key="22" />,
-                    ]}
-                  />
-                </p>
-              </>
-            )}
-            <p className="g-muted">
-              {t("game.app.helpEnergy", {
-                normalDeg: w?.params.aircraft.normalClimbDeg ?? 20,
-                maxDeg: w?.params.aircraft.maxClimbDeg ?? 45,
-                minAlt: (w?.params.aircraft.minAltFt ?? 1000).toLocaleString(),
-              })}
-            </p>
-            <p className="g-muted">
-              <Trans
-                i18nKey="game.app.helpMap"
-                values={{
-                  gimbal: w?.params.radar.gimbalDeg ?? 60,
-                  tws: w?.params.radar.rangeNm ?? 70,
-                  detect: w?.params.radar.detectRangeNm ?? 80,
-                }}
-                components={[<i key="0" />]}
-              />
-            </p>
-            <p className="g-muted">{t("game.app.helpFog")}</p>
-            <p className="g-muted">
-              <Trans i18nKey="game.app.helpRwr" components={[<b key="0" />]} />
-            </p>
-          </section>
+          <HelpCard
+            watch={!!session?.watch}
+            normalDeg={w?.params.aircraft.normalClimbDeg ?? 20}
+            maxDeg={w?.params.aircraft.maxClimbDeg ?? 45}
+            minAlt={w?.params.aircraft.minAltFt ?? 1000}
+            gimbal={w?.params.radar.gimbalDeg ?? 60}
+            tws={w?.params.radar.rangeNm ?? 70}
+            detect={w?.params.radar.detectRangeNm ?? 80}
+          />
 
           <SiteFooter product="game" className="g-footer" />
         </aside>
@@ -2119,19 +2058,23 @@ function RwrLine({ world, jet }: { world: World; jet: Jet }) {
     if (Math.abs(d) === 180) return "180°";
     return `${Math.abs(d)}° ${d < 0 ? "L" : "R"}`;
   };
-  const priority = (c: (typeof contacts)[number]) => (c.kind === "missile" ? (c.lock ? 0 : 1) : 2);
-  const distSq = (c: (typeof contacts)[number]) => {
+  const ranked = contacts.map((c) => {
+    const prio = c.kind === "missile" ? (c.lock ? 0 : 1) : 2;
     const pos =
       c.kind === "missile"
         ? world.missiles.find((m) => m.id === c.sourceId)?.pos
         : world.jets.find((j) => j.id === c.sourceId)?.pos;
-    if (!pos) return Number.POSITIVE_INFINITY;
-    const dx = pos.x - jet.pos.x;
-    const dy = pos.y - jet.pos.y;
-    const dz = pos.z - jet.pos.z;
-    return dx * dx + dy * dy + dz * dz;
-  };
-  const sorted = [...contacts].sort((a, b) => priority(a) - priority(b) || distSq(a) - distSq(b));
+    let d2 = Number.POSITIVE_INFINITY;
+    if (pos) {
+      const dx = pos.x - jet.pos.x;
+      const dy = pos.y - jet.pos.y;
+      const dz = pos.z - jet.pos.z;
+      d2 = dx * dx + dy * dy + dz * dz;
+    }
+    return { c, prio, d2 };
+  });
+  ranked.sort((a, b) => a.prio - b.prio || a.d2 - b.d2);
+  const sorted = ranked.map((x) => x.c);
   const labelOf = (c: (typeof contacts)[number]) =>
     `${
       c.kind === "missile"
@@ -2242,6 +2185,117 @@ function centerOnFight(v: View, s: SessionView) {
   v.cx = (b.x0 + b.x1) / 2;
   v.cy = (b.y0 + b.y1) / 2;
 }
+
+function recentLogEvents(w: World, session: SessionView | null): { e: GameEvent; seq: number }[] {
+  const out: { e: GameEvent; seq: number }[] = [];
+  for (let i = w.events.length - 1; i >= 0 && out.length < 14; i--) {
+    const e = w.events[i] as GameEvent;
+    if (
+      e.type !== "radar-gained" &&
+      e.type !== "radar-lost" &&
+      e.type !== "chaff" &&
+      e.type !== "flare" &&
+      (!session || session.showsEvent(e))
+    ) {
+      out.push({ e, seq: w.eventOffset + i });
+    }
+  }
+  return out;
+}
+
+const HelpCard = memo(function HelpCard({
+  watch,
+  normalDeg,
+  maxDeg,
+  minAlt,
+  gimbal,
+  tws,
+  detect,
+}: {
+  watch: boolean;
+  normalDeg: number;
+  maxDeg: number;
+  minAlt: number;
+  gimbal: number;
+  tws: number;
+  detect: number;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="g-card g-help">
+      <h3>{watch ? t("game.app.watchControlsTitle") : t("game.app.controlsTitle")}</h3>
+      {watch ? (
+        <>
+          <p>
+            <Trans
+              i18nKey="game.app.watchControlsP1"
+              components={[<b key="0" />, <b key="1" />, <b key="2" />]}
+            />
+          </p>
+          <p>
+            <Trans
+              i18nKey="game.app.watchControlsP2"
+              components={[<kbd key="0" />, <kbd key="1" />, <kbd key="2" />, <kbd key="3" />]}
+            />
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            <Trans
+              i18nKey="game.app.playerControlsP1"
+              components={[<b key="0" />, <b key="1" />, <b key="2" />, <b key="3" />, <b key="4" />]}
+            />
+          </p>
+          <p>
+            <Trans
+              i18nKey="game.app.playerControlsP2"
+              components={[
+                <kbd key="0" />,
+                <kbd key="1" />,
+                <kbd key="2" />,
+                <kbd key="3" />,
+                <kbd key="4" />,
+                <kbd key="5" />,
+                <kbd key="6" />,
+                <kbd key="7" />,
+                <kbd key="8" />,
+                <kbd key="9" />,
+                <kbd key="10" />,
+                <kbd key="11" />,
+                <kbd key="12" />,
+                <kbd key="13" />,
+                <kbd key="14" />,
+                <kbd key="15" />,
+                <kbd key="16" />,
+                <kbd key="17" />,
+                <kbd key="18" />,
+                <kbd key="19" />,
+                <kbd key="20" />,
+                <kbd key="21" />,
+                <kbd key="22" />,
+              ]}
+            />
+          </p>
+        </>
+      )}
+      <p className="g-muted">
+        {t("game.app.helpEnergy", {
+          normalDeg,
+          maxDeg,
+          minAlt: minAlt.toLocaleString(),
+        })}
+      </p>
+      <p className="g-muted">
+        <Trans i18nKey="game.app.helpMap" values={{ gimbal, tws, detect }} components={[<i key="0" />]} />
+      </p>
+      <p className="g-muted">{t("game.app.helpFog")}</p>
+      <p className="g-muted">
+        <Trans i18nKey="game.app.helpRwr" components={[<b key="0" />]} />
+      </p>
+    </section>
+  );
+});
 
 function fitView(v: View, s: SessionView) {
   const b = fightBox(s);

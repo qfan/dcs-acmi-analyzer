@@ -17,7 +17,7 @@ import { DEG, FT, NM } from "../sim/atmosphere.ts";
 import { type MissileTimer, startTimer, stepTimer, type TargetTrack, trackAt } from "../sim/estimate.ts";
 import { type Rng, randNormal } from "../sim/rng.ts";
 import { angleBetween, bearing, len, sub, wrap2Pi, wrapPi } from "../sim/vec.ts";
-import { headOnRmaxNm, launchZone } from "../sim/wez.ts";
+import { headOnRmaxNm, inOpportunityZone, launchBounds } from "../sim/wez.ts";
 import {
   type Command,
   type Controller,
@@ -179,6 +179,16 @@ function sampleScale(rng: Rng, sigma: number, cap = 2): number {
   return 1 + sigma * randNormal(rng, cap);
 }
 
+/** Deterministic phase offset in [0, 0.9 * periodS) without consuming w.rng(). */
+function phaseOffsetS(key: string, periodS: number): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) / 4294967296) * periodS * 0.9;
+}
+
 export type AiState = "commit" | "support" | "pump" | "defend" | "egress";
 
 export interface NpcStatus {
@@ -313,11 +323,17 @@ export class DoctrineBot implements Controller {
 
     // RWR: keep defending for as long as any active missile remains on RWR (after a capped normal reaction delay).
     const missiles = rwrContacts(w, me).filter((c) => c.kind === "missile");
-    const liveMissileIds = new Set(w.missiles.filter((m) => !m.end).map((m) => m.id));
-    for (const id of this.rwrFirstSeen.keys()) {
-      if (!liveMissileIds.has(id)) {
-        this.rwrFirstSeen.delete(id);
-        this.rwrReactionS.delete(id);
+    if (this.rwrFirstSeen.size > 0) {
+      let liveMissileIds: Set<string> | null = null;
+      if (w.missiles.length > 0) {
+        liveMissileIds = new Set<string>();
+        for (const m of w.missiles) if (!m.end) liveMissileIds.add(m.id);
+      }
+      for (const id of this.rwrFirstSeen.keys()) {
+        if (!liveMissileIds?.has(id)) {
+          this.rwrFirstSeen.delete(id);
+          this.rwrReactionS.delete(id);
+        }
       }
     }
     for (const c of missiles) {
@@ -484,13 +500,37 @@ export class DoctrineBot implements Controller {
     );
     let firedPrimary = false;
     if (enemy && me.missiles > 0 && !onTarget && radarCanTrack(w, me, enemy)) {
-      if (this.zoneFor !== target || t - this.zoneAt >= ZONE_EVERY_S) {
-        this.zoneAt = t;
+      const sameTarget = this.zoneFor === target;
+      if (!sameTarget || t - this.zoneAt >= ZONE_EVERY_S) {
+        this.zoneAt = sameTarget ? t : t - phaseOffsetS(me.id, ZONE_EVERY_S);
         this.zoneFor = target;
-        const zone = launchZone(w.params.missile, me, enemy);
+        const zone = launchBounds(
+          w.params.missile,
+          me,
+          enemy,
+          90,
+          sameTarget ? { rmaxNm: this.rmaxNm, rneNm: this.rneNm } : undefined,
+        );
         this.rmaxNm = zone.rmaxNm;
         this.rneNm = zone.rneNm;
-        this.headOnRmaxNm = this.skill.postureShot ? headOnRmaxNm(w.params.missile, me, enemy) : 0;
+        if (this.skill.postureShot) {
+          const aspect = angleBetween(velocity(enemy), sub(me.pos, enemy.pos));
+          if (aspect > 135 * DEG || (aspect > 105 * DEG && !this.postureEligibleAmmo(me))) {
+            this.headOnRmaxNm = 0;
+          } else if (aspect < 2 * DEG && Math.abs(enemy.gamma) < 2 * DEG) {
+            this.headOnRmaxNm = this.rmaxNm;
+          } else {
+            this.headOnRmaxNm = headOnRmaxNm(
+              w.params.missile,
+              me,
+              enemy,
+              90,
+              sameTarget && this.headOnRmaxNm > 0 ? this.headOnRmaxNm : this.rmaxNm,
+            );
+          }
+        } else {
+          this.headOnRmaxNm = 0;
+        }
       }
       const rangeNm = len(sub(enemy.pos, me.pos)) / NM;
       const normalRange = this.rmaxNm > 0 ? this.shotRangeNm(me, enemy) : 0;
@@ -612,13 +652,12 @@ export class DoctrineBot implements Controller {
   }
 
   private updateTimers(w: World, me: Jet, dt: number): void {
-    const newlyAdded = new Set<string>();
-    const liveIds = new Set<string>();
+    if (w.missiles.length === 0 && this.timers.size === 0) return;
+    let newlyAdded: Set<string> | null = null;
     for (const m of w.missiles) {
-      if (m.end) continue;
-      liveIds.add(m.id);
-      if (m.shooterId === me.id && !this.timers.has(m.id)) {
+      if (!m.end && m.shooterId === me.id && !this.timers.has(m.id)) {
         this.timers.set(m.id, startTimer(m, w.t));
+        if (!newlyAdded) newlyAdded = new Set();
         newlyAdded.add(m.id);
         if (this.pendingPostureTarget === m.targetId) {
           this.postureMissileIds.add(m.id);
@@ -626,6 +665,15 @@ export class DoctrineBot implements Controller {
         }
       }
     }
+    if (this.timers.size === 0) return;
+    if (w.missiles.length === 0) {
+      this.timers.clear();
+      this.pumpedFor.clear();
+      this.postureMissileIds.clear();
+      return;
+    }
+    const liveIds = new Set<string>();
+    for (const m of w.missiles) if (!m.end) liveIds.add(m.id);
     for (const id of this.timers.keys()) {
       if (!liveIds.has(id)) {
         this.timers.delete(id);
@@ -643,8 +691,8 @@ export class DoctrineBot implements Controller {
           : tr
             ? trackAt(tr, w.t)
             : null;
-      const stepDt = newlyAdded.has(tm.missileId) ? 0 : dt;
-      if (known && (stepDt > 0 || newlyAdded.has(tm.missileId)))
+      const stepDt = newlyAdded?.has(tm.missileId) ? 0 : dt;
+      if (known && (stepDt > 0 || newlyAdded?.has(tm.missileId)))
         stepTimer(w.params.missile, tm, known, datalink, w.t, stepDt);
     }
   }
@@ -683,8 +731,19 @@ export class DoctrineBot implements Controller {
 
       let cached = this.oppZones.get(other.id);
       if (!cached || t - cached.at >= ZONE_EVERY_S) {
-        const zone = launchZone(w.params.missile, me, other);
-        cached = { at: t, rmaxNm: zone.rmaxNm, rneNm: zone.rneNm };
+        const res = inOpportunityZone(
+          w.params.missile,
+          me,
+          other,
+          OPP_SHOT_FRAC,
+          90,
+          cached && cached.rmaxNm > 0 ? { rmaxNm: cached.rmaxNm, rneNm: cached.rneNm } : undefined,
+        );
+        cached = {
+          at: cached ? t : t - phaseOffsetS(`${me.id}>${other.id}`, ZONE_EVERY_S),
+          rmaxNm: res.rmaxNm,
+          rneNm: res.rneNm,
+        };
         this.oppZones.set(other.id, cached);
       }
       if (cached.rmaxNm <= 0) continue;

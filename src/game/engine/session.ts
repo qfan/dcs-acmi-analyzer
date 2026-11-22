@@ -58,6 +58,8 @@ export interface SessionInit {
   world?: World;
   /** Keep an .acmi recorder here (tests); the UI records from snapshots instead. */
   record?: boolean;
+  /** Sides to maintain knowledge/timers for (single player needs only the viewer's side). */
+  sides?: readonly Side[];
 }
 
 export class GameSession {
@@ -88,6 +90,7 @@ export class GameSession {
   private acc = 0;
   private seenEvents = 0;
   private nextTurnAt: number;
+  private readonly trackedSides: readonly Side[];
 
   /** Who flies what (NPC skills; blue by you or by the NPC). */
   readonly options: ScenarioOptions;
@@ -120,6 +123,7 @@ export class GameSession {
             startedAt: this.startedAt,
           });
     this.autoPause = autoPause;
+    this.trackedSides = init.sides ?? ["blue", "red"];
     this.nextTurnAt = autoPause.turnEveryS > 0 ? autoPause.turnEveryS : Number.POSITIVE_INFINITY;
     this.updateKnowledge();
     this.updateTimers(0);
@@ -158,8 +162,9 @@ export class GameSession {
   }
 
   /** Advances by a wall-clock interval (s). Stops exactly at the step that triggers an auto-pause. */
-  advance(realDt: number): void {
+  advance(realDt: number, maxWallMs?: number): void {
     if (this.paused || this.world.outcome) return;
+    const startMs = maxWallMs !== undefined ? performance.now() : 0;
     this.acc += Math.min(realDt, 0.25) * this.timeScale;
     while (this.acc >= SIM_DT && !this.paused && !this.world.outcome) {
       this.acc -= SIM_DT;
@@ -173,6 +178,10 @@ export class GameSession {
         this.nextTurnAt += this.autoPause.turnEveryS;
         if (!this.paused)
           this.pause(`Turn: ${this.autoPause.turnEveryS} s elapsed. Give orders, then continue.`);
+      }
+      if (maxWallMs !== undefined && performance.now() - startMs >= maxWallMs) {
+        this.acc = Math.min(this.acc, SIM_DT);
+        break;
       }
     }
     if (this.world.outcome) this.pause(null);
@@ -219,13 +228,11 @@ export class GameSession {
   }
 
   private updateKnowledge(): void {
-    this.knowledge.blue.update(this.world);
-    this.knowledge.red.update(this.world);
+    for (const side of this.trackedSides) this.knowledge[side].update(this.world);
   }
 
   private updateTimers(dt: number): void {
-    this.knowledge.blue.updateTimers(this.world, dt);
-    this.knowledge.red.updateTimers(this.world, dt);
+    for (const side of this.trackedSides) this.knowledge[side].updateTimers(this.world, dt);
   }
 
   /** Whether this jet's pilot flies with fog of war on. */

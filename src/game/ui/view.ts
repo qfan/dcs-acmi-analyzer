@@ -179,7 +179,11 @@ export class SessionView {
       (z.simT === this.world.t || nowMs - z.at < ZONE_EVERY_MS)
     )
       return;
-    const zone = launchZone(this.world.params.missile, j, t);
+    const hints =
+      z && z.jetId === j.id && z.targetId === t.id
+        ? { rmaxNm: z.zone.rmaxNm, rneNm: z.zone.rneNm }
+        : undefined;
+    const zone = launchZone(this.world.params.missile, j, t, 90, hints);
     this.zone = { jetId: j.id, targetId: t.id, zone, at: nowMs, simT: this.world.t };
   }
 }

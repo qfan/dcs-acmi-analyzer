@@ -53,18 +53,20 @@ function drawGrid(ctx: CanvasRenderingContext2D, v: View) {
   const x1 = v.cx + v.w / 2 / v.scale;
   const y0 = v.cy - v.h / 2 / v.scale;
   const y1 = v.cy + v.h / 2 / v.scale;
+  const hw = v.w / 2;
+  const hh = v.h / 2;
   ctx.strokeStyle = COLORS.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = Math.ceil(x0 / stepM) * stepM; x <= x1; x += stepM) {
-    const [sx] = toScreen(v, x, 0);
-    ctx.moveTo(Math.round(sx) + 0.5, 0);
-    ctx.lineTo(Math.round(sx) + 0.5, v.h);
+    const sx = Math.round(hw + (x - v.cx) * v.scale) + 0.5;
+    ctx.moveTo(sx, 0);
+    ctx.lineTo(sx, v.h);
   }
   for (let y = Math.ceil(y0 / stepM) * stepM; y <= y1; y += stepM) {
-    const [, sy] = toScreen(v, 0, y);
-    ctx.moveTo(0, Math.round(sy) + 0.5);
-    ctx.lineTo(v.w, Math.round(sy) + 0.5);
+    const sy = Math.round(hh - (y - v.cy) * v.scale) + 0.5;
+    ctx.moveTo(0, sy);
+    ctx.lineTo(v.w, sy);
   }
   ctx.stroke();
   // Scale bar
@@ -127,15 +129,18 @@ function drawTrail(
   width: number,
 ) {
   if (pts.length === 0) return;
+  const hw = v.w / 2;
+  const hh = v.h / 2;
+  const { cx, cy, scale } = v;
   ctx.beginPath();
-  pts.forEach((p, i) => {
-    const [sx, sy] = toScreen(v, p.x, p.y);
-    if (i === 0) ctx.moveTo(sx, sy);
-    else ctx.lineTo(sx, sy);
-  });
+  const p0 = pts[0] as { x: number; y: number };
+  ctx.moveTo(hw + (p0.x - cx) * scale, hh - (p0.y - cy) * scale);
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i] as { x: number; y: number };
+    ctx.lineTo(hw + (p.x - cx) * scale, hh - (p.y - cy) * scale);
+  }
   if (head) {
-    const [sx, sy] = toScreen(v, head.x, head.y);
-    ctx.lineTo(sx, sy);
+    ctx.lineTo(hw + (head.x - cx) * scale, hh - (head.y - cy) * scale);
   }
   ctx.strokeStyle = color;
   ctx.lineWidth = width;

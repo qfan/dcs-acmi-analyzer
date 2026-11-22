@@ -5,7 +5,7 @@
  */
 import type { Jet, Steer, Throttle } from "./aircraft.ts";
 import { len, sub } from "./vec.ts";
-import { launchZone } from "./wez.ts";
+import { launchRmaxNm } from "./wez.ts";
 import { type Command, type Controller, radarCanTrack, rwrContacts, type World } from "./world.ts";
 
 export interface BotConfig {
@@ -103,7 +103,7 @@ export class ScriptedBot implements Controller {
     } else if (c.fireFracRmax !== null && me.missiles > 0 && radarCanTrack(w, me, tgt)) {
       if (w.t - this.zoneAt >= ZONE_EVERY_S) {
         this.zoneAt = w.t;
-        this.rmaxNm = launchZone(w.params.missile, me, tgt).rmaxNm;
+        this.rmaxNm = launchRmaxNm(w.params.missile, me, tgt, 90, this.rmaxNm > 0 ? this.rmaxNm : undefined);
       }
       const rangeNm = len(sub(tgt.pos, me.pos)) / 1852;
       if (this.rmaxNm > 0 && rangeNm <= c.fireFracRmax * this.rmaxNm)
