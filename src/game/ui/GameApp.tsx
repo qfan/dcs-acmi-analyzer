@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { LanguageSelector } from "../../i18n/LanguageSelector.tsx";
 import { saveLastFile } from "../../ui/lastFile.ts";
@@ -54,7 +54,7 @@ import {
   toWorld,
   zoomViewAt,
 } from "./camera.ts";
-import { drawScene, type Hit, sideCol } from "./draw.ts";
+import { drawScene, type Hit, SIDE_VIEW_BOTTOM, SIDE_VIEW_LEFT, sideCol, sideViewWidth } from "./draw.ts";
 import { createEngineClient, type EngineClient } from "./engineClient.ts";
 import { LobbyPanel, MultiplayerTab } from "./Lobby.tsx";
 import { MapCompass } from "./MapCompass.tsx";
@@ -77,6 +77,9 @@ import { SessionView } from "./view.ts";
 
 /** Crank keeps the threat just inside the 60° radar gimbal. */
 const CRANK_DEG = 50;
+/** Bottom bar's distance from the map's bottom edge (px, matches .g-ctl-dock-bottom). */
+const BAR_BOTTOM = 38;
+const BAR_SIDE_GAP = 8;
 const HUD_MS = 100;
 /** Brief lockout after target change or new lock-on so TWS target shifts don't fire on the wrong jet. */
 const FOX_LOCK_MS = 180;
@@ -198,6 +201,7 @@ export function GameApp() {
   radarSectorsRef.current = radarSectors;
   const sideViewRef = useRef(sideView);
   sideViewRef.current = sideView;
+  const sideViewBottomRef = useRef(SIDE_VIEW_BOTTOM);
   const foxLockedRef = useRef(false);
 
   const setViewRot = useCallback((next: number) => {
@@ -640,6 +644,7 @@ export function GameApp() {
             labelsRef.current,
             radarSectorsRef.current,
             sideViewRef.current,
+            sideViewBottomRef.current,
           );
         }
       }
@@ -1078,6 +1083,7 @@ export function GameApp() {
               stageRef={stageRef}
               dockPrefs={dockPrefs}
               sideView={sideView}
+              sideViewBottomRef={sideViewBottomRef}
               onChangeDock={(dock) => updateDockPrefs({ dock })}
               onFinishDrag={updateDockPrefs}
               jet={p}
@@ -1893,6 +1899,7 @@ function MapControlsOverlay({
   stageRef,
   dockPrefs,
   sideView,
+  sideViewBottomRef,
   onChangeDock,
   onFinishDrag,
   ...ctlProps
@@ -1900,6 +1907,7 @@ function MapControlsOverlay({
   stageRef: React.RefObject<HTMLDivElement | null>;
   dockPrefs: ControlsDockPrefs;
   sideView: boolean;
+  sideViewBottomRef: React.RefObject<number>;
   onChangeDock: (dock: ControlsDock) => void;
   onFinishDrag: (patch: Partial<ControlsDockPrefs>) => void;
 }) {
@@ -1908,6 +1916,7 @@ function MapControlsOverlay({
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const [floatPos, setFloatPos] = useState({ x: dockPrefs.x, y: dockPrefs.y });
   const [dragging, setDragging] = useState(false);
+  const [shiftRight, setShiftRight] = useState(false);
 
   const clampPos = useCallback(
     (x: number, y: number) => {
@@ -1933,6 +1942,32 @@ function MapControlsOverlay({
   }, [dockPrefs.dock, dockPrefs.x, dockPrefs.y, clampPos]);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  // Bottom bar vs side view: stay centered if clear, else move right, else lift the side view above the bar.
+  const avoidSideView = sideView && dockPrefs.dock === "bottom";
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    const el = overlayRef.current;
+    if (!avoidSideView || !stage || !el) return;
+    const place = () => {
+      const stageW = stage.clientWidth;
+      const barW = el.offsetWidth;
+      const clearX = SIDE_VIEW_LEFT + sideViewWidth(stageW) + BAR_SIDE_GAP;
+      const fitsCentered = (stageW - barW) / 2 >= clearX;
+      const fitsRight = stageW - barW - 10 >= clearX;
+      setShiftRight(!fitsCentered && fitsRight);
+      sideViewBottomRef.current =
+        fitsCentered || fitsRight ? SIDE_VIEW_BOTTOM : BAR_BOTTOM + el.offsetHeight + BAR_SIDE_GAP;
+    };
+    place();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    ro?.observe(stage);
+    ro?.observe(el);
+    return () => {
+      ro?.disconnect();
+      sideViewBottomRef.current = SIDE_VIEW_BOTTOM;
+    };
+  }, [avoidSideView, stageRef, sideViewBottomRef]);
 
   const isFloat = dockPrefs.dock === "float";
   const isHorizontal = dockPrefs.dock === "bottom" || (isFloat && dockPrefs.floatLayout === "horizontal");
@@ -1991,6 +2026,7 @@ function MapControlsOverlay({
     `g-ctl-dock-${dockPrefs.dock}`,
     isHorizontal ? "g-ctl-horizontal" : "",
     clearSide ? "g-ctl-clear-side" : "",
+    avoidSideView && shiftRight ? "g-ctl-shift-right" : "",
     dragging ? "g-ctl-dragging" : "",
   ]
     .filter(Boolean)
