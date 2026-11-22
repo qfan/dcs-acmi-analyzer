@@ -137,7 +137,7 @@ export function loadControlsDock(): ControlsDockPrefs {
   const dock =
     typeof v?.dock === "string" && (CONTROLS_DOCKS as readonly string[]).includes(v.dock)
       ? (v.dock as ControlsDock)
-      : "right";
+      : "bottom";
   const x = typeof v?.x === "number" && Number.isFinite(v.x) ? v.x : 10;
   const y = typeof v?.y === "number" && Number.isFinite(v.y) ? v.y : 10;
   const floatLayout = v?.floatLayout === "horizontal" ? "horizontal" : "vertical";

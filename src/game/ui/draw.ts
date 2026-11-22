@@ -428,6 +428,7 @@ export function drawScene(
   labels: boolean,
   radarSectors = true,
   sideView = false,
+  sideViewBottom = SIDE_VIEW_BOTTOM,
 ): Hit[] {
   const w = s.world;
   const hits: Hit[] = [];
@@ -548,7 +549,7 @@ export function drawScene(
         );
     }
   }
-  if (sideView) drawSideView(ctx, v, s);
+  if (sideView) drawSideView(ctx, v, s, sideViewBottom);
   return hits;
 }
 
@@ -565,20 +566,23 @@ function altText(j: Jet, own: boolean): string {
 
 const SIDE_W = 340;
 const SIDE_H = 150;
+export const SIDE_VIEW_LEFT = 10;
+/** Default gap under the side view: clear of the map toggles along the bottom edge. */
+export const SIDE_VIEW_BOTTOM = 40;
+export const sideViewWidth = (viewW: number) => Math.min(SIDE_W, viewW * 0.45);
 
 /**
  * Side view (inset, bottom left): altitude against distance along the line from the selected jet
  * to its target (or south → north when nothing is targeted). Shows what fog of war allows: your
  * jets, detected or last-seen bandits, and missiles only when fog is off.
  */
-function drawSideView(ctx: CanvasRenderingContext2D, v: GameView, s: SessionView) {
+function drawSideView(ctx: CanvasRenderingContext2D, v: GameView, s: SessionView, bottom: number) {
   const w = s.world;
-  const pw = Math.min(SIDE_W, v.w * 0.45);
+  const pw = sideViewWidth(v.w);
   const ph = SIDE_H;
-  if (pw < 160 || v.h < ph + 110) return;
-  const x0 = 10;
-  // Clear of the map toggles along the bottom edge.
-  const y0 = v.h - ph - 40;
+  if (pw < 160 || v.h < ph + bottom + 70) return;
+  const x0 = SIDE_VIEW_LEFT;
+  const y0 = v.h - ph - bottom;
   const pad = { l: 34, r: 10, t: 16, b: 18 };
 
   // Projection axis.

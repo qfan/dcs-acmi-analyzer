@@ -139,6 +139,7 @@ input[type="text"] {
   position: relative;
   flex: 1;
   min-width: 0;
+  container: g-stage / inline-size;
 }
 .g-canvas {
   width: 100%;
@@ -633,6 +634,12 @@ kbd {
   transform: translateX(-50%);
   width: max-content;
 }
+/* Beside the side view when centering would overlap it. */
+.g-ctl-dock-bottom.g-ctl-shift-right {
+  left: auto;
+  right: 10px;
+  transform: none;
+}
 .g-ctl-dock-float {
   width: 318px;
 }
@@ -667,7 +674,23 @@ kbd {
   min-width: 120px;
   max-width: 190px;
 }
-@media (max-width: 960px) {
+/* Sized by the map, not the window: the side panel takes a fixed share of the width. */
+@container g-stage (max-width: 800px) {
+  .g-ctl-horizontal .g-ctl-body {
+    grid-template-columns: auto auto;
+    row-gap: 6px;
+  }
+  .g-ctl-horizontal .g-maneuvers button {
+    padding-inline: 3px;
+  }
+  .g-ctl-horizontal .g-fire {
+    grid-column: 1 / -1;
+    width: 100%;
+    max-width: none;
+    padding: 4px 7px;
+  }
+}
+@container g-stage (max-width: 640px) {
   .g-ctl-dock-bottom,
   .g-ctl-dock-float.g-ctl-horizontal {
     width: min(318px, calc(100% - 20px));
@@ -675,9 +698,8 @@ kbd {
   .g-ctl-horizontal .g-ctl-body {
     grid-template-columns: 1fr;
   }
-  .g-ctl-horizontal .g-fire {
-    width: 100%;
-    max-width: none;
+  .g-ctl-horizontal .g-maneuvers button {
+    font-size: 12px;
   }
 }
 
